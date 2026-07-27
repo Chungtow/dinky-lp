@@ -98,9 +98,11 @@ public class TaskController {
     @Log(title = "Submit Task", businessType = BusinessType.SUBMIT)
     @ExecuteProcess(type = ProcessType.FLINK_SUBMIT)
     @CheckTaskOwner(checkParam = TaskId.class, checkInterface = TaskService.class)
-    public Result<JobResult> submitTask(@TaskId @ProcessId @RequestParam Integer id) throws Exception {
-        JobResult jobResult =
-                taskService.submitTask(TaskSubmitDto.builder().id(id).build());
+    public Result<JobResult> submitTask(
+            @TaskId @ProcessId @RequestParam Integer id, @RequestParam(required = false) String statement)
+            throws Exception {
+        JobResult jobResult = taskService.submitTask(
+                TaskSubmitDto.builder().id(id).statement(statement).build());
         if (jobResult.isSuccess()) {
             return Result.succeed(jobResult, Status.EXECUTE_SUCCESS);
         } else {

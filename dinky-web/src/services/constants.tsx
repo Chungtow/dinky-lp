@@ -228,6 +228,7 @@ export const DIALECT = {
   PHOENIX: 'phoenix',
   STARROCKS: 'starrocks',
   PRESTO: 'presto',
+  SPARK_SQL: 'sparksql',
   TERMINAL: 'terminal',
   PAIMON: 'paimon'
 };

@@ -56,8 +56,16 @@ export function cancelTask(
   return handleGetOption(API_CONSTANTS.CANCEL_JOB, title, { id, withSavePoint, forceCancel });
 }
 
-export async function executeSql(title: string, id: number) {
-  return handleGetOption(API_CONSTANTS.SUBMIT_TASK, title, { id });
+export async function executeSql(
+  title: string,
+  id: number,
+  statement?: string
+) {
+  const params: Record<string, any> = { id };
+  if (statement) {
+    params.statement = statement;
+  }
+  return handleGetOption(API_CONSTANTS.SUBMIT_TASK, title, params);
 }
 export function restartTask(id: number, savePointPath: string, title: string) {
   return handleGetOption(API_CONSTANTS.RESTART_TASK, title, { id, savePointPath });

@@ -545,6 +545,18 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
       if (currentState.step !== JOB_LIFE_CYCLE.PUBLISH) {
         await handleSave();
       }
+
+      // Detect selection: if user has selected code in the editor, run only the selection
+      let selectedStatement: string | undefined;
+      if (editorInstance.current) {
+        const selection = editorInstance.current.getModel()?.getValueInRange(
+          editorInstance.current.getSelection()!
+        );
+        if (selection && selection.trim().length > 0) {
+          selectedStatement = selection;
+        }
+      }
+
       updateAction({
         actionType: DataStudioActionType.TASK_RUN_SUBMIT,
         params: {
@@ -554,7 +566,8 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
       });
       const result = await executeSql(
         l('pages.datastudio.editor.submitting', '', { jobName: title }),
-        currentState.taskId
+        currentState.taskId,
+        selectedStatement
       );
       if (result.success) {
         setCurrentState((prevState) => {
@@ -563,7 +576,7 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
             status: result.data.status === 'SUCCESS' ? 'RUNNING' : result.data.status
           };
         });
-        if (result.data.status === 'SUCCESS') {
+        if (result.data.status === 'SUCCESS' && result.data.pipeline) {
           setIsRunning(true);
         }
         if (isSql(currentState.dialect) && result?.data?.result?.success) {
@@ -874,7 +887,7 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
                 <SelectFlinkRunMode data={tempData.flinkCluster} />
               </>
             )}
-            {isSql(currentState.dialect) && (
+            {isSql(currentState.dialect) && currentState.dialect?.toLowerCase() !== DIALECT.SPARK_SQL && (
               <>
                 <Divider type={'vertical'} style={{ height: dividerHeight }} />
                 <SelectDb databaseDataList={tempData.dataSourceDataList} data={currentState} />
@@ -906,8 +919,9 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
               onClick={handleSubmit}
               hotKey={{
                 ...hotKeyConfig,
-                hotKeyDesc: 'Shift+F10',
-                hotKeyHandle: (e: KeyboardEvent) => e.shiftKey && e.key === 'F10'
+                hotKeyDesc: 'Ctrl+Enter',
+                hotKeyHandle: (e: KeyboardEvent) =>
+                  (e.ctrlKey && e.key === 'Enter') || (e.shiftKey && e.key === 'F10')
               }}
             />
             <RunToolBarButton
