@@ -112,6 +112,15 @@ export const JOB_TYPE: DefaultOptionType[] = [
     ]
   },
   {
+    label: 'Spark Query Type',
+    options: [
+      {
+        value: 'SparkSql',
+        label: 'SparkSql'
+      }
+    ]
+  },
+  {
     label: 'Other Type',
     options: [
       {

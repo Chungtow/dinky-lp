@@ -195,6 +195,10 @@ public class TaskServiceImpl extends SuperServiceImpl<TaskMapper, Task> implemen
             task.setSavePointStrategy(SavePointStrategy.CUSTOM.getValue());
             task.setSavePointPath(submitDto.getSavePointPath());
         }
+        // Apply external statement override (e.g. running selected code)
+        if (StringUtils.isNotBlank(submitDto.getStatement())) {
+            task.setStatement(submitDto.getStatement());
+        }
         task.setVariables(Optional.ofNullable(submitDto.getVariables()).orElse(new HashMap<>()));
         return task;
     }

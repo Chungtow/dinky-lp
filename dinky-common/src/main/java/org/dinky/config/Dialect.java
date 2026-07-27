@@ -44,6 +44,7 @@ public enum Dialect {
     HIVE("Hive"),
     STAR_ROCKS("StarRocks"),
     PRESTO("Presto"),
+    SPARK_SQL("SparkSql"),
     KUBERNETES_APPLICATION("KubernetesApplication");
 
     private String value;
@@ -91,6 +92,7 @@ public enum Dialect {
             case HIVE:
             case STAR_ROCKS:
             case PRESTO:
+            case SPARK_SQL:
                 return true;
             default:
                 return false;

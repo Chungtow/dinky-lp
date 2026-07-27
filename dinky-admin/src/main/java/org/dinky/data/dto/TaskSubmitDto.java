@@ -30,11 +30,17 @@ import lombok.Data;
 public class TaskSubmitDto {
     public TaskSubmitDto() {}
 
-    public TaskSubmitDto(Integer id, Boolean isOnline, String savePointPath, Map<String, String> variables) {
+    public TaskSubmitDto(
+            Integer id, Boolean isOnline, String savePointPath, Map<String, String> variables, String statement) {
         this.id = id;
         this.isOnline = isOnline;
         this.savePointPath = savePointPath;
         this.variables = variables;
+        this.statement = statement;
+    }
+
+    public TaskSubmitDto(Integer id, Boolean isOnline, String savePointPath, Map<String, String> variables) {
+        this(id, isOnline, savePointPath, variables, null);
     }
 
     @ApiModelProperty(value = "ID", dataType = "Integer", example = "6", notes = "The identifier of the execution")
@@ -60,4 +66,12 @@ public class TaskSubmitDto {
             example = "{\"key\": \"value\"}",
             notes = "Variables")
     private Map<String, String> variables;
+
+    @ApiModelProperty(
+            value = "Statement",
+            dataType = "String",
+            example = "SELECT * FROM table",
+            notes = "External statement override. When running selected code, this contains the selected SQL. "
+                    + "When null or empty, the task's saved statement from the database is used.")
+    private String statement;
 }

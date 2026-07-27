@@ -85,6 +85,7 @@ export const isSql = (dialect: string = '', includedFlinkSQL: boolean = false) =
     case DIALECT.HIVE:
     case DIALECT.STARROCKS:
     case DIALECT.PRESTO:
+    case DIALECT.SPARK_SQL:
       return true;
     case DIALECT.FLINK_SQL:
       return includedFlinkSQL;

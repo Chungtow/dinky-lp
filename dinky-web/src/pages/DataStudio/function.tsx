@@ -335,6 +335,7 @@ export const matchLanguage = (language = DIALECT.FLINK_SQL) => {
     case DIALECT.PRESTO:
     case DIALECT.MYSQL:
     case DIALECT.STARROCKS:
+    case DIALECT.SPARK_SQL:
       return DIALECT.SQL;
     case DIALECT.PYTHON:
     case DIALECT.PYTHON_LONG:
