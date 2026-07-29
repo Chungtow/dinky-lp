@@ -679,6 +679,7 @@ public abstract class AbstractJdbcDriver extends AbstractDriver<AbstractJdbcConf
         JdbcSelectResult result = JdbcSelectResult.buildResult();
         log.info("Start execute sql...");
         for (SQLStatement item : stmtList) {
+            item.setAfterSemi(false);
             String type = item.getClass().getSimpleName();
             if (type.toUpperCase().contains("SELECT")
                     || type.toUpperCase().contains("SHOW")
@@ -728,6 +729,7 @@ public abstract class AbstractJdbcDriver extends AbstractDriver<AbstractJdbcConf
         log.info(CharSequenceUtil.format("A total of {} statement have been Parsed.", stmtList.size()));
         log.info("Start execute sql...");
         return stmtList.stream().map(item -> {
+            item.setAfterSemi(false);
             List<Object> resList = new ArrayList<>();
             JdbcSelectResult result = JdbcSelectResult.buildResult();
             String type = item.getClass().getSimpleName();
