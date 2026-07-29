@@ -114,12 +114,16 @@ public class SparkSqlTask extends BaseTask {
 
             ProcessBuilder pb = new ProcessBuilder(
                     sparkSqlCmd,
-                    "--master", "yarn",
-                    "--deploy-mode", "client",
-                    "--name", task.getName(),
-                    "--hiveconf", "hive.cli.print.header=true",
-                    "-f", sqlFile.getAbsolutePath()
-            );
+                    "--master",
+                    "yarn",
+                    "--deploy-mode",
+                    "client",
+                    "--name",
+                    task.getName(),
+                    "--hiveconf",
+                    "hive.cli.print.header=true",
+                    "-f",
+                    sqlFile.getAbsolutePath());
             // DO NOT merge stderr into stdout — stdout is for structured results,
             // stderr is for WARN/INFO logs
             pb.redirectErrorStream(false);
@@ -133,30 +137,34 @@ public class SparkSqlTask extends BaseTask {
             StringBuilder stdoutData = new StringBuilder();
             StringBuilder stderrData = new StringBuilder();
 
-            Thread stdoutThread = new Thread(() -> {
-                try (BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        stdoutData.append(line).append("\n");
-                    }
-                } catch (Exception e) {
-                    log.warn("Error reading spark-sql stdout", e);
-                }
-            }, "spark-sql-stdout");
+            Thread stdoutThread = new Thread(
+                    () -> {
+                        try (BufferedReader reader = new BufferedReader(
+                                new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                            String line;
+                            while ((line = reader.readLine()) != null) {
+                                stdoutData.append(line).append("\n");
+                            }
+                        } catch (Exception e) {
+                            log.warn("Error reading spark-sql stdout", e);
+                        }
+                    },
+                    "spark-sql-stdout");
 
-            Thread stderrThread = new Thread(() -> {
-                try (BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8))) {
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        log.info("[SparkSQL] {}", line);
-                        stderrData.append(line).append("\n");
-                    }
-                } catch (Exception e) {
-                    log.warn("Error reading spark-sql stderr", e);
-                }
-            }, "spark-sql-stderr");
+            Thread stderrThread = new Thread(
+                    () -> {
+                        try (BufferedReader reader = new BufferedReader(
+                                new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8))) {
+                            String line;
+                            while ((line = reader.readLine()) != null) {
+                                log.info("[SparkSQL] {}", line);
+                                stderrData.append(line).append("\n");
+                            }
+                        } catch (Exception e) {
+                            log.warn("Error reading spark-sql stderr", e);
+                        }
+                    },
+                    "spark-sql-stderr");
 
             stdoutThread.start();
             stderrThread.start();
@@ -186,7 +194,9 @@ public class SparkSqlTask extends BaseTask {
 
                 // Parse stdout into structured tabular result for the frontend "结果" tab
                 JdbcSelectResult selectResult = parseStdoutToResult(stdoutData.toString());
-                int rowCount = selectResult.getRowData() != null ? selectResult.getRowData().size() : 0;
+                int rowCount = selectResult.getRowData() != null
+                        ? selectResult.getRowData().size()
+                        : 0;
                 result.setStatement("Spark SQL executed successfully, fetched " + rowCount + " row(s).");
                 result.setResult(selectResult);
                 result.setResults(Collections.singletonList(selectResult));
@@ -355,9 +365,7 @@ public class SparkSqlTask extends BaseTask {
      * for result headers.
      */
     private boolean isHiveResponseLine(String line) {
-        return line.equals("Response code")
-                || line.equals("OK")
-                || line.equals("No rows affected");
+        return line.equals("Response code") || line.equals("OK") || line.equals("No rows affected");
     }
 
     @Override
