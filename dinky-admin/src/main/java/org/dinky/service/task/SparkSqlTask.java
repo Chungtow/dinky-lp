@@ -114,12 +114,16 @@ public class SparkSqlTask extends BaseTask {
 
             ProcessBuilder pb = new ProcessBuilder(
                     sparkSqlCmd,
-                    "--master", "yarn",
-                    "--deploy-mode", "client",
-                    "--name", task.getName(),
-                    "--hiveconf", "hive.cli.print.header=true",
-                    "-f", sqlFile.getAbsolutePath()
-            );
+                    "--master",
+                    "yarn",
+                    "--deploy-mode",
+                    "client",
+                    "--name",
+                    task.getName(),
+                    "--hiveconf",
+                    "hive.cli.print.header=true",
+                    "-f",
+                    sqlFile.getAbsolutePath());
             // DO NOT merge stderr into stdout — stdout is for structured results,
             // stderr is for WARN/INFO logs
             pb.redirectErrorStream(false);
@@ -133,30 +137,32 @@ public class SparkSqlTask extends BaseTask {
             StringBuilder stdoutData = new StringBuilder();
             StringBuilder stderrData = new StringBuilder();
 
-            Thread stdoutThread = new Thread(() -> {
-                try (BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        stdoutData.append(line).append("\n");
-                    }
-                } catch (Exception e) {
-                    log.warn("Error reading spark-sql stdout", e);
-                }
-            }, "spark-sql-stdout");
+            Thread stdoutThread = new Thread(
+                    () -> {
+                        try (BufferedReader reader = new BufferedReader(
+                                new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                            String line;
+                            while ((line = reader.readLine()) != null) {
+                                stdoutData.append(line).append("\n");
+                            }
+                        } catch (Exception e) {
+                            log.warn("Error reading spark-sql stdout", e);
+                        }
+                    }, "spark-sql-stdout");
 
-            Thread stderrThread = new Thread(() -> {
-                try (BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8))) {
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        log.info("[SparkSQL] {}", line);
-                        stderrData.append(line).append("\n");
-                    }
-                } catch (Exception e) {
-                    log.warn("Error reading spark-sql stderr", e);
-                }
-            }, "spark-sql-stderr");
+            Thread stderrThread = new Thread(
+                    () -> {
+                        try (BufferedReader reader = new BufferedReader(
+                                new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8))) {
+                            String line;
+                            while ((line = reader.readLine()) != null) {
+                                log.info("[SparkSQL] {}", line);
+                                stderrData.append(line).append("\n");
+                            }
+                        } catch (Exception e) {
+                            log.warn("Error reading spark-sql stderr", e);
+                        }
+                    }, "spark-sql-stderr");
 
             stdoutThread.start();
             stderrThread.start();
