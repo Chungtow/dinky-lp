@@ -74,7 +74,8 @@ public class DataSourceClient {
                     jdbcUrl = paramsJson.getStr("address");
                 }
                 if (jdbcUrl != null && jdbcUrl.trim().toLowerCase().equals(normalizedUrl)) {
-                    logger.info("Matched DS datasource: id={}, name={}, type={}", ds.getId(), ds.getName(), ds.getType());
+                    logger.info(
+                            "Matched DS datasource: id={}, name={}, type={}", ds.getId(), ds.getName(), ds.getType());
                     return ds;
                 }
             } catch (Exception e) {
