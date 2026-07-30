@@ -28,6 +28,7 @@ import org.dinky.scheduler.model.TaskMainInfo;
 import org.dinky.service.SchedulerService;
 
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -106,5 +107,31 @@ public class SchedulerController {
     @GetMapping(value = "/task/groups")
     public Result<List<TaskGroup>> getTaskGroups(@RequestParam("projectCode") Long projectCode) {
         return Result.succeed(schedulerService.getTaskGroupsFromDolphinScheduler(projectCode));
+    }
+
+    /**
+     * Submit a Hive task to DolphinScheduler as a native SQL workflow.
+     * Creates workflow with one HIVE SQL task, maps dev URL to prod,
+     * releases and starts the workflow.
+     *
+     * @param dinkyTaskId Dinky task id
+     * @return Result containing processCode, processName, taskName
+     */
+    @GetMapping("/submitHiveToDS")
+    @ApiOperation("Submit Hive Task to DolphinScheduler")
+    @ApiImplicitParam(
+            name = "dinkyTaskId",
+            value = "Dinky Task id",
+            required = true,
+            dataType = "Long",
+            paramType = "query",
+            example = "1")
+    public Result<Map<String, Object>> submitHiveToDS(@ApiParam(value = "dinky任务id") @RequestParam Long dinkyTaskId) {
+        try {
+            Map<String, Object> result = schedulerService.submitHiveToDS(dinkyTaskId);
+            return Result.succeed(result);
+        } catch (Exception e) {
+            return Result.failed(e.getMessage());
+        }
     }
 }

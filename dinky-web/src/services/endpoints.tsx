@@ -299,6 +299,7 @@ export enum API_CONSTANTS {
   SCHEDULER_QUERY_TASK_GROUP = '/api/scheduler/task/groups',
 
   SCHEDULER_CREATE_OR_UPDATE_TASK_DEFINITION = '/api/scheduler/createOrUpdateTaskDefinition',
+  SCHEDULER_SUBMIT_HIVE_TO_DS = '/api/scheduler/submitHiveToDS',
 
   // ------------------------------------ flink conf about ------------------------------------
   READ_CHECKPOINT = '/api/flinkConf/readCheckPoint',

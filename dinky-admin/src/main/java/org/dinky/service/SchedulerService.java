@@ -25,6 +25,7 @@ import org.dinky.scheduler.model.TaskGroup;
 import org.dinky.scheduler.model.TaskMainInfo;
 
 import java.util.List;
+import java.util.Map;
 
 public interface SchedulerService {
 
@@ -68,4 +69,15 @@ public interface SchedulerService {
      * @return
      */
     List<TaskGroup> getTaskGroupsFromDolphinScheduler(long projectCode);
+
+    /**
+     * Submit a Hive task to DolphinScheduler as a native SQL workflow.
+     * Reads task info (name, statement, datasource URL), maps dev URL to prod,
+     * matches DS datasource by URL, creates workflow with one Hive SQL task,
+     * releases and starts the workflow.
+     *
+     * @param taskId Dinky task id
+     * @return map containing processCode, processName, taskName
+     */
+    Map<String, Object> submitHiveToDS(Long taskId);
 }

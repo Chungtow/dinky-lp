@@ -118,3 +118,11 @@ export async function flinkJarSqlConvertForm(
 export async function flinkJarFormConvertSql(form: SqlConvertForm): Promise<string | undefined> {
   return (await postAll(API_CONSTANTS.FLINK_JAR_FORM_CONVERT_SQL, form)).data;
 }
+
+/**
+ * Submit a Hive task to DolphinScheduler as a native SQL workflow.
+ * @param taskId Dinky task id
+ */
+export async function submitHiveToDs(taskId: number): Promise<Record<string, any> | undefined> {
+  return queryDataByParams(API_CONSTANTS.SCHEDULER_SUBMIT_HIVE_TO_DS, { dinkyTaskId: taskId });
+}

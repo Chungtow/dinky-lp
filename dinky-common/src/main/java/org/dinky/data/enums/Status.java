@@ -256,6 +256,10 @@ public enum Status {
     DS_TASK_TYPE_NOT_SUPPORT(17008, "ds.task.type.not.support"),
     DS_WORK_FLOW_DEFINITION_NOT_EXIST(17009, "ds.work.flow.definition.not.exist"),
     DS_PROCESS_DEFINITION_UPDATE(17010, "ds.work.flow.definition.process.update"),
+    DS_HIVE_SUBMIT_SUCCESS(17011, "ds.hive.submit.success"),
+    DS_HIVE_SUBMIT_FAILED(17012, "ds.hive.submit.failed"),
+    DS_HIVE_SUBMIT_NO_DATASOURCE(17013, "ds.hive.submit.no.datasource"),
+    DS_HIVE_SUBMIT_URL_MAPPED(17014, "ds.hive.submit.url.mapped"),
 
     /**
      * LDAP About *
