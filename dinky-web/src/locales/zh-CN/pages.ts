@@ -46,6 +46,16 @@ export default {
    * */
 
   'button.push': '推送',
+  'button.submitToDS': '提交到DS',
+  /**
+   * Hive Submit to DS dialog
+   */
+  'ds.hive.submit.dialog.title': '提交Hive任务到DolphinScheduler',
+  'ds.hive.submit.dialog.task': '任务',
+  'ds.hive.submit.dialog.tip': '将当前Hive任务作为原生SQL工作流提交到DolphinScheduler：',
+  'ds.hive.submit.dialog.tip1': '数据源URL自动映射：_dev开发库 → 生产库',
+  'ds.hive.submit.dialog.tip2': '将在DS中创建同名工作流（如已存在则覆盖）',
+  'ds.hive.submit.dialog.tip3': '工作流发布上线后会自动执行一次',
   /**
    *
    * catalog

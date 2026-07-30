@@ -49,6 +49,16 @@ export default {
    * */
 
   'button.push': 'Push',
+  'button.submitToDS': 'Submit to DS',
+  /**
+   * Hive Submit to DS dialog
+   */
+  'ds.hive.submit.dialog.title': 'Submit Hive Task to DolphinScheduler',
+  'ds.hive.submit.dialog.task': 'Task',
+  'ds.hive.submit.dialog.tip': 'Submit current Hive task as a native SQL workflow to DolphinScheduler:',
+  'ds.hive.submit.dialog.tip1': 'Datasource URL auto-mapping: _dev → production',
+  'ds.hive.submit.dialog.tip2': 'A workflow with the same name will be created in DS (overwrite if exists)',
+  'ds.hive.submit.dialog.tip3': 'Workflow will be released online and executed once automatically',
   /**
    *
    * catalog
