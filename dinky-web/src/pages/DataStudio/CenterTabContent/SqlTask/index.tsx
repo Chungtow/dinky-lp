@@ -31,7 +31,6 @@ import {
   ClearOutlined,
   CloseOutlined,
   CloudDownloadOutlined,
-  CloudUploadOutlined,
   EnvironmentOutlined,
   FullscreenExitOutlined,
   FullscreenOutlined,
@@ -77,8 +76,7 @@ import {
   flinkJarFormConvertSql,
   flinkJarSqlConvertForm,
   getJobPlan,
-  getTaskDetails,
-  submitHiveToDs
+  getTaskDetails
 } from '@/pages/DataStudio/service';
 import { l } from '@/utils/intl';
 import { editor } from 'monaco-editor';
@@ -111,7 +109,6 @@ import {
   DolphinTaskMinInfo
 } from '@/types/Studio/data';
 import PushDolphin from '@/pages/DataStudio/CenterTabContent/SqlTask/PushDolphin';
-import SubmitToDSModal from '@/pages/DataStudio/CenterTabContent/SqlTask/SubmitToDS';
 
 export type FlinkSqlProps = {
   showDesc: boolean;
@@ -218,10 +215,6 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
     currentDinkyTaskValue: {},
     formValuesInfo: {}
   });
-
-  // Hive submit to DS modal state
-  const [submitToDSVisible, setSubmitToDSVisible] = useState(false);
-  const [submitToDSLoading, setSubmitToDSLoading] = useState(false);
 
   useEffect(() => {
     if (sqlForm.enable) {
@@ -774,18 +767,6 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
     await handlePushDolphinCancel();
   };
 
-  const handleSubmitToDSConfirm = async () => {
-    setSubmitToDSLoading(true);
-    try {
-      await submitHiveToDs(currentState.taskId);
-      setSubmitToDSVisible(false);
-    } catch (e: any) {
-      // error is handled by handleOption inside submitHiveToDs
-    } finally {
-      setSubmitToDSLoading(false);
-    }
-  };
-
   return (
     <Skeleton
       loading={loading}
@@ -1048,18 +1029,6 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
               }}
               onClick={handlePushDolphinOpen}
             />
-            <RunToolBarButton
-              showDesc={showDesc}
-              disabled={isLockTask}
-              desc={l('button.submitToDS')}
-              icon={<CloudUploadOutlined className={'blue-icon'} />}
-              isShow={
-                enabledDs &&
-                JOB_LIFE_CYCLE.PUBLISH === currentState.step &&
-                currentState.dialect === DIALECT.HIVE
-              }
-              onClick={() => setSubmitToDSVisible(true)}
-            />
           </Flex>
         </ProForm>
         <Flex flex={1} style={{ height: 0 }}>
@@ -1237,16 +1206,6 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
           dolphinTaskGroup={pushDolphinState.dolphinTaskGroup}
           onSubmit={(values) => handlePushDolphinSubmit(values)}
           formValuesInfo={pushDolphinState.formValuesInfo}
-        />
-      )}
-
-      {submitToDSVisible && (
-        <SubmitToDSModal
-          visible={submitToDSVisible}
-          onCancel={() => setSubmitToDSVisible(false)}
-          onSubmit={handleSubmitToDSConfirm}
-          loading={submitToDSLoading}
-          taskName={currentState.name}
         />
       )}
     </Skeleton>
