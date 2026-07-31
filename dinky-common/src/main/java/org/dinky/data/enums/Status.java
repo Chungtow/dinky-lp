@@ -384,6 +384,8 @@ public enum Status {
     SYS_DOLPHINSCHEDULER_SETTINGS_TOKEN_NOTE(123, "sys.dolphinscheduler.settings.token.note"),
     SYS_DOLPHINSCHEDULER_SETTINGS_PROJECTNAME(124, "sys.dolphinscheduler.settings.projectName"),
     SYS_DOLPHINSCHEDULER_SETTINGS_PROJECTNAME_NOTE(125, "sys.dolphinscheduler.settings.projectName.note"),
+    SYS_DOLPHINSCHEDULER_SETTINGS_TENANT_CODE(206, "sys.dolphinscheduler.settings.tenantCode"),
+    SYS_DOLPHINSCHEDULER_SETTINGS_TENANT_CODE_NOTE(207, "sys.dolphinscheduler.settings.tenantCode.note"),
     SYS_LDAP_SETTINGS_URL(126, "sys.ldap.settings.url"),
     SYS_LDAP_SETTINGS_URL_NOTE(127, "sys.ldap.settings.url.note"),
     SYS_LDAP_SETTINGS_USERDN(128, "sys.ldap.settings.userDn"),

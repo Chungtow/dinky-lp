@@ -189,6 +189,11 @@ public class SystemConfiguration {
                     .stringType()
                     .defaultValue("Dinky")
                     .note(Status.SYS_DOLPHINSCHEDULER_SETTINGS_PROJECTNAME_NOTE);
+    private final Configuration<String> dolphinschedulerTenantCode =
+            key(Status.SYS_DOLPHINSCHEDULER_SETTINGS_TENANT_CODE)
+                    .stringType()
+                    .defaultValue("default")
+                    .note(Status.SYS_DOLPHINSCHEDULER_SETTINGS_TENANT_CODE_NOTE);
 
     private final Configuration<String> ldapUrl =
             key(Status.SYS_LDAP_SETTINGS_URL).stringType().defaultValue("").note(Status.SYS_LDAP_SETTINGS_URL_NOTE);

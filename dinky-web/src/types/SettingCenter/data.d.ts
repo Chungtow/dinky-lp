@@ -131,6 +131,7 @@ export enum GLOBAL_SETTING_KEYS {
   SYS_DOLPHINSETTINGS_URL = 'sys.dolphinscheduler.settings.url',
   SYS_DOLPHINSETTINGS_TOKEN = 'sys.dolphinscheduler.settings.token',
   SYS_DOLPHINSETTINGS_PROJECTNAME = 'sys.dolphinscheduler.settings.projectName',
+  SYS_DOLPHINSETTINGS_TENANT_CODE = 'sys.dolphinscheduler.settings.tenantCode',
   SYS_LDAP_SETTINGS_URL = 'sys.ldap.settings.url',
   SYS_LDAP_SETTINGS_USER_DN = 'sys.ldap.settings.userDn',
   SYS_LDAP_SETTINGS_USER_PASSWORD = 'sys.ldap.settings.userPassword',
