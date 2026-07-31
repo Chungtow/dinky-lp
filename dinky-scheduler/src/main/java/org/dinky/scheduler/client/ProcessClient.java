@@ -166,7 +166,11 @@ public class ProcessClient {
         Map<String, Object> params = new HashMap<>();
         params.put("name", processName);
         params.put("description", "系统添加");
-        params.put("tenantCode", "default");
+        params.put(
+                "tenantCode",
+                SystemConfiguration.getInstances()
+                        .getDolphinschedulerTenantCode()
+                        .getValue());
         params.put("locations", JsonUtils.toJsonString(locations));
         params.put("taskRelationJson", taskRelationJson);
         params.put("taskDefinitionJson", taskDefinitionJson);
