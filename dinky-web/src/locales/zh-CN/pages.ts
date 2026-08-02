@@ -1039,6 +1039,7 @@ export default {
   'rc.resource.copy_to_add_jar': '复制为 ADD JAR 语法',
   'rc.resource.copy_to_add_file': '复制为 ADD FILE 语法',
   'rc.resource.copy_to_add_rs_path': '复制 RS 协议资源路径',
+  'rc.resource.copy_hdfs_path': '复制 HDFS 完整路径',
   'rc.resource.copy_success':
     '复制成功，值为：[{fillValue}] 已复制到剪贴板。请粘贴到需要的地方进行使用',
   'rc.resource.enable': '未启用资源管理功能',

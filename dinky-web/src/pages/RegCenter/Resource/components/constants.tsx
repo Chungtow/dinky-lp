@@ -32,6 +32,7 @@ export enum ResourceRightMenuKey {
   COPY_TO_ADD_JAR = 'copy_to_add_jar',
   COPY_TO_ADD_FILE = 'copy_to_add_file',
   COPY_TO_ADD_RS_PATH = 'copy_to_add_rs_path',
+  COPY_HDFS_PATH = 'copy_hdfs_path',
   DELETE = 'delete',
   RENAME = 'rename',
   CREATE_FOLDER = 'createFolder',
@@ -67,6 +68,12 @@ export const RIGHT_CONTEXT_FILE_MENU = [
     key: ResourceRightMenuKey.COPY_TO_ADD_RS_PATH,
     icon: <CopyOutlined />,
     label: l('rc.resource.copy_to_add_rs_path'),
+    path: PermissionConstants.REGISTRATION_RESOURCE_DELETE
+  },
+  {
+    key: ResourceRightMenuKey.COPY_HDFS_PATH,
+    icon: <CopyOutlined />,
+    label: l('rc.resource.copy_hdfs_path'),
     path: PermissionConstants.REGISTRATION_RESOURCE_DELETE
   },
   {
