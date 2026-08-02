@@ -219,9 +219,9 @@ const ResourceOverView: React.FC<connect> = (props) => {
       case ResourceRightMenuKey.COPY_HDFS_PATH:
         if (fullInfo) {
           const defaultFS = copyHdfsDefaultFS || '';
-          const basePath = copyHdfsUploadBasePath || '/';
-          const normalizedBasePath = basePath.endsWith('/') ? basePath : `${basePath}/`;
-          const hdfsFullPath = `${defaultFS}${normalizedBasePath}${fullInfo.fullName}`;
+          const basePath = (copyHdfsUploadBasePath || '/').replace(/\/+$/, '');
+          const safeFullName = fullInfo.fullName.replace(/^\/+/, '');
+          const hdfsFullPath = `${defaultFS}${basePath}/${safeFullName}`;
           await handleCopyToClipboard(hdfsFullPath);
         }
         break;
