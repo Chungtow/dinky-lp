@@ -1123,6 +1123,7 @@ export default {
   'rc.resource.copy_to_add_jar': 'Copy as ADD JAR syntax',
   'rc.resource.copy_to_add_file': 'Copy as ADD FILE syntax',
   'rc.resource.copy_to_add_rs_path': 'Copy RS protocol resource path',
+  'rc.resource.copy_hdfs_path': 'Copy HDFS full path',
   'rc.resource.copy_success':
     'Copy successfully, The value is: [{fillValue}] has been copied to the clipboard. Please paste it to the desired location for use',
   'rc.resource.enable': 'Resource management function is not enabled',

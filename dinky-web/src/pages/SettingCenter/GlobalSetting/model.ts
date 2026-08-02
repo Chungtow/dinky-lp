@@ -39,6 +39,8 @@ export type SysConfigStateType = {
   enableResource: boolean;
   resourcePhysicalDelete: boolean;
   taskOwnerLockingStrategy: TaskOwnerLockingStrategy;
+  copyHdfsDefaultFS: string;
+  copyHdfsUploadBasePath: string;
 };
 
 export type ConfigModelType = {
@@ -55,6 +57,8 @@ export type ConfigModelType = {
     updateResourcePhysicalDelete: Reducer<SysConfigStateType>;
     updateEnableResource: Reducer<SysConfigStateType>;
     updateTaskOwnerLockingStrategy: Reducer<SysConfigStateType>;
+    updateCopyHdfsDefaultFS: Reducer<SysConfigStateType>;
+    updateCopyHdfsUploadBasePath: Reducer<SysConfigStateType>;
   };
 };
 
@@ -65,7 +69,9 @@ const ConfigModel: ConfigModelType = {
     enabledDs: false,
     enableResource: false,
     resourcePhysicalDelete: false,
-    taskOwnerLockingStrategy: TaskOwnerLockingStrategy.ALL
+    taskOwnerLockingStrategy: TaskOwnerLockingStrategy.ALL,
+    copyHdfsDefaultFS: '',
+    copyHdfsUploadBasePath: ''
   },
 
   effects: {
@@ -126,6 +132,24 @@ const ConfigModel: ConfigModelType = {
           type: 'updateResourcePhysicalDelete',
           payload: physicalDelete
         });
+
+        const hdfsDefaultFS = response.find(
+          (item: BaseConfigProperties) =>
+            item.key === GLOBAL_SETTING_KEYS.SYS_RESOURCE_SETTINGS_HDFS_FS_DEFAULT_FS
+        );
+        yield put({
+          type: 'updateCopyHdfsDefaultFS',
+          payload: hdfsDefaultFS?.value || ''
+        });
+
+        const hdfsUploadBasePath = response.find(
+          (item: BaseConfigProperties) =>
+            item.key === GLOBAL_SETTING_KEYS.SYS_RESOURCE_SETTINGS_BASE_UPLOAD_BASE_PATH
+        );
+        yield put({
+          type: 'updateCopyHdfsUploadBasePath',
+          payload: hdfsUploadBasePath?.value || ''
+        });
       }
     }
   },
@@ -159,6 +183,18 @@ const ConfigModel: ConfigModelType = {
       return {
         ...state,
         resourcePhysicalDelete: payload
+      };
+    },
+    updateCopyHdfsDefaultFS(state, { payload }) {
+      return {
+        ...state,
+        copyHdfsDefaultFS: payload
+      };
+    },
+    updateCopyHdfsUploadBasePath(state, { payload }) {
+      return {
+        ...state,
+        copyHdfsUploadBasePath: payload
       };
     }
   }

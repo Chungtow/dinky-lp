@@ -54,7 +54,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { connect } from 'umi';
 
 const ResourceOverView: React.FC<connect> = (props) => {
-  const { dispatch, enableResource, resourcePhysicalDelete } = props;
+  const { dispatch, enableResource, resourcePhysicalDelete, copyHdfsDefaultFS, copyHdfsUploadBasePath } = props;
 
   const [resourceState, setResourceState] = useState<ResourceState>(InitResourceState);
 
@@ -214,6 +214,15 @@ const ResourceOverView: React.FC<connect> = (props) => {
         if (fullInfo) {
           const fillValue = `rs:${fullInfo.fullName}`;
           await handleCopyToClipboard(fillValue);
+        }
+        break;
+      case ResourceRightMenuKey.COPY_HDFS_PATH:
+        if (fullInfo) {
+          const defaultFS = copyHdfsDefaultFS || '';
+          const basePath = (copyHdfsUploadBasePath || '/').replace(/\/+$/, '');
+          const safeFullName = fullInfo.fullName.replace(/^\/+/, '');
+          const hdfsFullPath = `${defaultFS}${basePath}/${safeFullName}`;
+          await handleCopyToClipboard(hdfsFullPath);
         }
         break;
       default:
@@ -434,5 +443,7 @@ const ResourceOverView: React.FC<connect> = (props) => {
 
 export default connect(({ SysConfig }: { SysConfig: SysConfigStateType }) => ({
   enableResource: SysConfig.enableResource,
-  resourcePhysicalDelete: SysConfig.resourcePhysicalDelete
+  resourcePhysicalDelete: SysConfig.resourcePhysicalDelete,
+  copyHdfsDefaultFS: SysConfig.copyHdfsDefaultFS,
+  copyHdfsUploadBasePath: SysConfig.copyHdfsUploadBasePath
 }))(ResourceOverView);
