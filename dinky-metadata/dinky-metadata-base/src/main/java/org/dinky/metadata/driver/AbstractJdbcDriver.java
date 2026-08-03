@@ -685,8 +685,10 @@ public abstract class AbstractJdbcDriver extends AbstractDriver<AbstractJdbcConf
         try {
             stmtList = SQLUtils.parseStatements(sql, getSqlParserType());
         } catch (Exception e) {
-            log.warn("Druid SQL parse failed (parser='{}', msg='{}') => fallback to raw query execution",
-                    getSqlParserType(), e.getMessage());
+            log.warn(
+                    "Druid SQL parse failed (parser='{}', msg='{}') => fallback to raw query execution",
+                    getSqlParserType(),
+                    e.getMessage());
             return query(sql, limit);
         }
         log.info(CharSequenceUtil.format("A total of {} statement have been Parsed.", stmtList.size()));
@@ -743,8 +745,10 @@ public abstract class AbstractJdbcDriver extends AbstractDriver<AbstractJdbcConf
         try {
             stmtList = SQLUtils.parseStatements(sql, getSqlParserType());
         } catch (Exception e) {
-            log.warn("Druid SQL parse failed (parser='{}', msg='{}') => fallback to single query stream",
-                    getSqlParserType(), e.getMessage());
+            log.warn(
+                    "Druid SQL parse failed (parser='{}', msg='{}') => fallback to single query stream",
+                    getSqlParserType(),
+                    e.getMessage());
             return Stream.of(query(sql, limit));
         }
         log.info(CharSequenceUtil.format("A total of {} statement have been Parsed.", stmtList.size()));
