@@ -331,7 +331,81 @@ public class PrestoDriver extends AbstractJdbcDriver implements Driver {
 
     @Override
     String getDriverClass() {
-        return "com.facebook.presto.jdbc.PrestoDriver";
+        return "io.trino.jdbc.TrinoDriver";
+    }
+
+    /**
+     * Trino JDBC driver registers for {@code jdbc:trino://} but existing data source
+     * configurations may use the legacy {@code jdbc:presto://} URL scheme.  Druid itself
+     * resolves the driver by explicit class name so its pool path is unaffected, but
+     * {@link java.sql.DriverManager#getConnection} matches by URL prefix — convert the
+     * scheme so the Trino driver is found.
+     */
+    private String trinoUrl(String rawUrl) {
+        if (rawUrl != null && rawUrl.startsWith("jdbc:presto:")) {
+            return "jdbc:trino:" + rawUrl.substring("jdbc:presto:".length());
+        }
+        return rawUrl;
+    }
+
+    /**
+     * When Trino has no password authentication configured (the default), Druid's connection
+     * pool initialisation converts an empty password string into a non-null value and the
+     * JDBC driver then sends it over the wire, which triggers a 401 response from Trino.
+     * Bypass Druid's pooling altogether for zero-password connections and let the JDBC
+     * driver handle its own connection lifecycle.
+     */
+    @Override
+    public Driver connect() {
+        if (Asserts.isNull(conn.get())) {
+            try {
+                AbstractJdbcConfig connectConfig = config.getConnectConfig();
+                String password = connectConfig.getPassword();
+                if (password == null || password.isEmpty()) {
+                    Class.forName(getDriverClass());
+                    conn.set(java.sql.DriverManager.getConnection(
+                            trinoUrl(connectConfig.getUrl()),
+                            connectConfig.getUsername(),
+                            null));
+                } else {
+                    Class.forName(getDriverClass());
+                    com.alibaba.druid.pool.DruidPooledConnection connection =
+                            createDataSource().getConnection();
+                    conn.set(connection);
+                }
+            } catch (ClassNotFoundException | java.sql.SQLException e) {
+                throw new RuntimeException(e);
+            }
+        }
+        return this;
+    }
+
+    @Override
+    public String test() {
+        Asserts.checkNotNull(config, "无效的数据源配置");
+        try {
+            Class.forName(getDriverClass());
+            java.sql.DriverManager.getConnection(
+                            trinoUrl(config.getConnectConfig().getUrl()),
+                            config.getConnectConfig().getUsername(),
+                            config.getConnectConfig().getPassword())
+                    .close();
+        } catch (Exception e) {
+            return e.getMessage();
+        }
+        return "1";
+    }
+
+    /**
+     * Druid's SQLUtils.parseStatements(String, String) does not support "presto" as a dbType.
+     * Presto/Trino SQL is close enough to Hive that using the "hive" parser produces correct
+     * parse trees for most statements.  For Trino-specific syntax that even the Hive parser
+     * cannot handle, the caller in {@link AbstractJdbcDriver#executeSql} wraps the parse call
+     * in a try-catch and falls back to raw query execution.
+     */
+    @Override
+    protected String getSqlParserType() {
+        return "hive";
     }
 
     @Override
