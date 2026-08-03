@@ -56,9 +56,9 @@ import java.util.List;
 import java.util.UUID;
 import java.util.stream.Stream;
 
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
-import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -334,8 +334,7 @@ public class DataBaseServiceImpl extends SuperServiceImpl<DataBaseMapper, DataBa
             String stepPid = MDC.get(ProcessAspect.PROCESS_STEP);
             if (processName != null && stepPid != null) {
                 ConsoleContextHolder.getInstances()
-                        .appendLog(processName, stepPid,
-                                "\nSQL execution failed:\n" + selectResult.getError(), true);
+                        .appendLog(processName, stepPid, "\nSQL execution failed:\n" + selectResult.getError(), true);
             }
         }
         result.setEndTime(LocalDateTime.now());
