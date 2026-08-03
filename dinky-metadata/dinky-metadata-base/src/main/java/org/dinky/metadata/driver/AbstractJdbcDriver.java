@@ -84,6 +84,15 @@ public abstract class AbstractJdbcDriver extends AbstractDriver<AbstractJdbcConf
 
     abstract String getDriverClass();
 
+    /**
+     * Return the dbType string used by {@link com.alibaba.druid.sql.SQLUtils#parseStatements(String, String)}.
+     * Override this in drivers whose {@link #getType()} value is not directly supported by Druid's SQL parser
+     * (e.g. Presto/Trino uses "hive" since their SQL dialects are close enough).
+     */
+    protected String getSqlParserType() {
+        return config.getType().toLowerCase();
+    }
+
     @Override
     public String test() {
         Asserts.checkNotNull(config, "无效的数据源配置");
@@ -672,8 +681,16 @@ public abstract class AbstractJdbcDriver extends AbstractDriver<AbstractJdbcConf
     public JdbcSelectResult executeSql(String sql, Integer limit) {
         // TODO 改为ProcessStep注释
         log.info("Start parse sql...");
-        List<SQLStatement> stmtList =
-                SQLUtils.parseStatements(sql, config.getType().toLowerCase());
+        List<SQLStatement> stmtList;
+        try {
+            stmtList = SQLUtils.parseStatements(sql, getSqlParserType());
+        } catch (Exception e) {
+            log.warn(
+                    "Druid SQL parse failed (parser='{}', msg='{}') => fallback to raw query execution",
+                    getSqlParserType(),
+                    e.getMessage());
+            return query(sql, limit);
+        }
         log.info(CharSequenceUtil.format("A total of {} statement have been Parsed.", stmtList.size()));
         List<Object> resList = new ArrayList<>();
         JdbcSelectResult result = JdbcSelectResult.buildResult();
@@ -724,8 +741,16 @@ public abstract class AbstractJdbcDriver extends AbstractDriver<AbstractJdbcConf
     public Stream<JdbcSelectResult> StreamExecuteSql(String sql, Integer limit) {
         // TODO 改为ProcessStep注释
         log.info("Start parse sql...");
-        List<SQLStatement> stmtList =
-                SQLUtils.parseStatements(sql, config.getType().toLowerCase());
+        List<SQLStatement> stmtList;
+        try {
+            stmtList = SQLUtils.parseStatements(sql, getSqlParserType());
+        } catch (Exception e) {
+            log.warn(
+                    "Druid SQL parse failed (parser='{}', msg='{}') => fallback to single query stream",
+                    getSqlParserType(),
+                    e.getMessage());
+            return Stream.of(query(sql, limit));
+        }
         log.info(CharSequenceUtil.format("A total of {} statement have been Parsed.", stmtList.size()));
         log.info("Start execute sql...");
         return stmtList.stream().map(item -> {

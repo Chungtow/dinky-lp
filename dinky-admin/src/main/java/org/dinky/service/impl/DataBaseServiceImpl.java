@@ -19,7 +19,9 @@
 
 package org.dinky.service.impl;
 
+import org.dinky.aop.ProcessAspect;
 import org.dinky.assertion.Asserts;
+import org.dinky.context.ConsoleContextHolder;
 import org.dinky.data.annotations.ProcessStep;
 import org.dinky.data.constant.CommonConstant;
 import org.dinky.data.dto.DataBaseDTO;
@@ -54,6 +56,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.stream.Stream;
 
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
@@ -327,6 +330,12 @@ public class DataBaseServiceImpl extends SuperServiceImpl<DataBaseMapper, DataBa
         } else {
             result.setSuccess(false);
             result.setError(selectResult.getError());
+            String processName = MDC.get(ProcessAspect.PROCESS_NAME);
+            String stepPid = MDC.get(ProcessAspect.PROCESS_STEP);
+            if (processName != null && stepPid != null) {
+                ConsoleContextHolder.getInstances()
+                        .appendLog(processName, stepPid, "\nSQL execution failed:\n" + selectResult.getError(), true);
+            }
         }
         result.setEndTime(LocalDateTime.now());
         return result;
@@ -389,7 +398,7 @@ public class DataBaseServiceImpl extends SuperServiceImpl<DataBaseMapper, DataBa
                 result.setError(e.getMessage());
             }
             result.setStatus(Job.JobStatus.FAILED);
-            result.setSuccess(true);
+            result.setSuccess(false);
             result.setEndTime(LocalDateTime.now());
             result.setResults(jdbcSelectResults);
             return result;
