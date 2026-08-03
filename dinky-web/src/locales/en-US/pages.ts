@@ -582,6 +582,8 @@ export default {
   'pages.datastudio.label.result.query.latest.data': 'Get the latest data',
   'pages.datastudio.label.result.query.latest.data.truncate':
     'The data is too long to be displayed in full',
+  'pages.datastudio.label.result.tab': 'Result',
+  'pages.datastudio.label.result.clear.all': 'Clear all results',
   'pages.datastudio.label.version': 'Version History',
   'pages.datastudio.label.version.diff': 'Version Diff',
   'pages.datastudio.label.version.leftTitle':

@@ -43,6 +43,15 @@ type Data = {
   rowData: object[];
 };
 type DataList = Data[];
+
+type ResultEntry = {
+  id: number;
+  label: string;
+  dataList: DataList;
+};
+
+const MAX_RESULTS = 100;
+
 export default (props: {
   taskId: number;
   historyId?: number | undefined;
@@ -56,7 +65,8 @@ export default (props: {
     dialect
   } = props;
 
-  const [dataList, setDataList] = useState<DataList>([]);
+  const [results, setResults] = useState<ResultEntry[]>([]);
+  const [activeResultKey, setActiveResultKey] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(true);
   const [openAVA, setOpenAVA] = useState<boolean>(false);
   const [avaResult, setAvaResult] = useState<InsightsResult>();
@@ -64,9 +74,26 @@ export default (props: {
   const [searchText, setSearchText] = useState('');
   const [searchedColumn, setSearchedColumn] = useState('');
   const searchInput = useRef<InputRef>(null);
+  const seqRef = useRef<number>(0);
+
+  const appendResult = useCallback((newDataList: DataList) => {
+    seqRef.current += 1;
+    const newId = seqRef.current;
+    const newEntry: ResultEntry = {
+      id: newId,
+      label: `${l('pages.datastudio.label.result.tab')}-${newId}`,
+      dataList: newDataList
+    };
+    setResults((prev) => {
+      const next = prev.length >= MAX_RESULTS ? prev.slice(1) : [...prev];
+      return [...next, newEntry];
+    });
+    setActiveResultKey(String(newId));
+  }, []);
+
   useEffect(() => {
     if (actionType === DataStudioActionType.TASK_PREVIEW_RESULT && taskId === params.taskId) {
-      setDataList(
+      appendResult(
         covertDataList(
           { columns: params.columns, rowData: params.rowData },
           params.isMockSinkResult
@@ -206,9 +233,10 @@ export default (props: {
       );
       const data = tableData.data;
       if (tableData.success && data?.success) {
-        setDataList(covertDataList(data, data.mockSinkResult));
+        appendResult(covertDataList(data, data.mockSinkResult));
       } else {
-        setDataList([]);
+        setLoading(false);
+        return;
       }
     }
 
@@ -217,7 +245,6 @@ export default (props: {
 
   useAsyncEffect(async () => {
     if (!isSql(dialect)) {
-      setDataList([]);
       await loadData();
     } else {
       setLoading(false);
@@ -295,10 +322,54 @@ export default (props: {
   //   );
   // };
   const handleCloseAva = useCallback(() => setOpenAVA(false), []);
-  const tabItems: () => TabsProps['items'] = () => {
-    return dataList.map((data, index) => {
+
+  const handleClearAll = useCallback(() => {
+    setResults([]);
+    seqRef.current = 0;
+    setActiveResultKey('');
+  }, []);
+
+  const handleTabEdit = useCallback(
+    (targetKey: React.MouseEvent | React.KeyboardEvent | string, action: 'add' | 'remove') => {
+      if (action === 'remove' && typeof targetKey === 'string') {
+        const targetId = Number(targetKey);
+        setResults((prev) => prev.filter((r) => r.id !== targetId));
+      }
+    },
+    []
+  );
+
+  const renderResultContent = (entry: ResultEntry) => {
+    const { dataList } = entry;
+
+    // 非 mock-sink 单表结果：直接渲染 ProTable
+    if (dataList.length === 1 && !dataList[0].tableName) {
+      const data = dataList[0];
+      return (
+        <ProTable
+          className={'datastudio-theme'}
+          cardBordered
+          columns={getColumns(data.columns)}
+          size='small'
+          scroll={{ x: 'max-content' }}
+          dataSource={data.rowData?.map((item: any, index: number) => {
+            return { ...item, key: index };
+          })}
+          options={{ fullScreen: true, density: false }}
+          search={false}
+          loading={loading}
+          toolBarRender={() => [renderDownloadButton(data), renderAVA(data)]}
+          pagination={{
+            showSizeChanger: true
+          }}
+        />
+      );
+    }
+
+    // mock-sink 多表结果：内部 Tabs
+    const innerItems: TabsProps['items'] = dataList.map((data, index) => {
       return {
-        key: data.tableName ?? index,
+        key: data.tableName ?? String(index),
         label: data.tableName,
         children: (
           <ProTable
@@ -307,8 +378,8 @@ export default (props: {
             columns={getColumns(data.columns)}
             size='small'
             scroll={{ x: 'max-content' }}
-            dataSource={data.rowData?.map((item: any, index: number) => {
-              return { ...item, key: index };
+            dataSource={data.rowData?.map((item: any, idx: number) => {
+              return { ...item, key: idx };
             })}
             options={{ fullScreen: true, density: false }}
             search={false}
@@ -321,16 +392,40 @@ export default (props: {
         )
       };
     });
+    return (
+      <Tabs defaultActiveKey={innerItems[0]?.key} items={innerItems} tabBarStyle={{ marginBottom: '5px' }} />
+    );
   };
+
+  const outerTabItems: TabsProps['items'] = results.map((entry) => ({
+    key: String(entry.id),
+    label: entry.label,
+    children: renderResultContent(entry)
+  }));
+
   return (
     <div style={{ width: '100%' }}>
-      <Tabs
-        defaultActiveKey='0'
-        tabBarExtraContent={renderFlinkSQLContent()}
-        items={tabItems()}
-        tabBarStyle={{ marginBottom: '5px' }}
-      />
-      {dataList.length == 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} /> : <></>}
+      {results.length === 0 ? (
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />
+      ) : (
+        <Tabs
+          type='editable-card'
+          hideAdd
+          activeKey={activeResultKey}
+          onChange={setActiveResultKey}
+          onEdit={handleTabEdit}
+          tabBarExtraContent={
+            <Space>
+              {renderFlinkSQLContent()}
+              <Button size='small' onClick={handleClearAll} danger>
+                {l('pages.datastudio.label.result.clear.all')}
+              </Button>
+            </Space>
+          }
+          items={outerTabItems}
+          tabBarStyle={{ marginBottom: '5px' }}
+        />
+      )}
       <Drawer
         open={openAVA}
         loading={isPending}
