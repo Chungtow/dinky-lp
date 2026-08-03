@@ -364,9 +364,7 @@ public class PrestoDriver extends AbstractJdbcDriver implements Driver {
                 if (password == null || password.isEmpty()) {
                     Class.forName(getDriverClass());
                     conn.set(java.sql.DriverManager.getConnection(
-                            trinoUrl(connectConfig.getUrl()),
-                            connectConfig.getUsername(),
-                            null));
+                            trinoUrl(connectConfig.getUrl()), connectConfig.getUsername(), null));
                 } else {
                     Class.forName(getDriverClass());
                     com.alibaba.druid.pool.DruidPooledConnection connection =
