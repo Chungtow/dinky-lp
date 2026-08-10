@@ -523,6 +523,17 @@ export default {
   'pages.datastudio.label.execConfig.mocksink': 'SinkMock',
   'pages.datastudio.label.execConfig.mocksink.tip':
     'Mock the SinkFunction, result will not be written to the production environment during debugging, but can preview through dinky',
+  'pages.datastudio.label.taskParam.addParam': 'Add Parameter',
+  'pages.datastudio.label.taskParam.prop.placeholder': 'Name',
+  'pages.datastudio.label.taskParam.prop.required': 'Please input parameter name',
+  'pages.datastudio.label.taskParam.direct': 'Direction',
+  'pages.datastudio.label.taskParam.type': 'Type',
+  'pages.datastudio.label.taskParam.value.placeholder': 'Value (e.g. $[yyyyMMdd-1])',
+  'pages.datastudio.label.taskParam.value.required': 'Please input parameter value',
+  'pages.datastudio.label.taskParam.value.tip':
+    'DolphinScheduler built-in time parameters: $[yyyyMMdd-1] means yesterday, $[yyyyMMdd-N] means N days ago; ${system.biz.curdate} means current business date. ',
+  'pages.datastudio.label.taskParam.value.tip.link':
+    'See DS docs for more',
   'pages.datastudio.label.jobConfig': 'Job Config',
   'pages.datastudio.label.jobConfig.addConfig': 'Add Config item',
   'pages.datastudio.label.jobConfig.addConfig.params': 'parameters',

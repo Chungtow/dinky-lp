@@ -63,6 +63,12 @@ public class TaskExtConfig implements Serializable {
             notes = "Custom configuration items for the task")
     private List<ConfigItem> customConfig = new ArrayList<>();
 
+    @ApiModelProperty(
+            value = "Task Params",
+            dataType = "List<TaskParam>",
+            notes = "Task parameters (e.g., pt=$[yyyyMMdd-1]) for variable injection")
+    private List<TaskParam> taskParams = new ArrayList<>();
+
     // 获取自定义配置的某个key的值
     public String getCustomConfigValue(String key) {
         return customConfig.stream()
@@ -109,5 +115,27 @@ public class TaskExtConfig implements Serializable {
     // 是否包含某个key
     public boolean containsKey(String key) {
         return customConfig.stream().anyMatch(item -> item.getKey().equals(key));
+    }
+
+    /**
+     * Task parameter definition for variable injection.
+     * e.g., prop=pt, value=$[yyyyMMdd-1], type=VARCHAR, direct=IN
+     */
+    @Data
+    @AllArgsConstructor
+    @NoArgsConstructor
+    @ApiModel(value = "TaskParam", description = "Task parameter for variable injection")
+    public static class TaskParam implements Serializable {
+        @ApiModelProperty(value = "Parameter name", dataType = "String", example = "pt")
+        private String prop;
+
+        @ApiModelProperty(value = "Direction: IN/OUT", dataType = "String", example = "IN")
+        private String direct = "IN";
+
+        @ApiModelProperty(value = "Parameter type", dataType = "String", example = "VARCHAR")
+        private String type = "VARCHAR";
+
+        @ApiModelProperty(value = "Parameter value", dataType = "String", example = "$[yyyyMMdd-1]")
+        private String value;
     }
 }

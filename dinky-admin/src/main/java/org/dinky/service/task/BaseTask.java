@@ -22,13 +22,17 @@ package org.dinky.service.task;
 import org.dinky.config.Dialect;
 import org.dinky.context.TaskContextHolder;
 import org.dinky.data.annotations.SupportDialect;
+import org.dinky.data.constant.CommonConstant;
 import org.dinky.data.dto.TaskDTO;
 import org.dinky.data.exception.NotSupportExplainExcepition;
 import org.dinky.data.result.SqlExplainResult;
 import org.dinky.job.JobResult;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
@@ -36,8 +40,10 @@ import cn.hutool.core.text.StrFormatter;
 import cn.hutool.core.util.ClassUtil;
 import cn.hutool.core.util.ReflectUtil;
 import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 @AllArgsConstructor
+@Slf4j
 public abstract class BaseTask {
 
     private static final Set<Class<?>> taskRegistry =
@@ -78,5 +84,33 @@ public abstract class BaseTask {
 
     public JobResult StreamExecute() {
         return null;
+    }
+
+    /**
+     * Replace {@code ${variableName}} placeholders in the given statement using
+     * {@link TaskDTO#getVariables()} as the value map.
+     * <p>
+     * This method is designed for non-Flink dialects (CommonSqlTask, SparkSqlTask etc.)
+     * that do not go through the Flink {@code VariableManager} pipeline.
+     * FlinkSqlTask keeps its own {@code FlinkInterceptor.pretreatStatement()} path untouched.
+     *
+     * @param statement original SQL statement
+     * @return statement with {@code ${key}} replaced by resolved values
+     */
+    protected String replaceTaskVariables(String statement) {
+        Map<String, String> vars = task.getVariables();
+        if (vars == null || vars.isEmpty()) {
+            return statement;
+        }
+
+        Matcher m = CommonConstant.GLOBAL_VARIABLE_PATTERN.matcher(statement);
+        StringBuffer sb = new StringBuffer();
+        while (m.find()) {
+            String key = m.group(1);
+            String value = vars.getOrDefault(key, "");
+            m.appendReplacement(sb, Matcher.quoteReplacement(value));
+        }
+        m.appendTail(sb);
+        return sb.toString();
     }
 }

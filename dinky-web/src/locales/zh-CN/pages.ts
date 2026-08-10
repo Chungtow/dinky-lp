@@ -466,6 +466,17 @@ export default {
   'pages.datastudio.label.execConfig.mocksink': '开启SinkMock',
   'pages.datastudio.label.execConfig.mocksink.tip':
     '将SinkFunction进行Mock，调试过程中不会向线上环境执行写入，但可以通过dinky预览Sink结果',
+  'pages.datastudio.label.taskParam.addParam': '添加参数',
+  'pages.datastudio.label.taskParam.prop.placeholder': '参数名',
+  'pages.datastudio.label.taskParam.prop.required': '请输入参数名',
+  'pages.datastudio.label.taskParam.direct': '方向',
+  'pages.datastudio.label.taskParam.type': '类型',
+  'pages.datastudio.label.taskParam.value.placeholder': '参数值(如$[yyyyMMdd-1])',
+  'pages.datastudio.label.taskParam.value.required': '请输入参数值',
+  'pages.datastudio.label.taskParam.value.tip':
+    'DolphinScheduler 内置时间参数示例：$[yyyyMMdd-1] 表示昨天，$[yyyyMMdd-N] 表示 N 天前；${system.biz.curdate} 表示当前业务日期。更多参数请参考 ',
+  'pages.datastudio.label.taskParam.value.tip.link':
+    'DolphinScheduler 官方文档',
   'pages.datastudio.label.jobConfig': '作业配置',
   'pages.datastudio.label.jobConfig.addConfig': '添加配置项',
   'pages.datastudio.label.jobConfig.addConfig.params': '参数',

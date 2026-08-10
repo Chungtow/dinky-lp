@@ -54,10 +54,18 @@ export type ConfigItem = {
   value: string;
 };
 
+export type TaskParamItem = {
+  prop: string;
+  direct: string;
+  type: string;
+  value: string;
+};
+
 export type TaskExtConfig = {
   udfRefer: List<TaskUdfRefer>;
   udfConfig?: TaskUdfConfig;
   customConfig: List<Map<string, object>>;
+  taskParams: List<TaskParamItem>;
 };
 
 export type TaskInfo = {
