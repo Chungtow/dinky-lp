@@ -61,7 +61,8 @@ public class CommonSqlTask extends BaseTask {
     @Override
     public JobResult execute() {
         log.info("Preparing to execute common sql...");
-        SqlDTO sqlDTO = SqlDTO.build(task.getStatement(), task.getDatabaseId(), null);
+        String statement = replaceTaskVariables(task.getStatement());
+        SqlDTO sqlDTO = SqlDTO.build(statement, task.getDatabaseId(), null);
         DataBaseService dataBaseService = SpringUtil.getBean(DataBaseService.class);
         JobResult jobResult = dataBaseService.executeCommonSql(sqlDTO);
         return jobResult;
@@ -70,7 +71,8 @@ public class CommonSqlTask extends BaseTask {
     @Override
     public JobResult StreamExecute() {
         log.info("Preparing to execute common sql...");
-        SqlDTO sqlDTO = SqlDTO.build(task.getStatement(), task.getDatabaseId(), null);
+        String statement = replaceTaskVariables(task.getStatement());
+        SqlDTO sqlDTO = SqlDTO.build(statement, task.getDatabaseId(), null);
         DataBaseService dataBaseService = SpringUtil.getBean(DataBaseService.class);
         JobResult jobResult = dataBaseService.StreamExecuteCommonSql(sqlDTO);
         return jobResult;

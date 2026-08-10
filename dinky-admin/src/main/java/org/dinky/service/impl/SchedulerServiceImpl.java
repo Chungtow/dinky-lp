@@ -23,7 +23,10 @@ import org.dinky.data.enums.Status;
 import org.dinky.data.exception.BusException;
 import org.dinky.data.model.Catalogue;
 import org.dinky.data.model.SystemConfiguration;
+import org.dinky.data.model.Task;
+import org.dinky.data.model.ext.TaskExtConfig;
 import org.dinky.init.SystemInit;
+import org.dinky.mapper.TaskMapper;
 import org.dinky.scheduler.client.ProcessClient;
 import org.dinky.scheduler.client.TaskClient;
 import org.dinky.scheduler.enums.ReleaseState;
@@ -35,6 +38,7 @@ import org.dinky.scheduler.model.DinkyTaskRequest;
 import org.dinky.scheduler.model.ProcessDefinition;
 import org.dinky.scheduler.model.ProcessTaskRelation;
 import org.dinky.scheduler.model.Project;
+import org.dinky.scheduler.model.Property;
 import org.dinky.scheduler.model.TaskDefinition;
 import org.dinky.scheduler.model.TaskGroup;
 import org.dinky.scheduler.model.TaskMainInfo;
@@ -69,6 +73,7 @@ public class SchedulerServiceImpl implements SchedulerService {
     private final ProcessClient processClient;
     private final TaskClient taskClient;
     private final CatalogueService catalogueService;
+    private final TaskMapper taskMapper;
 
     /**
      * Pushes the specified DinkyTaskRequest to the task queue.
@@ -90,6 +95,11 @@ public class SchedulerServiceImpl implements SchedulerService {
         dinkyTaskParams.setTaskId(dinkyTaskRequest.getTaskId());
         dinkyTaskParams.setAddress(
                 SystemConfiguration.getInstances().getDinkyAddr().getValue());
+
+        // Inject task parameters from config_json.taskParams as DS localParams
+        // (e.g. pt=$[yyyyMMdd-1], tag=${system.biz.curdate})
+        injectTaskLocalParams(dinkyTaskRequest.getTaskId(), dinkyTaskParams);
+
         dinkyTaskRequest.setTaskParams(JsonUtils.toJsonString(dinkyTaskParams));
         dinkyTaskRequest.setTaskType(TASK_TYPE);
 
@@ -272,8 +282,12 @@ public class SchedulerServiceImpl implements SchedulerService {
         TaskRequest taskRequest = new TaskRequest();
 
         dinkyTaskRequest.setName(taskDefinition.getName());
-        dinkyTaskRequest.setTaskParams(taskDefinition.getTaskParams());
         dinkyTaskRequest.setTaskType(TASK_TYPE);
+
+        // Merge localParams from config_json.taskParams into existing DS task params
+        DinkyTaskParams existingParams = JsonUtils.toBean(taskDefinition.getTaskParams(), DinkyTaskParams.class);
+        injectTaskLocalParams(dinkyTaskRequest.getTaskId(), existingParams);
+        dinkyTaskRequest.setTaskParams(JsonUtils.toJsonString(existingParams));
         BeanUtil.copyProperties(dinkyTaskRequest, taskRequest);
         taskRequest.setTimeoutFlag(dinkyTaskRequest.getTimeoutFlag());
         taskRequest.setFlag(dinkyTaskRequest.getFlag());
@@ -386,5 +400,34 @@ public class SchedulerServiceImpl implements SchedulerService {
             return name;
         }
         return name + "/" + next;
+    }
+
+    /**
+     * Read task parameters from {@code config_json.taskParams} and inject them
+     * into the DS DinkyTaskParams {@code localParams} as {@link Property} objects.
+     * <p>
+     * The original DS time-placeholder expression (e.g. {@code $[yyyyMMdd-1]}) is
+     * preserved as-is; resolution happens at DS scheduling time.
+     */
+    private void injectTaskLocalParams(String taskId, DinkyTaskParams dinkyTaskParams) {
+        Task task = taskMapper.selectById(Integer.valueOf(taskId));
+        if (task == null || task.getConfigJson() == null) {
+            return;
+        }
+        TaskExtConfig extConfig = task.getConfigJson();
+        if (extConfig.getTaskParams() == null || extConfig.getTaskParams().isEmpty()) {
+            return;
+        }
+        List<Property> localParams = new ArrayList<>();
+        for (TaskExtConfig.TaskParam p : extConfig.getTaskParams()) {
+            Property property = new Property();
+            property.setProp(p.getProp());
+            property.setDirect(org.dinky.scheduler.enums.Direct.valueOf(p.getDirect()));
+            property.setType(org.dinky.scheduler.enums.DataType.valueOf(p.getType()));
+            property.setValue(p.getValue());
+            localParams.add(property);
+        }
+        dinkyTaskParams.setLocalParams(localParams);
+        log.info("Injected {} localParams from config_json.taskParams into DinkyTaskParams", localParams.size());
     }
 }

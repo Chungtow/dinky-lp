@@ -94,6 +94,7 @@ import org.dinky.service.task.BaseTask;
 import org.dinky.utils.FragmentVariableUtils;
 import org.dinky.utils.JsonUtils;
 import org.dinky.utils.RunTimeUtil;
+import org.dinky.utils.TimeExprParser;
 import org.dinky.utils.UDFUtils;
 
 import org.apache.commons.collections4.CollectionUtils;
@@ -200,7 +201,33 @@ public class TaskServiceImpl extends SuperServiceImpl<TaskMapper, Task> implemen
             task.setStatement(submitDto.getStatement());
         }
         task.setVariables(Optional.ofNullable(submitDto.getVariables()).orElse(new HashMap<>()));
+
+        // Resolve task parameters from config_json.taskParams if no external variables provided
+        // (local testing path; DS callback overrides with submitDto.getVariables())
+        resolveTaskParams(task);
+
         return task;
+    }
+
+    /**
+     * If task.variables is empty (local testing), resolve DS time-placeholder
+     * expressions from {@code config_json.taskParams} and inject them.
+     */
+    private void resolveTaskParams(TaskDTO task) {
+        if (!task.getVariables().isEmpty()) {
+            // DS callback already provided resolved variables; skip local resolution
+            return;
+        }
+        TaskExtConfig extConfig = task.getConfigJson();
+        if (extConfig == null
+                || extConfig.getTaskParams() == null
+                || extConfig.getTaskParams().isEmpty()) {
+            return;
+        }
+        for (TaskExtConfig.TaskParam p : extConfig.getTaskParams()) {
+            task.getVariables().put(p.getProp(), TimeExprParser.parse(p.getValue()));
+        }
+        log.info("Resolved task variables from config_json.taskParams: {}", task.getVariables());
     }
 
     @ProcessStep(type = ProcessStepType.SUBMIT_EXECUTE)

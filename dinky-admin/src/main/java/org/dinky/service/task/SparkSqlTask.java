@@ -19,7 +19,9 @@
 
 package org.dinky.service.task;
 
+import org.dinky.aop.ProcessAspect;
 import org.dinky.config.Dialect;
+import org.dinky.context.ConsoleContextHolder;
 import org.dinky.data.annotations.SupportDialect;
 import org.dinky.data.dto.TaskDTO;
 import org.dinky.data.result.SqlExplainResult;
@@ -38,6 +40,8 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+
+import org.slf4j.MDC;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -87,7 +91,7 @@ public class SparkSqlTask extends BaseTask {
 
     @Override
     public JobResult execute() throws Exception {
-        String sql = task.getStatement();
+        String sql = replaceTaskVariables(task.getStatement());
         if (sql == null || sql.trim().isEmpty()) {
             JobResult result = new JobResult();
             result.setError("Spark SQL statement is empty");
@@ -133,6 +137,12 @@ public class SparkSqlTask extends BaseTask {
 
             Process process = pb.start();
 
+            // Capture MDC context for real-time log streaming to frontend console.
+            // The reader threads are spawned in separate threads and do not inherit MDC,
+            // so we capture them here in the main thread (which is within @ExecuteProcess / @ProcessStep).
+            String processName = MDC.get(ProcessAspect.PROCESS_NAME);
+            String stepPid = MDC.get(ProcessAspect.PROCESS_STEP);
+
             // Read stdout (structured results) separately from stderr (logs)
             StringBuilder stdoutData = new StringBuilder();
             StringBuilder stderrData = new StringBuilder();
@@ -144,6 +154,14 @@ public class SparkSqlTask extends BaseTask {
                             String line;
                             while ((line = reader.readLine()) != null) {
                                 stdoutData.append(line).append("\n");
+                                // Push Spark log lines from stdout to frontend console
+                                if (isSparkLogLine(line.trim())) {
+                                    log.info("[SparkSQL] {}", line);
+                                    if (processName != null && stepPid != null) {
+                                        ConsoleContextHolder.getInstances()
+                                                .appendLog(processName, stepPid, "[SparkSQL] " + line, true);
+                                    }
+                                }
                             }
                         } catch (Exception e) {
                             log.warn("Error reading spark-sql stdout", e);
@@ -159,6 +177,11 @@ public class SparkSqlTask extends BaseTask {
                             while ((line = reader.readLine()) != null) {
                                 log.info("[SparkSQL] {}", line);
                                 stderrData.append(line).append("\n");
+                                // Push stderr to frontend console in real time
+                                if (processName != null && stepPid != null) {
+                                    ConsoleContextHolder.getInstances()
+                                            .appendLog(processName, stepPid, "[SparkSQL] " + line, true);
+                                }
                             }
                         } catch (Exception e) {
                             log.warn("Error reading spark-sql stderr", e);

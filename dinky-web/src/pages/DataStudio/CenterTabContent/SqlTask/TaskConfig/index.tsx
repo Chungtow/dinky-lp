@@ -25,6 +25,7 @@ import { InfoCircleOutlined } from '@ant-design/icons';
 import { DIALECT, SWITCH_OPTIONS } from '@/services/constants';
 import { TaskState, TempData } from '@/pages/DataStudio/type';
 import { BasicConfig } from '@/pages/DataStudio/CenterTabContent/SqlTask/TaskConfig/BasicConfig';
+import { ProFormTaskParam } from '@/pages/DataStudio/CenterTabContent/SqlTask/TaskConfig/ProFormTaskParam';
 import { isSql, assert } from '@/pages/DataStudio/utils';
 import { JOB_LIFE_CYCLE } from '@/pages/DevOps/constants';
 
@@ -117,6 +118,26 @@ export default (props: {
               max={9999}
             />
           </ProFormGroup>
+        </ProForm>
+      )
+    });
+
+    items.push({
+      key: 'taskParams',
+      label: l('menu.datastudio.task.taskParams'),
+      children: (
+        <ProForm
+          className={'datastudio-theme'}
+          initialValues={{
+            ...props.data
+          }}
+          disabled={props.data?.step === JOB_LIFE_CYCLE.PUBLISH || props.isLockTask}
+          style={{ padding: '10px' }}
+          submitter={false}
+          layout='vertical'
+          onValuesChange={props.onValuesChange}
+        >
+          <ProFormTaskParam />
         </ProForm>
       )
     });
