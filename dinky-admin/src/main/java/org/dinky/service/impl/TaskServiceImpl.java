@@ -219,7 +219,9 @@ public class TaskServiceImpl extends SuperServiceImpl<TaskMapper, Task> implemen
             return;
         }
         TaskExtConfig extConfig = task.getConfigJson();
-        if (extConfig == null || extConfig.getTaskParams() == null || extConfig.getTaskParams().isEmpty()) {
+        if (extConfig == null
+                || extConfig.getTaskParams() == null
+                || extConfig.getTaskParams().isEmpty()) {
             return;
         }
         for (TaskExtConfig.TaskParam p : extConfig.getTaskParams()) {

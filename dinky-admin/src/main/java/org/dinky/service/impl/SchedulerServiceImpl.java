@@ -285,8 +285,7 @@ public class SchedulerServiceImpl implements SchedulerService {
         dinkyTaskRequest.setTaskType(TASK_TYPE);
 
         // Merge localParams from config_json.taskParams into existing DS task params
-        DinkyTaskParams existingParams =
-                JsonUtils.toBean(taskDefinition.getTaskParams(), DinkyTaskParams.class);
+        DinkyTaskParams existingParams = JsonUtils.toBean(taskDefinition.getTaskParams(), DinkyTaskParams.class);
         injectTaskLocalParams(dinkyTaskRequest.getTaskId(), existingParams);
         dinkyTaskRequest.setTaskParams(JsonUtils.toJsonString(existingParams));
         BeanUtil.copyProperties(dinkyTaskRequest, taskRequest);
@@ -429,7 +428,6 @@ public class SchedulerServiceImpl implements SchedulerService {
             localParams.add(property);
         }
         dinkyTaskParams.setLocalParams(localParams);
-        log.info("Injected {} localParams from config_json.taskParams into DinkyTaskParams",
-                localParams.size());
+        log.info("Injected {} localParams from config_json.taskParams into DinkyTaskParams", localParams.size());
     }
 }
