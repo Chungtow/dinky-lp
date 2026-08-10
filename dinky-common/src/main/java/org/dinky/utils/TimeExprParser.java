@@ -41,15 +41,13 @@ import java.util.regex.Pattern;
 public class TimeExprParser {
 
     // $[yyyyMMdd-1], $[yyyyMMdd+2], etc.
-    private static final Pattern DATE_OFFSET_PATTERN =
-            Pattern.compile("^\\$\\[(yyyyMMdd)([+-])(\\d+)\\]$");
+    private static final Pattern DATE_OFFSET_PATTERN = Pattern.compile("^\\$\\[(yyyyMMdd)([+-])(\\d+)\\]$");
 
     private static final String DS_BIZ_CURDATE = "${system.biz.curdate}";
 
     private static final DateTimeFormatter YYYYMMDD = DateTimeFormatter.ofPattern("yyyyMMdd");
 
-    private TimeExprParser() {
-    }
+    private TimeExprParser() {}
 
     /**
      * Parse a DS time-placeholder expression and return the resolved value.
