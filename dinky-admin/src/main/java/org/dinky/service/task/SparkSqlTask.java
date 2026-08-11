@@ -39,6 +39,8 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 import org.slf4j.MDC;
@@ -64,6 +66,22 @@ public class SparkSqlTask extends BaseTask {
     private static final String DEFAULT_SPARK_HOME = "/opt/spark";
     private static final String DEFAULT_HADOOP_CONF_DIR = "/opt/hadoop/conf";
     private static final long DEFAULT_TIMEOUT_MINUTES = 60;
+    private static final int DESTROY_WAIT_SECONDS = 10;
+
+    /**
+     * Static registry of running SparkSqlTask instances, keyed by task name.
+     *
+     * <p>{@link BaseTask#getTask()} creates a new instance per execution, so {@link #stop()}
+     * must look up the live instance through this registry to interrupt/kill its process.
+     */
+    private static final Map<String, SparkSqlTask> RUNNING_TASKS = new ConcurrentHashMap<>();
+
+    /**
+     * The underlying spark-sql process. Declared as an instance field so the finally block
+     * (and {@link #destroyProcess()}) can always reach and clean it up, regardless of how
+     * {@link #execute()} exits (normal / interrupted / exception / timeout).
+     */
+    private volatile Process process;
 
     public SparkSqlTask(TaskDTO task) {
         super(task);
@@ -105,6 +123,9 @@ public class SparkSqlTask extends BaseTask {
         // Write SQL to a temporary file
         File sqlFile = null;
         try {
+            // Register this instance so stop()/cancel can reach the live process
+            RUNNING_TASKS.put(task.getName(), this);
+
             sqlFile = File.createTempFile("dinky-spark-", ".sql");
             try (FileWriter writer = new FileWriter(sqlFile)) {
                 writer.write(sql);
@@ -135,7 +156,7 @@ public class SparkSqlTask extends BaseTask {
 
             log.info("Spark SQL: HADOOP_CONF_DIR={}", hadoopConfDir);
 
-            Process process = pb.start();
+            process = pb.start();
 
             // Capture MDC context for real-time log streaming to frontend console.
             // The reader threads are spawned in separate threads and do not inherit MDC,
@@ -168,6 +189,7 @@ public class SparkSqlTask extends BaseTask {
                         }
                     },
                     "spark-sql-stdout");
+            stdoutThread.setDaemon(true);
 
             Thread stderrThread = new Thread(
                     () -> {
@@ -188,6 +210,7 @@ public class SparkSqlTask extends BaseTask {
                         }
                     },
                     "spark-sql-stderr");
+            stderrThread.setDaemon(true);
 
             stdoutThread.start();
             stderrThread.start();
@@ -234,10 +257,30 @@ public class SparkSqlTask extends BaseTask {
                 result.setStatement(fullOutput);
                 return result;
             }
+        } catch (InterruptedException e) {
+            // UI stop/cancel → killProcess → t.interrupt() arrives here
+            log.info("Spark SQL task interrupted (stop/cancel), process cleaned up: {}", task.getName());
+            Thread.currentThread().interrupt(); // restore interrupt flag
+            JobResult result = new JobResult();
+            result.setError("Spark SQL execution interrupted");
+            result.setStatus(Job.JobStatus.FAILED);
+            result.setSuccess(false);
+            return result;
+        } catch (Exception e) {
+            log.error("Spark SQL execution error, process cleaned up: {}", task.getName(), e);
+            JobResult result = new JobResult();
+            result.setError("Spark SQL execution error: " + e.getMessage());
+            result.setStatus(Job.JobStatus.FAILED);
+            result.setSuccess(false);
+            return result;
         } finally {
+            // Unified cleanup on every exit path (normal / interrupted / exception / timeout):
+            // destroyProcess() checks isAlive(), so it is a no-op for already-exited processes.
+            destroyProcess();
             if (sqlFile != null && sqlFile.exists()) {
                 sqlFile.delete();
             }
+            RUNNING_TASKS.remove(task.getName());
         }
     }
 
@@ -393,6 +436,41 @@ public class SparkSqlTask extends BaseTask {
 
     @Override
     public boolean stop() {
-        return false;
+        SparkSqlTask running = RUNNING_TASKS.get(task.getName());
+        if (running == null) {
+            return false; // no live process for this task
+        }
+        running.destroyProcess();
+        return true;
+    }
+
+    /**
+     * Terminate the underlying spark-sql process. SIGTERM first to let Spark run its
+     * shutdown hooks (SparkContext.stop → unregister from YARN → release SparkUI port),
+     * then SIGKILL as a fallback after {@link #DESTROY_WAIT_SECONDS} seconds.
+     *
+     * <p>Safe to call from any thread and on any exit path: it is a no-op when the
+     * process is null or already dead.
+     */
+    private void destroyProcess() {
+        Process p = process;
+        if (p == null || !p.isAlive()) {
+            return;
+        }
+        log.info("Spark SQL task stopping, destroying process: {}", task.getName());
+        p.destroy(); // SIGTERM → Spark graceful shutdown (unregister YARN app, release SparkUI port)
+        try {
+            if (!p.waitFor(DESTROY_WAIT_SECONDS, TimeUnit.SECONDS)) {
+                log.warn(
+                        "Spark SQL process alive after {}s SIGTERM, force killing: {}",
+                        DESTROY_WAIT_SECONDS,
+                        task.getName());
+                p.destroyForcibly(); // SIGKILL fallback, guarantees cleanup
+            }
+        } catch (InterruptedException ie) {
+            log.warn("Interrupted while waiting for Spark SQL process to exit, force killing: {}", task.getName());
+            p.destroyForcibly();
+            Thread.currentThread().interrupt();
+        }
     }
 }
