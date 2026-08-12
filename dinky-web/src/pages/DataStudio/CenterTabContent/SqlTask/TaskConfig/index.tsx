@@ -18,7 +18,13 @@
  */
 
 import { Tabs, TabsProps } from 'antd';
-import { ProForm, ProFormDigit, ProFormGroup, ProFormSwitch } from '@ant-design/pro-components';
+import {
+  ProForm,
+  ProFormDigit,
+  ProFormGroup,
+  ProFormSelect,
+  ProFormSwitch
+} from '@ant-design/pro-components';
 import { l } from '@/utils/intl';
 import React from 'react';
 import { InfoCircleOutlined } from '@ant-design/icons';
@@ -37,6 +43,33 @@ export default (props: {
   isLockTask: boolean;
 }) => {
   const { data, tempData } = props;
+  // Spark SQL execution mode: stored in configJson.customConfig as
+  // 'spark.sql.execution.mode' = cli (default) | jdbc (Spark ThriftServer)
+  const SPARK_EXECUTION_MODE_KEY = 'spark.sql.execution.mode';
+  const sparkExecutionMode =
+    props.data.configJson?.customConfig?.find(
+      (item: any) => item.key === SPARK_EXECUTION_MODE_KEY
+    )?.value === 'jdbc'
+      ? 'jdbc'
+      : 'cli';
+
+  // Sync the virtual 'executionMode' form field into configJson.customConfig
+  // so the backend SparkSqlTask.isJdbcMode() can read it (docs §3.11.4)
+  const handlePreviewValuesChange = (changedValues: any, values: TaskState) => {
+    if ('executionMode' in changedValues) {
+      const customConfig = [...(values.configJson?.customConfig ?? [])].filter(
+        (item: any) => item.key !== SPARK_EXECUTION_MODE_KEY
+      );
+      if (changedValues.executionMode === 'jdbc') {
+        customConfig.push({ key: SPARK_EXECUTION_MODE_KEY, value: 'jdbc' });
+      }
+      values.configJson = { ...values.configJson, customConfig };
+      // 'executionMode' is a virtual UI-only field, do not persist it
+      delete (values as any).executionMode;
+    }
+    props.onValuesChange?.(changedValues, values);
+  };
+
   const items: TabsProps['items'] = [];
   if (assert(data.dialect, [DIALECT.FLINK_SQL, DIALECT.FLINKJAR], true, 'includes')) {
     items.push({
@@ -58,6 +91,24 @@ export default (props: {
     assert(data.dialect, [DIALECT.FLINK_SQL, DIALECT.FLINKJAR], true, 'includes')
   ) {
     const renderOtherConfig = () => {
+      if (data.dialect?.toLowerCase() === DIALECT.SPARK_SQL) {
+        return (
+          <ProFormSelect
+            width={'xs'}
+            label={'执行模式'}
+            name='executionMode'
+            tooltip={{
+              title:
+                'CLI：spark-sql 子进程提交 YARN（约 27s 冷启动，日志实时逐行，无需数据源）；JDBC：连接 Spark ThriftServer hivespark03:10015（约 2s 响应，需选择 Hive 数据源，无逐行实时日志）',
+              icon: <InfoCircleOutlined />
+            }}
+            options={[
+              { label: 'CLI（直接提交 YARN）', value: 'cli' },
+              { label: 'JDBC（连接 ThriftServer）', value: 'jdbc' }
+            ]}
+          />
+        );
+      }
       if (!isSql(data.dialect)) {
         return (
           <>
@@ -99,13 +150,14 @@ export default (props: {
         <ProForm
           className={'datastudio-theme'}
           initialValues={{
-            ...props.data
+            ...props.data,
+            executionMode: sparkExecutionMode
           }}
           disabled={props.data?.step === JOB_LIFE_CYCLE.PUBLISH || props.isLockTask}
           style={{ padding: '10px' }}
           submitter={false}
           layout='vertical'
-          onValuesChange={props.onValuesChange}
+          onValuesChange={handlePreviewValuesChange}
         >
           <ProFormGroup style={{ display: 'flex', justifyContent: 'center' }}>
             {renderOtherConfig()}

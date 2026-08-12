@@ -403,6 +403,13 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
     taskOwnerLockingStrategy
   );
 
+  // Spark SQL task running in JDBC (Spark ThriftServer) mode needs a data source selected
+  const isSparkJdbcMode =
+    currentState.dialect?.toLowerCase() === DIALECT.SPARK_SQL &&
+    currentState.configJson?.customConfig?.some(
+      (item: any) => item.key === 'spark.sql.execution.mode' && item.value === 'jdbc'
+    );
+
   const handleRollbackVersion = async (taskId: number, versionId: number) => {
     const result = await handleOption(
       API_CONSTANTS.ROLLBACK_TASK,
@@ -887,12 +894,13 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
                 <SelectFlinkRunMode data={tempData.flinkCluster} />
               </>
             )}
-            {isSql(currentState.dialect) && currentState.dialect?.toLowerCase() !== DIALECT.SPARK_SQL && (
-              <>
-                <Divider type={'vertical'} style={{ height: dividerHeight }} />
-                <SelectDb databaseDataList={tempData.dataSourceDataList} data={currentState} />
-              </>
-            )}
+            {isSql(currentState.dialect) &&
+              (currentState.dialect?.toLowerCase() !== DIALECT.SPARK_SQL || isSparkJdbcMode) && (
+                <>
+                  <Divider type={'vertical'} style={{ height: dividerHeight }} />
+                  <SelectDb databaseDataList={tempData.dataSourceDataList} data={currentState} />
+                </>
+              )}
 
             {assert(
               currentState.dialect,
