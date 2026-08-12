@@ -76,6 +76,7 @@ public class SparkSqlTask extends BaseTask {
      * Value: {@code cli} (default, spark-sql sub-process) or {@code jdbc} (Spark ThriftServer).
      */
     private static final String EXECUTION_MODE_KEY = "spark.sql.execution.mode";
+
     private static final String EXECUTION_MODE_JDBC = "jdbc";
 
     /**
@@ -340,14 +341,11 @@ public class SparkSqlTask extends BaseTask {
     private JobResult executeViaJdbc(String sql) {
         // JDBC mode requires a data source pointing to the ThriftServer
         if (task.getDatabaseId() == null) {
-            log.warn(
-                    "Spark SQL task in JDBC mode but no data source assigned: {}",
-                    task.getName());
+            log.warn("Spark SQL task in JDBC mode but no data source assigned: {}", task.getName());
             JobResult result = new JobResult();
             result.setStatement(sql);
-            result.setError(
-                    "JDBC mode (spark.sql.execution.mode=jdbc) requires a data source pointing to "
-                            + "Spark ThriftServer (hivespark03:10015). Please select a Hive data source first.");
+            result.setError("JDBC mode (spark.sql.execution.mode=jdbc) requires a data source pointing to "
+                    + "Spark ThriftServer (hivespark03:10015). Please select a Hive data source first.");
             result.setStatus(Job.JobStatus.FAILED);
             result.setSuccess(false);
             return result;
@@ -567,9 +565,7 @@ public class SparkSqlTask extends BaseTask {
             // sub-process to kill, so the YARN job on the ThriftServer may keep running.
             Thread t = running.execThread;
             if (t != null && t.isAlive()) {
-                log.info(
-                        "Spark SQL task (JDBC mode) stopping, interrupting execution thread: {}",
-                        task.getName());
+                log.info("Spark SQL task (JDBC mode) stopping, interrupting execution thread: {}", task.getName());
                 t.interrupt();
             }
             return true;
