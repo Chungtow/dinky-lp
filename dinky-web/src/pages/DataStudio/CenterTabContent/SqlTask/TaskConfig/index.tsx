@@ -44,26 +44,35 @@ export default (props: {
 }) => {
   const { data, tempData } = props;
   // Spark SQL execution mode: stored in configJson.customConfig as
-  // 'spark.sql.execution.mode' = cli (default) | jdbc (Spark ThriftServer)
+  // 'spark.sql.execution.mode' = jdbc (default, Spark ThriftServer) | cli
   const SPARK_EXECUTION_MODE_KEY = 'spark.sql.execution.mode';
   const sparkExecutionMode =
     props.data.configJson?.customConfig?.find(
       (item: any) => item.key === SPARK_EXECUTION_MODE_KEY
-    )?.value === 'jdbc'
-      ? 'jdbc'
-      : 'cli';
+    )?.value === 'cli'
+      ? 'cli'
+      : 'jdbc';
 
   // Sync the virtual 'executionMode' form field into configJson.customConfig
-  // so the backend SparkSqlTask.isJdbcMode() can read it (docs §3.11.4)
+  // so the backend SparkSqlTask.isJdbcMode() can read it (docs §3.11.4).
+  // Base is props.data (full parent state) instead of AntD allValues, so the
+  // taskParams kept in configJson is never dropped when switching modes.
   const handlePreviewValuesChange = (changedValues: any, values: TaskState) => {
     if ('executionMode' in changedValues) {
-      const customConfig = [...(values.configJson?.customConfig ?? [])].filter(
+      const customConfig = [...(props.data.configJson?.customConfig ?? [])].filter(
         (item: any) => item.key !== SPARK_EXECUTION_MODE_KEY
       );
-      if (changedValues.executionMode === 'jdbc') {
-        customConfig.push({ key: SPARK_EXECUTION_MODE_KEY, value: 'jdbc' });
-      }
-      values.configJson = { ...values.configJson, customConfig };
+      // Persist whichever mode is selected (jdbc or cli) so the backend and the
+      // data-source selector (isSparkJdbcMode) can always resolve the mode reliably.
+      customConfig.push({
+        key: SPARK_EXECUTION_MODE_KEY,
+        value: changedValues.executionMode
+      });
+      values = {
+        ...props.data,
+        executionMode: changedValues.executionMode,
+        configJson: { ...(props.data.configJson ?? {}), customConfig }
+      };
       // 'executionMode' is a virtual UI-only field, do not persist it
       delete (values as any).executionMode;
     }
@@ -99,12 +108,12 @@ export default (props: {
             name='executionMode'
             tooltip={{
               title:
-                'CLI：spark-sql 子进程提交 YARN（约 27s 冷启动，日志实时逐行，无需数据源）；JDBC：连接 Spark ThriftServer hivespark03:10015（约 2s 响应，需选择 Hive 数据源，无逐行实时日志）',
+                'JDBC：连接 Spark ThriftServer hivespark03:10015（约 2s 响应，需选择 Hive 数据源，无逐行实时日志，默认）；CLI：spark-sql 子进程提交 YARN（约 27s 冷启动，日志实时逐行，无需数据源）',
               icon: <InfoCircleOutlined />
             }}
             options={[
-              { label: 'CLI（直接提交 YARN）', value: 'cli' },
-              { label: 'JDBC（连接 ThriftServer）', value: 'jdbc' }
+              { label: 'JDBC（连接 ThriftServer）', value: 'jdbc' },
+              { label: 'CLI（直接提交 YARN）', value: 'cli' }
             ]}
           />
         );

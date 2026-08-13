@@ -320,13 +320,16 @@ public class SparkSqlTask extends BaseTask {
      * Determine whether this task runs in JDBC (Spark ThriftServer) mode.
      *
      * <p>Reads {@code spark.sql.execution.mode} from {@code configJson.customConfig}.
-     * Absent or empty means the default {@code cli} mode (spark-sql sub-process).
+     * Absent or empty means the default {@code jdbc} mode (Spark ThriftServer).
      */
     private boolean isJdbcMode() {
         if (task.getConfigJson() == null || task.getConfigJson().getCustomConfig() == null) {
-            return false;
+            return true;
         }
         String mode = task.getConfigJson().getCustomConfigValue(EXECUTION_MODE_KEY);
+        if (mode == null || mode.isEmpty()) {
+            return true;
+        }
         return EXECUTION_MODE_JDBC.equalsIgnoreCase(mode);
     }
 

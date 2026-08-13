@@ -383,8 +383,22 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
       }
       allValues.type = mode;
     }
-    setCurrentState({ ...currentState, ...allValues });
-    updateCenterTab({ ...props.tabData, params: { ...currentState, ...allValues } });
+    // Functional update + deep-merge configJson so that taskParams (task params tab)
+    // and customConfig (preview config tab) can coexist no matter how the user
+    // switches between tabs / execution modes.
+    setCurrentState((prevState) => ({
+      ...prevState,
+      ...allValues,
+      configJson: { ...(prevState.configJson ?? {}), ...(allValues.configJson ?? {}) }
+    }));
+    updateCenterTab({
+      ...props.tabData,
+      params: {
+        ...currentState,
+        ...allValues,
+        configJson: { ...(currentState.configJson ?? {}), ...(allValues.configJson ?? {}) }
+      }
+    });
   };
   const hotKeyConfig = { enable: activeTab === id };
 
@@ -403,12 +417,14 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
     taskOwnerLockingStrategy
   );
 
-  // Spark SQL task running in JDBC (Spark ThriftServer) mode needs a data source selected
+  // Spark SQL task running in JDBC (Spark ThriftServer) mode needs a data source selected.
+  // Default execution mode is JDBC (aligned with TaskConfig's sparkExecutionMode and backend
+  // SparkSqlTask.isJdbcMode()): only an explicit 'cli' customConfig value means CLI mode.
   const isSparkJdbcMode =
     currentState.dialect?.toLowerCase() === DIALECT.SPARK_SQL &&
-    currentState.configJson?.customConfig?.some(
-      (item: any) => item.key === 'spark.sql.execution.mode' && item.value === 'jdbc'
-    );
+    currentState.configJson?.customConfig?.find(
+      (item: any) => item.key === 'spark.sql.execution.mode'
+    )?.value !== 'cli';
 
   const handleRollbackVersion = async (taskId: number, versionId: number) => {
     const result = await handleOption(
@@ -804,7 +820,7 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
           layout='horizontal'
           variant={'filled'}
           disabled={currentState?.step === JOB_LIFE_CYCLE.PUBLISH || isLockTask} // when this job is publishing, the form is disabled , and it is not allowed to modify
-          onValuesChange={debounce(onValuesChange, 500)}
+          onValuesChange={onValuesChange}
           syncToInitialValues
         >
           <Flex className={'datastudio-theme run-toolbar'} wrap gap={2}>
