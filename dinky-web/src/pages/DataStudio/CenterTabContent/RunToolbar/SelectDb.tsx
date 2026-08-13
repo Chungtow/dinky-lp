@@ -28,8 +28,11 @@ import { TaskState, TempData } from '@/pages/DataStudio/type';
 export default (props: { databaseDataList: TempData['dataSourceDataList']; data: TaskState }) => {
   const dataSourceData: Record<string, React.ReactNode> = {};
   const { databaseDataList, data } = props;
+  // Dinky has no 'sparksql' data source type: map the Spark SQL dialect to Hive data sources
+  // (the ThriftServer endpoint is exposed as a Hive data source, see docs §3.11.3)
+  const matchedDialect = data?.dialect.toLowerCase() === 'sparksql' ? 'hive' : data?.dialect.toLowerCase();
   databaseDataList
-    .filter((x) => x.type.toLowerCase() === data?.dialect.toLowerCase())
+    .filter((x) => x.type.toLowerCase() === matchedDialect)
     .forEach((item: DataSources.DataSource) => {
       dataSourceData[item.id] = item.name;
     });

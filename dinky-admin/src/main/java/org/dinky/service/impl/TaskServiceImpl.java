@@ -210,24 +210,29 @@ public class TaskServiceImpl extends SuperServiceImpl<TaskMapper, Task> implemen
     }
 
     /**
-     * If task.variables is empty (local testing), resolve DS time-placeholder
-     * expressions from {@code config_json.taskParams} and inject them.
+     * Resolve DS time-placeholder expressions (e.g. {@code $[yyyyMMdd-1]}) from
+     * {@code config_json.taskParams} and merge them into task variables.
+     *
+     * <p>External variables provided by the DS callback take precedence
+     * ({@code putIfAbsent}); local taskParams fill any remaining gaps so the two
+     * sources never mutually overwrite each other.
      */
     private void resolveTaskParams(TaskDTO task) {
-        if (!task.getVariables().isEmpty()) {
-            // DS callback already provided resolved variables; skip local resolution
-            return;
-        }
         TaskExtConfig extConfig = task.getConfigJson();
         if (extConfig == null
                 || extConfig.getTaskParams() == null
                 || extConfig.getTaskParams().isEmpty()) {
             return;
         }
+        int resolved = 0;
         for (TaskExtConfig.TaskParam p : extConfig.getTaskParams()) {
-            task.getVariables().put(p.getProp(), TimeExprParser.parse(p.getValue()));
+            if (p.getProp() == null || p.getProp().isEmpty()) {
+                continue;
+            }
+            task.getVariables().putIfAbsent(p.getProp(), TimeExprParser.parse(p.getValue()));
+            resolved++;
         }
-        log.info("Resolved task variables from config_json.taskParams: {}", task.getVariables());
+        log.info("Resolved {} task variables from config_json.taskParams: {}", resolved, task.getVariables());
     }
 
     @ProcessStep(type = ProcessStepType.SUBMIT_EXECUTE)

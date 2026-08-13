@@ -106,10 +106,26 @@ public abstract class BaseTask {
         StringBuffer sb = new StringBuffer();
         while (m.find()) {
             String key = m.group(1);
-            String value = vars.getOrDefault(key, "");
+            if (!vars.containsKey(key)) {
+                // Keep the placeholder and warn instead of silently replacing it with an
+                // empty string, which previously caused "empty partition column value"
+                // errors such as "Partition spec is invalid. The spec ([pt=Some()])...".
+                log.warn(
+                        "Variable '${{{}}}' not found in task variables {}, keeping placeholder to surface the config issue",
+                        key,
+                        vars);
+            }
+            String value = vars.getOrDefault(key, m.group(0));
             m.appendReplacement(sb, Matcher.quoteReplacement(value));
         }
         m.appendTail(sb);
-        return sb.toString();
+        String result = sb.toString();
+        if (result.contains("${")) {
+            log.warn(
+                    "Statement still contains unresolved ${{}} placeholders, please check taskParams: {}",
+                    "{}",
+                    result);
+        }
+        return result;
     }
 }

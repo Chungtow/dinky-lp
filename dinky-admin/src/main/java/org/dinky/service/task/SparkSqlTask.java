@@ -23,11 +23,13 @@ import org.dinky.aop.ProcessAspect;
 import org.dinky.config.Dialect;
 import org.dinky.context.ConsoleContextHolder;
 import org.dinky.data.annotations.SupportDialect;
+import org.dinky.data.dto.SqlDTO;
 import org.dinky.data.dto.TaskDTO;
 import org.dinky.data.result.SqlExplainResult;
 import org.dinky.job.Job;
 import org.dinky.job.JobResult;
 import org.dinky.metadata.result.JdbcSelectResult;
+import org.dinky.service.DataBaseService;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -45,6 +47,7 @@ import java.util.concurrent.TimeUnit;
 
 import org.slf4j.MDC;
 
+import cn.hutool.extra.spring.SpringUtil;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -69,6 +72,14 @@ public class SparkSqlTask extends BaseTask {
     private static final int DESTROY_WAIT_SECONDS = 10;
 
     /**
+     * Task-level execution mode key stored in {@code configJson.customConfig}.
+     * Value: {@code cli} (default, spark-sql sub-process) or {@code jdbc} (Spark ThriftServer).
+     */
+    private static final String EXECUTION_MODE_KEY = "spark.sql.execution.mode";
+
+    private static final String EXECUTION_MODE_JDBC = "jdbc";
+
+    /**
      * Static registry of running SparkSqlTask instances, keyed by task name.
      *
      * <p>{@link BaseTask#getTask()} creates a new instance per execution, so {@link #stop()}
@@ -82,6 +93,13 @@ public class SparkSqlTask extends BaseTask {
      * {@link #execute()} exits (normal / interrupted / exception / timeout).
      */
     private volatile Process process;
+
+    /**
+     * The thread running the blocking JDBC call in JDBC (ThriftServer) mode.
+     * Used by {@link #stop()} to interrupt the call. Unlike CLI mode there is no
+     * sub-process to destroy, so the YARN job on the ThriftServer may keep running.
+     */
+    private volatile Thread execThread;
 
     public SparkSqlTask(TaskDTO task) {
         super(task);
@@ -116,6 +134,20 @@ public class SparkSqlTask extends BaseTask {
             result.setStatus(Job.JobStatus.FAILED);
             result.setSuccess(false);
             return result;
+        }
+
+        // JDBC mode (Spark ThriftServer): no sub-process, warm response.
+        // Executes through DataBaseService → Hive JDBC → hivespark03:10015
+        if (isJdbcMode()) {
+            log.info("Executing Spark SQL task via JDBC (ThriftServer): {}", task.getName());
+            RUNNING_TASKS.put(task.getName(), this);
+            execThread = Thread.currentThread();
+            try {
+                return executeViaJdbc(sql);
+            } finally {
+                RUNNING_TASKS.remove(task.getName());
+                execThread = null;
+            }
         }
 
         log.info("Executing Spark SQL task: {}", task.getName());
@@ -285,6 +317,97 @@ public class SparkSqlTask extends BaseTask {
     }
 
     /**
+     * Determine whether this task runs in JDBC (Spark ThriftServer) mode.
+     *
+     * <p>Reads {@code spark.sql.execution.mode} from {@code configJson.customConfig}.
+     * Absent or empty means the default {@code jdbc} mode (Spark ThriftServer).
+     */
+    private boolean isJdbcMode() {
+        if (task.getConfigJson() == null || task.getConfigJson().getCustomConfig() == null) {
+            return true;
+        }
+        String mode = task.getConfigJson().getCustomConfigValue(EXECUTION_MODE_KEY);
+        if (mode == null || mode.isEmpty()) {
+            return true;
+        }
+        return EXECUTION_MODE_JDBC.equalsIgnoreCase(mode);
+    }
+
+    /**
+     * Execute the SQL through the Spark ThriftServer via Hive JDBC.
+     *
+     * <p>This mode requires a data source (Hive type) pointing to the ThriftServer
+     * ({@code hivespark03:10015}). The blocking JDBC call runs on {@link #execThread}
+     * so {@link #stop()} can interrupt it; note that interrupting does not cancel the
+     * underlying YARN job on the ThriftServer.
+     */
+    private JobResult executeViaJdbc(String sql) {
+        // JDBC mode requires a data source pointing to the ThriftServer
+        if (task.getDatabaseId() == null) {
+            log.warn("Spark SQL task in JDBC mode but no data source assigned: {}", task.getName());
+            JobResult result = new JobResult();
+            result.setStatement(sql);
+            result.setError("JDBC mode (spark.sql.execution.mode=jdbc) requires a data source pointing to "
+                    + "Spark ThriftServer (hivespark03:10015). Please select a Hive data source first.");
+            result.setStatus(Job.JobStatus.FAILED);
+            result.setSuccess(false);
+            return result;
+        }
+
+        // JDBC mode has no per-line real-time logs; first version pushes an execution summary
+        String processName = MDC.get(ProcessAspect.PROCESS_NAME);
+        String stepPid = MDC.get(ProcessAspect.PROCESS_STEP);
+        if (processName != null && stepPid != null) {
+            ConsoleContextHolder.getInstances()
+                    .appendLog(
+                            processName,
+                            stepPid,
+                            "[SparkSQL] Executing via JDBC (ThriftServer), databaseId=" + task.getDatabaseId(),
+                            true);
+        }
+
+        try {
+            DataBaseService dataBaseService = SpringUtil.getBean(DataBaseService.class);
+            SqlDTO sqlDTO = SqlDTO.build(sql, task.getDatabaseId(), task.getMaxRowNum());
+            return dataBaseService.executeCommonSql(sqlDTO);
+        } catch (Exception e) {
+            // stop() → execThread.interrupt() may surface as InterruptedException or be wrapped
+            // as the cause of a SQLException by the JDBC driver
+            if (Thread.currentThread().isInterrupted() || isInterruptCause(e)) {
+                log.info("Spark SQL task (JDBC mode) interrupted (stop/cancel): {}", task.getName());
+                Thread.currentThread().interrupt();
+                JobResult result = new JobResult();
+                result.setStatement(sql);
+                result.setError("Spark SQL execution interrupted (JDBC mode)");
+                result.setStatus(Job.JobStatus.FAILED);
+                result.setSuccess(false);
+                return result;
+            }
+            log.error("Spark SQL execution error (JDBC mode): {}", task.getName(), e);
+            JobResult result = new JobResult();
+            result.setStatement(sql);
+            result.setError("Spark SQL execution error: " + e.getMessage());
+            result.setStatus(Job.JobStatus.FAILED);
+            result.setSuccess(false);
+            return result;
+        }
+    }
+
+    /**
+     * Check whether an exception is (or wraps) an {@link InterruptedException}.
+     */
+    private boolean isInterruptCause(Throwable t) {
+        Throwable cause = t;
+        while (cause != null) {
+            if (cause instanceof InterruptedException) {
+                return true;
+            }
+            cause = cause.getCause();
+        }
+        return false;
+    }
+
+    /**
      * Parse spark-sql stdout into structured JdbcSelectResult.
      *
      * <p>When multiple SQL statements are executed (e.g. CREATE, INSERT, SELECT),
@@ -439,6 +562,16 @@ public class SparkSqlTask extends BaseTask {
         SparkSqlTask running = RUNNING_TASKS.get(task.getName());
         if (running == null) {
             return false; // no live process for this task
+        }
+        if (running.isJdbcMode()) {
+            // JDBC mode: interrupt the blocking JDBC call. Unlike CLI mode there is no
+            // sub-process to kill, so the YARN job on the ThriftServer may keep running.
+            Thread t = running.execThread;
+            if (t != null && t.isAlive()) {
+                log.info("Spark SQL task (JDBC mode) stopping, interrupting execution thread: {}", task.getName());
+                t.interrupt();
+            }
+            return true;
         }
         running.destroyProcess();
         return true;
