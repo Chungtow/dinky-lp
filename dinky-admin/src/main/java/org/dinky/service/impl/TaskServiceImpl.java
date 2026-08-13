@@ -232,10 +232,7 @@ public class TaskServiceImpl extends SuperServiceImpl<TaskMapper, Task> implemen
             task.getVariables().putIfAbsent(p.getProp(), TimeExprParser.parse(p.getValue()));
             resolved++;
         }
-        log.info(
-                "Resolved {} task variables from config_json.taskParams: {}",
-                resolved,
-                task.getVariables());
+        log.info("Resolved {} task variables from config_json.taskParams: {}", resolved, task.getVariables());
     }
 
     @ProcessStep(type = ProcessStepType.SUBMIT_EXECUTE)
