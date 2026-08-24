@@ -119,7 +119,7 @@ const DataSource = memo((props: any) => {
   useAsyncEffect(async () => {
     const typeGroup: Record<string, DataSources.DataSource[]> = {};
     // 根据 type分组，做级联
-    (dataSourceDataList as DataSources.DataSource[]).forEach((item) => {
+    ((dataSourceDataList ?? []) as DataSources.DataSource[]).forEach((item) => {
       if (!typeGroup[item.type]) {
         typeGroup[item.type] = [];
       }

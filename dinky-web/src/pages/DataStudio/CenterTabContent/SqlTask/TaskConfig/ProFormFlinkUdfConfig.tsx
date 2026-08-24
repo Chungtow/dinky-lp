@@ -80,7 +80,7 @@ export const ProFormFlinkUdfConfig = (props: {
                 allowClear
                 showSearch
                 placeholder={l('pages.datastudio.label.udf.className')}
-                options={flinkUdfOptions.map((item) => {
+                options={(flinkUdfOptions ?? []).map((item) => {
                   return {
                     ...item,
                     children: item.children?.filter(

@@ -100,7 +100,7 @@ const Sms = (props: SmsProps) => {
           return Promise.reject(l('rc.ai.atMobilesPleaseHolder'));
         }
         const fieldValue = form.getFieldValue(['params', 'phoneNumbers']);
-        const filterField = fieldValue.filter((item: string) => item === value);
+        const filterField = (fieldValue ?? []).filter((item: string) => item === value);
         if (filterField.length > 1) {
           return Promise.reject(l('rc.ai.atMobilesRepeat'));
         }

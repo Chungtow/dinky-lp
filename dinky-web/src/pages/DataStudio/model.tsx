@@ -63,7 +63,7 @@ import { API_CONSTANTS } from '@/services/endpoints';
  *  zh: 中间tab 类型
  *  en: Center tab type
  */
-export type CenterTabType = 'web' | 'task' | 'dataSource';
+export type CenterTabType = 'web' | 'task' | 'dataSource' | 'resource';
 
 /**
  * @description:
@@ -306,7 +306,7 @@ const StudioModel: StudioModelType = {
         type: 'saveTempData',
         payload: {
           ...tempData,
-          flinkEnv: response.map((item) => ({
+          flinkEnv: (response ?? []).map((item) => ({
             id: item.id,
             name: item.name,
             fragment: item.fragment
@@ -321,7 +321,7 @@ const StudioModel: StudioModelType = {
         getClusterConfigurationData,
         payload
       );
-      const flinkClusterData = [...sessionData, ...clusterConfigurationData].map((x) => ({
+      const flinkClusterData = [...(sessionData ?? []), ...(clusterConfigurationData ?? [])].map((x) => ({
         id: x.id,
         name: x.name,
         enabled: x.enabled,
@@ -344,7 +344,7 @@ const StudioModel: StudioModelType = {
         type: 'saveTempData',
         payload: {
           ...tempData,
-          alertGroup: data
+          alertGroup: data ?? []
         }
       });
     },
@@ -356,7 +356,7 @@ const StudioModel: StudioModelType = {
         type: 'saveTempData',
         payload: {
           ...tempData,
-          flinkConfigOptions: data
+          flinkConfigOptions: data ?? []
         }
       });
     },
@@ -369,7 +369,7 @@ const StudioModel: StudioModelType = {
         type: 'saveTempData',
         payload: {
           ...tempData,
-          flinkUdfOptions: data
+          flinkUdfOptions: data ?? []
         }
       });
     },
@@ -382,7 +382,7 @@ const StudioModel: StudioModelType = {
         type: 'saveTempData',
         payload: {
           ...tempData,
-          dataSourceDataList: data
+          dataSourceDataList: data ?? []
         }
       });
     },
@@ -395,7 +395,7 @@ const StudioModel: StudioModelType = {
         type: 'saveTempData',
         payload: {
           ...tempData,
-          suggestions: data
+          suggestions: data ?? []
         }
       });
     },
@@ -403,7 +403,7 @@ const StudioModel: StudioModelType = {
       const response: [] = yield call(getUserData, payload);
       yield put({
         type: 'saveUserData',
-        payload: response
+        payload: response ?? []
       });
     },
     *queryResource({}, { call, put, select }) {
@@ -415,7 +415,7 @@ const StudioModel: StudioModelType = {
         type: 'saveTempData',
         payload: {
           ...tempData,
-          resourceDataList: data
+          resourceDataList: data ?? []
         }
       });
     }

@@ -18,9 +18,9 @@
  */
 
 import { connect, history } from '@@/exports';
-import { DataStudioState } from '@/pages/DataStudio/model';
+import { CenterTab, DataStudioState } from '@/pages/DataStudio/model';
 import { mapDispatchToProps } from '@/pages/DataStudio/DvaFunction';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ResourceState } from '@/types/RegCenter/state';
 import { InitResourceState } from '@/types/RegCenter/init.d';
 import { API_CONSTANTS } from '@/services/endpoints';
@@ -53,13 +53,28 @@ const Resource = (props: {
   enableResource: boolean;
   resourcePhysicalDelete: boolean;
   resourceDataList: ResourceInfo[];
+  copyHdfsDefaultFS: string;
+  copyHdfsUploadBasePath: string;
+  centerContent: DataStudioState['centerContent'];
+  addCenterTab: (payload: CenterTab) => void;
+  updateCenterTab: (payload: CenterTab) => void;
   queryResource: any;
 }) => {
-  const { resourceDataList, enableResource, queryResource, resourcePhysicalDelete } = props;
+  const {
+    resourceDataList,
+    enableResource,
+    queryResource,
+    resourcePhysicalDelete,
+    copyHdfsDefaultFS,
+    copyHdfsUploadBasePath,
+    centerContent,
+    addCenterTab,
+    updateCenterTab
+  } = props;
 
   const [resourceState, setResourceState] = useState<ResourceState>({
     ...InitResourceState,
-    treeData: resourceDataList
+    treeData: resourceDataList ?? []
   });
 
   const [editModal, setEditModal] = useState<string>('');
@@ -70,7 +85,7 @@ const Resource = (props: {
     description: ''
   });
   useEffect(() => {
-    setResourceState((prevState) => ({ ...prevState, treeData: resourceDataList }));
+    setResourceState((prevState) => ({ ...prevState, treeData: resourceDataList ?? [] }));
   }, [resourceDataList]);
 
   const refreshTree = async () => {
@@ -78,17 +93,8 @@ const Resource = (props: {
   };
 
   /**
-   * query content by id
-   * @type {(id: number) => Promise<void>}
-   */
-  const queryContent: (id: number) => Promise<void> = useCallback(async (id: number) => {
-    await queryDataByParams<string>(API_CONSTANTS.RESOURCE_GET_CONTENT_BY_ID, {
-      id
-    }).then((res) => setResourceState((prevState) => ({ ...prevState, content: res ?? '' })));
-  }, []);
-
-  /**
    * the node click event
+   * open a readonly tab in the center editor area for resource files
    * @param info
    * @returns {Promise<void>}
    */
@@ -99,7 +105,29 @@ const Resource = (props: {
     } = info;
     setResourceState((prevState) => ({ ...prevState, selectedKeys: [key], clickedNode: node }));
     if (isLeaf && !unSupportView(name)) {
-      await queryContent(id);
+      const content = await queryDataByParams<string>(API_CONSTANTS.RESOURCE_GET_CONTENT_BY_ID, {
+        id
+      }).catch(() => '');
+      const tabId = `resource_${id}`;
+      const tabParams = { name, content: content ?? '' };
+      const isOpened = (centerContent?.tabs ?? []).some((tab) => tab.id === tabId);
+      if (isOpened) {
+        updateCenterTab({
+          id: tabId,
+          tabType: 'resource',
+          title: name,
+          isUpdate: false,
+          params: tabParams
+        });
+      } else {
+        addCenterTab({
+          id: tabId,
+          tabType: 'resource',
+          title: name,
+          isUpdate: false,
+          params: tabParams
+        });
+      }
     } else {
       setResourceState((prevState) => ({ ...prevState, content: '' }));
     }
@@ -206,6 +234,15 @@ const Resource = (props: {
           await handleCopyToClipboard(fillValue);
         }
         break;
+      case ResourceRightMenuKey.COPY_HDFS_PATH:
+        if (fullInfo) {
+          const defaultFS = copyHdfsDefaultFS || '';
+          const basePath = (copyHdfsUploadBasePath || '/').replace(/\/+$/, '');
+          const safeFullName = fullInfo.fullName.replace(/^\/+/, '');
+          const hdfsFullPath = `${defaultFS}${basePath}/${safeFullName}`;
+          await handleCopyToClipboard(hdfsFullPath);
+        }
+        break;
       default:
         break;
     }
@@ -286,6 +323,7 @@ const Resource = (props: {
     setResourceState((prevState) => ({ ...prevState, uploadOpen: false }));
     await refreshTree();
   };
+
   const access = useAccess();
 
   const renderRightMenu = () => {
@@ -392,7 +430,10 @@ export default connect(
   ({ DataStudio, SysConfig }: { DataStudio: DataStudioState; SysConfig: SysConfigStateType }) => ({
     resourceDataList: DataStudio.tempData.resourceDataList,
     enableResource: SysConfig.enableResource,
-    resourcePhysicalDelete: SysConfig.resourcePhysicalDelete
+    resourcePhysicalDelete: SysConfig.resourcePhysicalDelete,
+    copyHdfsDefaultFS: SysConfig.copyHdfsDefaultFS,
+    copyHdfsUploadBasePath: SysConfig.copyHdfsUploadBasePath,
+    centerContent: DataStudio.centerContent
   }),
   mapDispatchToProps
 )(Resource);

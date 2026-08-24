@@ -113,7 +113,7 @@ export const Lineage = memo((props: { data: LineageDetailInfo }) => {
     observer.observe(element);
     return () => observer.unobserve(element);
   }, []);
-  const tables = data.tables.map((x) => x.name);
+  const tables = (data.tables ?? []).map((x) => x.name);
   return (
     <div ref={containerRef} style={{ width: '100%', height: '100%' }}>
       <Graphin
@@ -123,8 +123,8 @@ export const Lineage = memo((props: { data: LineageDetailInfo }) => {
           autoResize: true,
           theme: theme === 'light' ? theme : 'dark',
           data: {
-            nodes: data.tables.flatMap((item) => {
-              const lengths = item.columns.map((x) => x.name.length);
+            nodes: (data.tables ?? []).flatMap((item) => {
+              const lengths = (item.columns ?? []).map((x) => x.name.length);
               const width = Math.max(...lengths) * 10;
               const tableSplit = item.name.split('.');
               return [
@@ -159,11 +159,11 @@ export const Lineage = memo((props: { data: LineageDetailInfo }) => {
                 }))
               ];
             }),
-            edges: data.relations.map((item) => ({
+            edges: (data.relations ?? []).map((item) => ({
               source: item.srcTableId + item.srcTableColName,
               target: item.tgtTableId + item.tgtTableColName
             })),
-            combos: data.tables.map((item) => ({ id: item.id }))
+            combos: (data.tables ?? []).map((item) => ({ id: item.id }))
           },
           combo: {
             type: 'circle-combo-with-extra-button',
