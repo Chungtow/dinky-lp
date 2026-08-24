@@ -47,7 +47,7 @@ export const SiderTree: React.FC<SiderTreeProps> = (props) => {
     <>
       {loading ? (
         <PageLoading />
-      ) : treeData.length > 0 ? (
+      ) : (treeData ?? []).length > 0 ? (
         <DirectoryTree
           className={'siderTree treeList gitCodeTree'}
           onSelect={(_, info) => onNodeClick(info)}
