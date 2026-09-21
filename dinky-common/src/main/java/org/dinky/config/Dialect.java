@@ -46,7 +46,8 @@ public enum Dialect {
     PRESTO("Presto"),
     SPARK_SQL("SparkSql"),
     KUBERNETES_APPLICATION("KubernetesApplication"),
-    SHELL("Shell");
+    SHELL("Shell"),
+    DATAX("DataX");
 
     private String value;
 
