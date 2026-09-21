@@ -200,6 +200,7 @@ export const getTabIcon = (type: string, size?: number) => {
     case DIALECT.SH:
     case DIALECT.BASH:
     case DIALECT.CMD:
+    case DIALECT.SHELL:
       return <ShellSvg size={size} />;
     case DIALECT.LOG:
       return <LogSvg size={size} />;
@@ -344,6 +345,8 @@ export const matchLanguage = (language = DIALECT.FLINK_SQL) => {
       return DIALECT.SCALA;
     case DIALECT.JAVA:
       return DIALECT.JAVA;
+    case DIALECT.SHELL:
+      return DIALECT.SHELL;
     default:
       return DIALECT.SQL;
   }

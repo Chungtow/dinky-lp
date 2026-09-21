@@ -45,7 +45,8 @@ public enum Dialect {
     STAR_ROCKS("StarRocks"),
     PRESTO("Presto"),
     SPARK_SQL("SparkSql"),
-    KUBERNETES_APPLICATION("KubernetesApplication");
+    KUBERNETES_APPLICATION("KubernetesApplication"),
+    SHELL("Shell");
 
     private String value;
 
