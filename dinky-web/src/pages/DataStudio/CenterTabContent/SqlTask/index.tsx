@@ -448,7 +448,7 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
   const rightToolbarItem: TabsProps['items'] = [];
   if (
     isSql(currentState.dialect) ||
-    assert(currentState.dialect, [DIALECT.FLINK_SQL, DIALECT.FLINKJAR], true, 'includes')
+    assert(currentState.dialect, [DIALECT.FLINK_SQL, DIALECT.FLINKJAR, DIALECT.DATAX], true, 'includes')
   ) {
     rightToolbarItem.push({
       label: l('button.config'),

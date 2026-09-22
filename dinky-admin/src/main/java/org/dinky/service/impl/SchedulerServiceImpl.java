@@ -250,7 +250,7 @@ public class SchedulerServiceImpl implements SchedulerService {
             Integer pyResourceId = uploadDataXResource(dirPath, pyFileName, pyFile);
 
             ShellTaskParams params = new ShellTaskParams();
-            params.setRawScript(buildRawScript(pyFileName, paramNames));
+            params.setRawScript(buildRawScript(dirPath, pyFileName, paramNames));
             params.setLocalParams(buildDataXLocalParams(paramNames, paramValues));
             params.setResourceList(Arrays.asList(
                     buildResourceInfo(jsonResourceId, dirPath, jsonFileName),
@@ -389,8 +389,9 @@ public class SchedulerServiceImpl implements SchedulerService {
     /**
      * Build the rawScript: {@code python3 run_<task>.py ${param1} ${param2} ...}.
      */
-    private String buildRawScript(String pyFileName, List<String> paramNames) {
-        StringBuilder sb = new StringBuilder("python3 ").append(pyFileName);
+    private String buildRawScript(String dirPath, String pyFileName, List<String> paramNames) {
+        String pyPath = dirPath == null || dirPath.isEmpty() ? pyFileName : dirPath + "/" + pyFileName;
+        StringBuilder sb = new StringBuilder("python3 ").append(pyPath);
         for (String name : paramNames) {
             sb.append(" ${").append(name).append("}");
         }
