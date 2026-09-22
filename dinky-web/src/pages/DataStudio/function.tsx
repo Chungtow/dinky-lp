@@ -27,6 +27,7 @@ import { DataStudioState } from '@/pages/DataStudio/model';
 import { LayoutData } from 'rc-dock/src/DockData';
 import { JOB_STATUS, JOB_SUBMIT_STATUS } from '@/pages/DevOps/constants';
 import {
+  DataXSvg,
   FileIcon,
   FlinkJarSvg,
   FlinkSQLEnvSvg,
@@ -203,7 +204,7 @@ export const getTabIcon = (type: string, size?: number) => {
     case DIALECT.SHELL:
       return <ShellSvg size={size} />;
     case DIALECT.DATAX:
-      return <SQLIcons size={size} />;
+      return <DataXSvg size={size} />;
     case DIALECT.LOG:
       return <LogSvg size={size} />;
     case DIALECT.FLINKJAR:
