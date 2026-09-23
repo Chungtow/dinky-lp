@@ -213,7 +213,7 @@ public class SchedulerServiceImpl implements SchedulerService {
         taskClient.createTaskDefinition(
                 projectCode, process.getCode(), dinkyTaskRequest.getUpstreamCodes(), taskDefinitionJsonObj);
         // update the location of process
-        updateProcessDefinition(process, taskCode, taskRequest, projectCode);
+        updateProcessDefinition(process, taskCode, taskRequest, dinkyTaskRequest.getUpstreamCodes(), projectCode);
 
         log.info(Status.DS_ADD_TASK_DEFINITION_SUCCESS.getMessage());
         return true;
@@ -317,7 +317,11 @@ public class SchedulerServiceImpl implements SchedulerService {
      */
     private File writeTempFile(String fileName, String content) {
         try {
-            File file = File.createTempFile("dinky-datax-", "-" + fileName);
+            // 直接以目标文件名创建临时文件，不能用 File.createTempFile：
+            // 后者会生成「dinky-datax-<随机数>-<fileName>」这种名字，hutool 上传时 multipart 的
+            // filename 取 file.getName()，导致 DS 的 t_ds_resources.file_name (varchar 64) 超长，
+            // 触发 "Data too long"，并被 DS 的 catch(Exception) 误包装成 "resource already exists"。
+            File file = new File(System.getProperty("java.io.tmpdir"), fileName);
             try (FileWriter writer = new FileWriter(file)) {
                 writer.write(content);
                 writer.flush();
@@ -399,8 +403,10 @@ public class SchedulerServiceImpl implements SchedulerService {
     }
 
     /**
-     * Ensure the directory path exists (idempotent), delete any pre-existing resource,
-     * then upload the file into that directory.
+     * Ensure the directory path exists (idempotent), then upload the file into that directory.
+     *
+     * <p>覆盖策略：文件已存在时走 DS updateResource（原地覆盖 HDFS + 元数据），而非「删除再上传」，
+     * 因为后者在资源被已发布流程定义引用时会被 DS 以 {@code RESOURCE_IS_USED} 拒绝。</p>
      */
     private Integer uploadDataXResource(String dirPath, String fileName, File file) {
         int pid = ensureDirectoryPath(dirPath);
@@ -408,7 +414,8 @@ public class SchedulerServiceImpl implements SchedulerService {
         String fullName = "/".equals(currentDir) ? "/" + fileName : currentDir + "/" + fileName;
         Integer existingId = resourceClient.queryResourceId(fullName);
         if (existingId != null) {
-            resourceClient.deleteResource(existingId);
+            // 文件已存在 → 原地覆盖（避免 delete 时被「资源被引用」拒绝）
+            return resourceClient.updateFile(existingId, fileName, file, currentDir);
         }
         return resourceClient.uploadFile(fileName, file, pid, currentDir);
     }
@@ -438,7 +445,8 @@ public class SchedulerServiceImpl implements SchedulerService {
         return pid;
     }
 
-    private void updateProcessDefinition(ProcessDefinition process, Long taskCode, TaskRequest task, long projectCode) {
+    private void updateProcessDefinition(
+            ProcessDefinition process, Long taskCode, TaskRequest task, List<String> upstreamCodes, long projectCode) {
 
         DagData dagData = processClient.getProcessDefinitionInfo(projectCode, process.getCode());
         if (dagData == null) {
@@ -482,6 +490,32 @@ public class SchedulerServiceImpl implements SchedulerService {
 
         taskArray.addAll(taskDefinitionList);
         taskArray.add(task);
+
+        // 重建当前任务（taskCode）的上游关系：每个上游生成一条关系，支持多上游。
+        // 否则 updateTaskWithUpstream / save-single 刚设置的多上游会被这里的旧关系覆盖，
+        // 导致多选的前置任务全部变成第一个。
+        List<ProcessTaskRelation> rebuiltRelations = new ArrayList<>();
+        for (ProcessTaskRelation relation : processTaskRelationList) {
+            if (relation.getPostTaskCode() != taskCode) {
+                rebuiltRelations.add(relation);
+            }
+        }
+        if (CollUtil.isNotEmpty(upstreamCodes)) {
+            for (String upstreamCode : upstreamCodes) {
+                long upstreamCodeVal = Long.parseLong(upstreamCode);
+                ProcessTaskRelation newRelation = ProcessTaskRelation.generateProcessTaskRelation(taskCode);
+                newRelation.setPreTaskCode(upstreamCodeVal);
+                taskDefinitionList.stream()
+                        .filter(td -> td.getCode() == upstreamCodeVal)
+                        .findFirst()
+                        .ifPresent(td -> newRelation.setPreTaskVersion(td.getVersion()));
+                rebuiltRelations.add(newRelation);
+            }
+        } else {
+            rebuiltRelations.add(ProcessTaskRelation.generateProcessTaskRelation(taskCode));
+        }
+        processTaskRelationList = rebuiltRelations;
+
         String processTaskRelationListJson = JsonUtils.toJsonString(processTaskRelationList);
 
         processClient.createOrUpdateProcessDefinition(
@@ -551,6 +585,8 @@ public class SchedulerServiceImpl implements SchedulerService {
         injectTaskLocalParams(dinkyTaskRequest.getTaskId(), existingParams);
         dinkyTaskRequest.setTaskParams(JsonUtils.toJsonString(existingParams));
         BeanUtil.copyProperties(dinkyTaskRequest, taskRequest);
+        // 回填既有任务的 taskCode，避免 updateProcessDefinition 时任务关系与任务定义 code 对不上
+        taskRequest.setCode(taskCode);
         taskRequest.setTimeoutFlag(dinkyTaskRequest.getTimeoutFlag());
         taskRequest.setFlag(dinkyTaskRequest.getFlag());
         taskRequest.setIsCache(dinkyTaskRequest.getIsCache());
@@ -559,7 +595,7 @@ public class SchedulerServiceImpl implements SchedulerService {
         Long updatedTaskDefinition = taskClient.updateTaskDefinition(
                 projectCode, taskCode, dinkyTaskRequest.getUpstreamCodes(), taskDefinitionJsonObj);
 
-        updateProcessDefinition(process, taskCode, taskRequest, projectCode);
+        updateProcessDefinition(process, taskCode, taskRequest, dinkyTaskRequest.getUpstreamCodes(), projectCode);
         if (updatedTaskDefinition != null && updatedTaskDefinition > 0) {
             log.info(Status.MODIFY_SUCCESS.getMessage());
             return true;
@@ -606,6 +642,10 @@ public class SchedulerServiceImpl implements SchedulerService {
         dinkyTaskRequest.setTaskType(SHELL_TASK_TYPE);
         dinkyTaskRequest.setTaskParams(JsonUtils.toJsonString(shellTaskParams));
         BeanUtil.copyProperties(dinkyTaskRequest, taskRequest);
+        // 关键：把既有任务的 taskCode 回填到任务定义，否则 updateProcessDefinition 时
+        // taskRelationJson 里的 postTaskCode 与 taskDefinitionJson 里的 code 对不上，
+        // DS 会报 "task definition [xxx] does not exist"。
+        taskRequest.setCode(taskCode);
         taskRequest.setTimeoutFlag(dinkyTaskRequest.getTimeoutFlag());
         taskRequest.setFlag(dinkyTaskRequest.getFlag());
         taskRequest.setIsCache(dinkyTaskRequest.getIsCache());
@@ -613,7 +653,7 @@ public class SchedulerServiceImpl implements SchedulerService {
         String taskDefinitionJsonObj = JsonUtils.toJsonString(taskRequest);
         Long updatedTaskDefinition = taskClient.updateTaskDefinition(
                 projectCode, taskCode, dinkyTaskRequest.getUpstreamCodes(), taskDefinitionJsonObj);
-        updateProcessDefinition(process, taskCode, taskRequest, projectCode);
+        updateProcessDefinition(process, taskCode, taskRequest, dinkyTaskRequest.getUpstreamCodes(), projectCode);
         if (updatedTaskDefinition != null && updatedTaskDefinition > 0) {
             log.info(Status.MODIFY_SUCCESS.getMessage());
             return true;
