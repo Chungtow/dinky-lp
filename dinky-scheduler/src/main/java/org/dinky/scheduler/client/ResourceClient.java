@@ -90,8 +90,7 @@ public class ResourceClient {
                 .form("file", file)
                 .timeout(20000)
                 .execute()) {
-            Result<Resource> result =
-                    MyJSONUtil.toBean(httpResponse.body(), new TypeReference<Result<Resource>>() {});
+            Result<Resource> result = MyJSONUtil.toBean(httpResponse.body(), new TypeReference<Result<Resource>>() {});
             if (result == null || result.getFailed()) {
                 String msg = result != null ? result.getMsg() : "no response";
                 log.error("Upload DS resource failed: name={}, currentDir={}, msg={}", fileName, currentDir, msg);
@@ -130,15 +129,10 @@ public class ResourceClient {
                 .form("currentDir", currentDir)
                 .timeout(20000)
                 .execute()) {
-            Result<Resource> result =
-                    MyJSONUtil.toBean(httpResponse.body(), new TypeReference<Result<Resource>>() {});
+            Result<Resource> result = MyJSONUtil.toBean(httpResponse.body(), new TypeReference<Result<Resource>>() {});
             if (result == null || result.getFailed()) {
                 String msg = result != null ? result.getMsg() : "no response";
-                log.error(
-                        "Create DS resource directory failed: name={}, currentDir={}, msg={}",
-                        name,
-                        currentDir,
-                        msg);
+                log.error("Create DS resource directory failed: name={}, currentDir={}, msg={}", name, currentDir, msg);
                 throw new SchedulerException("创建目录失败: " + currentDir + "/" + name + " - " + msg);
             }
             Resource resource = result.getData();
@@ -242,8 +236,7 @@ public class ResourceClient {
                 .form("file", file)
                 .timeout(20000)
                 .execute()) {
-            Result<Resource> result =
-                    MyJSONUtil.toBean(httpResponse.body(), new TypeReference<Result<Resource>>() {});
+            Result<Resource> result = MyJSONUtil.toBean(httpResponse.body(), new TypeReference<Result<Resource>>() {});
             if (result == null || result.getFailed()) {
                 String msg = result != null ? result.getMsg() : "no response";
                 log.error("Update DS resource failed: name={}, currentDir={}, msg={}", fileName, currentDir, msg);

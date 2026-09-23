@@ -47,10 +47,7 @@ public class HadoopConfReader {
 
     /** hdfswriter 需要的 HA 配置 key 前缀（选择性提取，不塞 dfs.replication 等无关字段） */
     private static final String[] HA_KEY_PREFIXES = {
-        "dfs.nameservices",
-        "dfs.ha.namenodes",
-        "dfs.namenode.rpc-address",
-        "dfs.client.failover.proxy.provider"
+        "dfs.nameservices", "dfs.ha.namenodes", "dfs.namenode.rpc-address", "dfs.client.failover.proxy.provider"
     };
 
     /**

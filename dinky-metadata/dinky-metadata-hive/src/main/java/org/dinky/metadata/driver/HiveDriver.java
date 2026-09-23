@@ -87,7 +87,9 @@ public class HiveDriver extends AbstractJdbcDriver implements Driver {
         String sql = String.format("show create table `%s`.`%s`", schemaName, tableName);
         // Hive JDBC 会把多行 DDL 拆成多行结果集（每行一段），需拼接所有行还原完整 DDL
         JdbcSelectResult result = query(sql, 1000);
-        if (result.isSuccess() && result.getRowData() != null && !result.getRowData().isEmpty()) {
+        if (result.isSuccess()
+                && result.getRowData() != null
+                && !result.getRowData().isEmpty()) {
             StringBuilder ddl = new StringBuilder();
             for (Map<String, Object> row : result.getRowData()) {
                 for (Object value : row.values()) {
@@ -102,12 +104,14 @@ public class HiveDriver extends AbstractJdbcDriver implements Driver {
     }
 
     private String parseLocation(String ddl) {
-        Matcher matcher = Pattern.compile("LOCATION\\s*'([^']+)'", Pattern.DOTALL).matcher(ddl);
+        Matcher matcher =
+                Pattern.compile("LOCATION\\s*'([^']+)'", Pattern.DOTALL).matcher(ddl);
         return matcher.find() ? matcher.group(1) : "";
     }
 
     private String parseFileType(String ddl) {
-        Matcher matcher = Pattern.compile("INPUTFORMAT\\s*'([^']+)'", Pattern.DOTALL).matcher(ddl);
+        Matcher matcher =
+                Pattern.compile("INPUTFORMAT\\s*'([^']+)'", Pattern.DOTALL).matcher(ddl);
         if (matcher.find()) {
             String inputFormat = matcher.group(1).toLowerCase();
             if (inputFormat.contains("orc")) {
@@ -129,7 +133,8 @@ public class HiveDriver extends AbstractJdbcDriver implements Driver {
 
     private List<Column> parsePartitionColumns(String ddl) {
         List<Column> columns = new ArrayList<>();
-        Matcher matcher = Pattern.compile("PARTITIONED BY\\s*\\((.*?)\\)", Pattern.DOTALL).matcher(ddl);
+        Matcher matcher =
+                Pattern.compile("PARTITIONED BY\\s*\\((.*?)\\)", Pattern.DOTALL).matcher(ddl);
         if (!matcher.find()) {
             return columns;
         }

@@ -70,9 +70,7 @@ public class DataXTask extends BaseTask {
         JobResult result = new JobResult();
         result.setStatus(Job.JobStatus.SUCCESS);
         result.setSuccess(true);
-        result.setStatement(
-                "DataX 任务在 DolphinScheduler 上执行。请在编辑区编写 datax JSON 配置，"
-                        + "然后推送至 DolphinScheduler 调度执行。");
+        result.setStatement("DataX 任务在 DolphinScheduler 上执行。请在编辑区编写 datax JSON 配置，" + "然后推送至 DolphinScheduler 调度执行。");
         return result;
     }
 
