@@ -17,14 +17,6 @@
  *
  */
 
-/**
- * DataX 可视化编辑器 —— 配置模型 与 datax json 生成/解析工具。
- *
- * 字段映射语义：DataX 的字段映射 = reader.column（源字段）与 writer.column（目标字段）
- * 的位置对应关系。本模块用 `mappings` 数组显式表达该对应关系，顺序即位置顺序。
- */
-
-/** 字段定义（源字段 type 为 MySQL 类型，目标字段 type 为 Hive 类型） */
 export interface DataXField {
   name: string;
   type: string;
@@ -57,7 +49,11 @@ export interface DataXSourceSide extends DataXSide {
   password?: string;
 }
 
-/** 字段映射关系 */
+/**
+ * 字段映射关系。
+ * DataX 的字段映射 = reader.column（源字段）与 writer.column（目标字段）的位置对应关系，
+ * 本模块用 `mappings` 数组显式表达该对应关系，顺序即位置顺序。
+ */
 export interface DataXMapping {
   sourceField: string;
   targetField: string;
