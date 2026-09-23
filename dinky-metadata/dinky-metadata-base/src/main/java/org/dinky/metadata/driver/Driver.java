@@ -23,6 +23,7 @@ import org.dinky.assertion.Asserts;
 import org.dinky.data.exception.MetaDataException;
 import org.dinky.data.exception.SplitTableException;
 import org.dinky.data.model.Column;
+import org.dinky.data.model.HiveTableDetail;
 import org.dinky.data.model.QueryData;
 import org.dinky.data.model.Schema;
 import org.dinky.data.model.Table;
@@ -191,6 +192,14 @@ public interface Driver extends AutoCloseable {
     List<Table> getTablesAndColumns(String schemaName);
 
     Table getTable(String schemaName, String tableName);
+
+    /**
+     * 获取表详情（location / fileType / 分区字段 / 普通字段），仅 Hive 等支持。
+     * 默认不支持，抛异常。
+     */
+    default HiveTableDetail getTableDetail(String schemaName, String tableName) {
+        throw new MetaDataException("当前数据源类型不支持获取表详情，仅支持 Hive 数据源");
+    }
 
     boolean existTable(Table table);
 

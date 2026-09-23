@@ -21,6 +21,7 @@ package org.dinky.metadata.driver;
 
 import org.dinky.assertion.Asserts;
 import org.dinky.data.model.Column;
+import org.dinky.data.model.HiveTableDetail;
 import org.dinky.data.model.Schema;
 import org.dinky.data.model.Table;
 import org.dinky.metadata.config.AbstractJdbcConfig;
@@ -45,6 +46,8 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class HiveDriver extends AbstractJdbcDriver implements Driver {
 
@@ -62,6 +65,103 @@ public class HiveDriver extends AbstractJdbcDriver implements Driver {
             table.setColumns(listColumns(schemaName, table.getName()));
         }
         return table;
+    }
+
+    /**
+     * 获取 Hive 表详情：location / fileType / 分区字段 / 普通字段。
+     * 通过 `show create table` 的 DDL 解析，避免写死 warehouse.dir / 文件格式 / 分区字段。
+     */
+    @Override
+    public HiveTableDetail getTableDetail(String schemaName, String tableName) {
+        HiveTableDetail detail = new HiveTableDetail();
+        String ddl = getCreateTableDdl(schemaName, tableName);
+        detail.setLocation(parseLocation(ddl));
+        detail.setFileType(parseFileType(ddl));
+        detail.setTableType(parseTableType(ddl));
+        detail.setPartitionColumns(parsePartitionColumns(ddl));
+        detail.setColumns(listColumns(schemaName, tableName));
+        return detail;
+    }
+
+    private String getCreateTableDdl(String schemaName, String tableName) {
+        String sql = String.format("show create table `%s`.`%s`", schemaName, tableName);
+        // Hive JDBC 会把多行 DDL 拆成多行结果集（每行一段），需拼接所有行还原完整 DDL
+        JdbcSelectResult result = query(sql, 1000);
+        if (result.isSuccess() && result.getRowData() != null && !result.getRowData().isEmpty()) {
+            StringBuilder ddl = new StringBuilder();
+            for (Map<String, Object> row : result.getRowData()) {
+                for (Object value : row.values()) {
+                    if (value != null) {
+                        ddl.append(value.toString()).append("\n");
+                    }
+                }
+            }
+            return ddl.toString();
+        }
+        return "";
+    }
+
+    private String parseLocation(String ddl) {
+        Matcher matcher = Pattern.compile("LOCATION\\s*'([^']+)'", Pattern.DOTALL).matcher(ddl);
+        return matcher.find() ? matcher.group(1) : "";
+    }
+
+    private String parseFileType(String ddl) {
+        Matcher matcher = Pattern.compile("INPUTFORMAT\\s*'([^']+)'", Pattern.DOTALL).matcher(ddl);
+        if (matcher.find()) {
+            String inputFormat = matcher.group(1).toLowerCase();
+            if (inputFormat.contains("orc")) {
+                return "orc";
+            }
+            if (inputFormat.contains("parquet")) {
+                return "parquet";
+            }
+            if (inputFormat.contains("text")) {
+                return "text";
+            }
+        }
+        return "text";
+    }
+
+    private String parseTableType(String ddl) {
+        return ddl.trim().toUpperCase().startsWith("CREATE EXTERNAL TABLE") ? "EXTERNAL_TABLE" : "MANAGED_TABLE";
+    }
+
+    private List<Column> parsePartitionColumns(String ddl) {
+        List<Column> columns = new ArrayList<>();
+        Matcher matcher = Pattern.compile("PARTITIONED BY\\s*\\((.*?)\\)", Pattern.DOTALL).matcher(ddl);
+        if (!matcher.find()) {
+            return columns;
+        }
+        String content = matcher.group(1);
+        for (String part : content.split(",")) {
+            String trimmed = part.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            String name = trimmed;
+            String type = "";
+            Matcher nameMatcher = Pattern.compile("`([^`]+)`").matcher(trimmed);
+            if (nameMatcher.find()) {
+                name = nameMatcher.group(1);
+                type = trimmed.replaceAll("`[^`]+`", "").trim().split("\\s+")[0];
+            } else {
+                String[] tokens = trimmed.split("\\s+");
+                name = tokens[0];
+                if (tokens.length > 1) {
+                    type = tokens[1];
+                }
+            }
+            Column column = new Column();
+            column.setName(name);
+            if (StringUtils.isEmpty(type)) {
+                type = "string";
+            }
+            column.setType(type);
+            column.setJavaType(getTypeConvert().convert(column));
+            columns.add(column);
+        }
+        return columns;
     }
 
     @Override

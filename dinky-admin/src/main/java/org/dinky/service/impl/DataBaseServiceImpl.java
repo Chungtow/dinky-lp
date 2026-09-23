@@ -32,6 +32,7 @@ import org.dinky.data.enums.Status;
 import org.dinky.data.exception.BusException;
 import org.dinky.data.model.Column;
 import org.dinky.data.model.DataBase;
+import org.dinky.data.model.HiveTableDetail;
 import org.dinky.data.model.QueryData;
 import org.dinky.data.model.Schema;
 import org.dinky.data.model.SqlGeneration;
@@ -427,6 +428,20 @@ public class DataBaseServiceImpl extends SuperServiceImpl<DataBaseMapper, DataBa
         Asserts.checkNotNull(dataBase, Status.DATASOURCE_NOT_EXIST.getMessage());
         try (Driver driver = Driver.build(dataBase.getDriverConfig())) {
             return driver.getTable(schemaName, tableName);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Override
+    public HiveTableDetail getTableDetail(Integer id, String schemaName, String tableName) {
+        if (Asserts.isNullString(tableName)) {
+            return null;
+        }
+        DataBase dataBase = getById(id);
+        Asserts.checkNotNull(dataBase, Status.DATASOURCE_NOT_EXIST.getMessage());
+        try (Driver driver = Driver.build(dataBase.getDriverConfig())) {
+            return driver.getTableDetail(schemaName, tableName);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }

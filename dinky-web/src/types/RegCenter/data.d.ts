@@ -229,6 +229,8 @@ declare namespace DataSources {
   export type DataSource = BaseBeanColumns & {
     groupName: string;
     type: string;
+    /** 连接配置（后端 dinky_database.connect_config），url/username/password 实际存于此处 */
+    connectConfig?: { url?: string; username?: string; password?: string; ip?: string; port?: number };
     url: string;
     username: string;
     password: string;

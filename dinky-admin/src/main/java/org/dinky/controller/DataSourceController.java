@@ -28,6 +28,8 @@ import org.dinky.data.enums.BusinessType;
 import org.dinky.data.enums.Status;
 import org.dinky.data.model.Column;
 import org.dinky.data.model.DataBase;
+import org.dinky.data.model.HadoopConf;
+import org.dinky.data.model.HiveTableDetail;
 import org.dinky.data.model.QueryData;
 import org.dinky.data.model.Schema;
 import org.dinky.data.model.SqlGeneration;
@@ -36,6 +38,7 @@ import org.dinky.data.result.Result;
 import org.dinky.metadata.driver.DriverPool;
 import org.dinky.metadata.result.JdbcSelectResult;
 import org.dinky.service.DataBaseService;
+import org.dinky.utils.HadoopConfReader;
 
 import java.util.List;
 
@@ -535,5 +538,65 @@ public class DataSourceController {
     public Result<Table> getTable(
             @RequestParam Integer id, @RequestParam String schemaName, @RequestParam String tableName) {
         return Result.succeed(databaseService.getTable(id, schemaName, tableName));
+    }
+
+    /**
+     * get hive table detail (location / fileType / partitionColumns / columns)
+     *
+     * @param id         {@link Integer}
+     * @param schemaName {@link String}
+     * @param tableName  {@link String}
+     * @return {@link Result}< {@link HiveTableDetail}>
+     */
+    @GetMapping("/getTableDetail")
+    @ApiOperation("Get Hive Table Detail")
+    @ApiImplicitParams(
+            value = {
+                @ApiImplicitParam(
+                        name = "id",
+                        value = "DataBase Id",
+                        required = true,
+                        dataType = "Integer",
+                        paramType = "path",
+                        dataTypeClass = Integer.class,
+                        example = "1"),
+                @ApiImplicitParam(
+                        name = "schemaName",
+                        value = "Schema Name",
+                        required = true,
+                        dataType = "String",
+                        paramType = "query",
+                        dataTypeClass = String.class,
+                        example = "public"),
+                @ApiImplicitParam(
+                        name = "tableName",
+                        value = "Table Name",
+                        required = true,
+                        dataType = "String",
+                        paramType = "query",
+                        dataTypeClass = String.class,
+                        example = "user")
+            })
+    @SaCheckPermission(
+            value = {
+                PermissionConstants.REGISTRATION_DATA_SOURCE_DETAIL_REFRESH,
+                PermissionConstants.REGISTRATION_DATA_SOURCE_DETAIL_TREE,
+                PermissionConstants.REGISTRATION_DATA_SOURCE_DETAIL_DESC,
+            },
+            mode = SaMode.OR)
+    public Result<HiveTableDetail> getTableDetail(
+            @RequestParam Integer id, @RequestParam String schemaName, @RequestParam String tableName) {
+        return Result.succeed(databaseService.getTableDetail(id, schemaName, tableName));
+    }
+
+    /**
+     * get hadoop config (defaultFS + HA config) for DataX hdfswriter
+     *
+     * @return {@link Result}< {@link HadoopConf}>
+     */
+    @GetMapping("/hadoopConfig")
+    @ApiOperation("Get Hadoop Config For DataX Hdfswriter")
+    public Result<HadoopConf> getHadoopConfig() {
+        return Result.succeed(HadoopConfReader.read());
     }
 }
