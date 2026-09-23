@@ -24,6 +24,7 @@ import org.dinky.data.dto.SqlDTO;
 import org.dinky.data.dto.TaskDTO;
 import org.dinky.data.model.Column;
 import org.dinky.data.model.DataBase;
+import org.dinky.data.model.HiveTableDetail;
 import org.dinky.data.model.QueryData;
 import org.dinky.data.model.Schema;
 import org.dinky.data.model.SqlGeneration;
@@ -240,4 +241,14 @@ public interface DataBaseService extends ISuperService<DataBase> {
      * @return {@link List}< {@link Column}>
      */
     Table getTable(Integer id, String schemaName, String tableName);
+
+    /**
+     * get hive table detail (location / fileType / partitionColumns / columns)
+     *
+     * @param id {@link Integer}
+     * @param schemaName {@link String}
+     * @param tableName {@link String}
+     * @return {@link HiveTableDetail}
+     */
+    HiveTableDetail getTableDetail(Integer id, String schemaName, String tableName);
 }
