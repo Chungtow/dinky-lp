@@ -109,6 +109,7 @@ import {
   DolphinTaskMinInfo
 } from '@/types/Studio/data';
 import PushDolphin from '@/pages/DataStudio/CenterTabContent/SqlTask/PushDolphin';
+import DataXVisualEditor from '@/pages/DataStudio/CenterTabContent/SqlTask/DataXVisualEditor';
 
 export type FlinkSqlProps = {
   showDesc: boolean;
@@ -779,15 +780,19 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
   };
 
   const handlePushDolphinSubmit = async (value: DolphinTaskDefinition) => {
-    setPushDolphinState((prevState) => ({ ...prevState, loading: true }));
-    await handleOption(
+    setPushDolphinState((prevState) => ({ ...prevState, confirmLoading: true }));
+    const result = await handleOption(
       API_CONSTANTS.SCHEDULER_CREATE_OR_UPDATE_TASK_DEFINITION,
       l('datastudio.header.pushdolphin.title', '', {
         name: currentState?.name ?? ''
       }),
       value
     );
-    await handlePushDolphinCancel();
+    setPushDolphinState((prevState) => ({ ...prevState, confirmLoading: false }));
+    // 推送成功才关闭弹窗；失败时保留弹窗，错误提示由 handleOption 内的 WarningMessage 展示
+    if (result) {
+      await handlePushDolphinCancel();
+    }
   };
 
   return (
@@ -1060,24 +1065,40 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
             <Col style={{ width: codeEditorWidth - toolbarSize, height: '100%' }}>
               <PanelGroup direction={'horizontal'}>
                 <Panel>
-                  <CodeEdit
-                    monacoRef={editorInstance}
-                    code={originStatementValue}
-                    language={matchLanguage(currentState.dialect)}
-                    editorDidMount={editorDidMount}
-                    onChange={debounce(onEditorChange, 50)}
-                    enableSuggestions={true}
-                    options={{
-                      readOnlyMessage: {
-                        value: isLockTask
-                          ? l('pages.datastudio.editor.onlyread.lock')
-                          : l('pages.datastudio.editor.onlyread')
-                      },
-                      readOnly: currentState?.step == JOB_LIFE_CYCLE.PUBLISH || isLockTask,
-                      scrollBeyondLastLine: false,
-                      wordWrap: 'on'
-                    }}
-                  />
+                  {currentState.dialect?.toLowerCase() === DIALECT.DATAX ? (
+                    <DataXVisualEditor
+                      statement={currentState.statement}
+                      onChange={(value) => {
+                        updateCenterTab({
+                          ...props.tabData,
+                          isUpdate: originStatementValue !== value,
+                          params: { ...currentState, statement: value }
+                        });
+                        setCurrentState((prevState) => ({ ...prevState, statement: value }));
+                      }}
+                      databaseDataList={tempData.dataSourceDataList}
+                      readOnly={currentState?.step == JOB_LIFE_CYCLE.PUBLISH || isLockTask}
+                    />
+                  ) : (
+                    <CodeEdit
+                      monacoRef={editorInstance}
+                      code={originStatementValue}
+                      language={matchLanguage(currentState.dialect)}
+                      editorDidMount={editorDidMount}
+                      onChange={debounce(onEditorChange, 50)}
+                      enableSuggestions={true}
+                      options={{
+                        readOnlyMessage: {
+                          value: isLockTask
+                            ? l('pages.datastudio.editor.onlyread.lock')
+                            : l('pages.datastudio.editor.onlyread')
+                        },
+                        readOnly: currentState?.step == JOB_LIFE_CYCLE.PUBLISH || isLockTask,
+                        scrollBeyondLastLine: false,
+                        wordWrap: 'on'
+                      }}
+                    />
+                  )}
                 </Panel>
                 {sqlForm.enable && (
                   <>
