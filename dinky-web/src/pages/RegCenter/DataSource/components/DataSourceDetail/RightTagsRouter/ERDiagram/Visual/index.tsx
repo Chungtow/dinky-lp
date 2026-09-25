@@ -125,7 +125,25 @@ const Visual: React.FC<VisualProps> = (props) => {
     panZoomRef.current?.center();
   };
 
-  // 平移始终可用（不再按拖拽起点禁用），文字能否选中交由 CSS 控制，两者互不排斥
+  /**
+   * 默认：拖动即平移（任何位置都可拖）。
+   * 按住 Shift：暂停平移后再选字 —— 因为平移时图形随光标移动，会把浏览器的选区撕断导致选不中，
+   * 所以选字必须让图形“不动”。必须用捕获阶段，早于 svg-pan-zoom 绑在 svg 上的监听器。
+   */
+  const handleMouseDownCapture = (e: React.MouseEvent) => {
+    if (!panZoomRef.current) {
+      return;
+    }
+    if (e.shiftKey) {
+      panZoomRef.current.disablePan();
+    } else {
+      panZoomRef.current.enablePan();
+    }
+  };
+
+  const handleMouseUp = () => {
+    panZoomRef.current?.enablePan();
+  };
 
   if (loading) {
     return <Spin spinning style={{ width: '100%', padding: '48px 0' }} />;
@@ -167,6 +185,9 @@ const Visual: React.FC<VisualProps> = (props) => {
         <div
           ref={containerRef}
           style={{ width: '100%', height: '100%', userSelect: 'none' }}
+          onMouseDownCapture={handleMouseDownCapture}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
           dangerouslySetInnerHTML={{ __html: svg }}
         />
       )}
