@@ -20,10 +20,15 @@
 import { DataSources } from '@/types/RegCenter/data';
 
 /**
- * mermaid 标识符仅允许字母、数字与下划线
+ * mermaid 标识符仅允许字母、数字与下划线；且不能以数字开头、不能为空，否则整张图解析失败
  */
-const sanitize = (value?: string): string =>
-  (value ?? '').replace(/\[\]/g, '_arr').replace(/[^a-zA-Z0-9_]/g, '_');
+const sanitize = (value?: string): string => {
+  const result = (value ?? '').replace(/\[\]/g, '_arr').replace(/[^a-zA-Z0-9_]/g, '_');
+  if (!result) {
+    return '_unnamed';
+  }
+  return /^[0-9]/.test(result) ? `_${result}` : result;
+};
 
 /**
  * 剥离 schema 前缀（如 traccar.tc_user -> tc_user）
@@ -67,9 +72,15 @@ export const buildErDiagram = (
 
   const lines: string[] = ['erDiagram'];
 
-  // 1. 当前表：全部列 + PK/FK 标注
+  // 1. 当前表：全部列 + PK/FK 标注（sanitize 后可能重名，需去重，否则 mermaid 解析失败）
   lines.push(`  ${tableName} {`);
+  const usedColumns = new Set<string>();
   (table?.columns ?? []).forEach((column) => {
+    const columnName = sanitize(column.name);
+    if (usedColumns.has(columnName)) {
+      return;
+    }
+    usedColumns.add(columnName);
     const markers: string[] = [];
     if (column.keyFlag) {
       markers.push('PK');
@@ -78,8 +89,12 @@ export const buildErDiagram = (
       markers.push('FK');
     }
     const markerStr = markers.length ? ` ${markers.join(',')}` : '';
-    lines.push(`    ${sanitize(column.type)} ${sanitize(column.name)}${markerStr}`);
+    lines.push(`    ${sanitize(column.type)} ${columnName}${markerStr}`);
   });
+  // 无列信息时补占位属性，避免出现空实体块导致整图解析失败
+  if (usedColumns.size === 0) {
+    lines.push('    string _no_column');
+  }
   lines.push('  }');
 
   // 关联表的关键列：sanitize 表名 -> (列名 -> 标记)

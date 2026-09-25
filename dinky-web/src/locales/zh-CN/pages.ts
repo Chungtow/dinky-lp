@@ -951,7 +951,7 @@ export default {
   'rc.ds.erdiagram.zoomIn': '放大',
   'rc.ds.erdiagram.zoomOut': '缩小',
   'rc.ds.erdiagram.fitView': '适应视图',
-  'rc.ds.erdiagram.selectHint': '拖动空白处平移，拖动文字可选中复制',
+  'rc.ds.erdiagram.selectHint': '拖动可平移，在文字上拖动可选中复制',
   'rc.ds.detail.tips': '点击左侧的表,获取相关信息',
   'rc.ds.enter':
     '点击列表中的 icon 图片进入该数据源的详情页! 支持查看该数据源的库&表信息,以及可以进行即时查询',

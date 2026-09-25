@@ -93,7 +93,8 @@ const Visual: React.FC<VisualProps> = (props) => {
     svgElement.style.width = '100%';
     svgElement.style.height = '100%';
     svgElement.style.display = 'block';
-    // 让表名/字段名等文字可选中复制（容器为 user-select: none 以避免平移误选，此处对文字单独放开）
+    // 让表名/字段名等文字可选中复制（容器为 user-select: none 避免平移误选，此处对文字单独放开，
+    // 且不影响平移：平移由 svg-pan-zoom 处理，与原生选中可同时进行）
     const styleElement = document.createElementNS('http://www.w3.org/2000/svg', 'style');
     styleElement.textContent = 'text, tspan { user-select: text; -webkit-user-select: text; cursor: text; }';
     svgElement.appendChild(styleElement);
@@ -124,26 +125,7 @@ const Visual: React.FC<VisualProps> = (props) => {
     panZoomRef.current?.center();
   };
 
-  /**
-   * 按拖拽起点决定本次手势：落在文字上 =====》 暂停平移、交给浏览器原生选中；否则平移整图。
-   * 必须用捕获阶段：svg-pan-zoom 的监听器绑在 svg 元素自身（目标阶段），晚于容器捕获阶段执行。
-   */
-  const handleMouseDownCapture = (e: React.MouseEvent) => {
-    if (!panZoomRef.current) {
-      return;
-    }
-    const target = e.target as Element | null;
-    const onText = !!target?.closest?.('text, tspan');
-    if (onText) {
-      panZoomRef.current.disablePan();
-    } else {
-      panZoomRef.current.enablePan();
-    }
-  };
-
-  const handleMouseUp = () => {
-    panZoomRef.current?.enablePan();
-  };
+  // 平移始终可用（不再按拖拽起点禁用），文字能否选中交由 CSS 控制，两者互不排斥
 
   if (loading) {
     return <Spin spinning style={{ width: '100%', padding: '48px 0' }} />;
@@ -185,9 +167,6 @@ const Visual: React.FC<VisualProps> = (props) => {
         <div
           ref={containerRef}
           style={{ width: '100%', height: '100%', userSelect: 'none' }}
-          onMouseDownCapture={handleMouseDownCapture}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
           dangerouslySetInnerHTML={{ __html: svg }}
         />
       )}

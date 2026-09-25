@@ -109,7 +109,7 @@ const ERDiagram: React.FC<ERDiagramProps> = (props) => {
     <>
       {errorMsg && (
         <Alert
-          type='error'
+          type='warning'
           showIcon
           style={{ marginBottom: 8 }}
           message={l('rc.ds.erdiagram.loadError')}
