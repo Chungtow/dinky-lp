@@ -283,6 +283,29 @@ declare namespace DataSources {
   };
 
   /**
+   * foreign key relation (constraint level, support composite key)
+   */
+  export type ForeignKey = {
+    name: string;
+    schemaName: string;
+    tableName: string;
+    columns: string[];
+    refSchemaName: string;
+    refTableName: string;
+    refColumns: string[];
+  };
+
+  /**
+   * table relations for ER diagram (upstream foreignKeys / downstream referencedBy)
+   */
+  export type TableRelations = {
+    schemaName: string;
+    tableName: string;
+    foreignKeys: ForeignKey[];
+    referencedBy: ForeignKey[];
+  };
+
+  /**
    * table columns info
    */
   export type SqlGeneration = {
