@@ -115,6 +115,7 @@ export enum API_CONSTANTS {
   DATASOURCE_HADOOP_CONFIG = '/api/database/hadoopConfig',
   DATASOURCE_GET_GEN_SQL = '/api/database/getSqlGeneration',
   DATASOURCE_QUERY_DATA = '/api/database/queryData',
+  DATASOURCE_EXEC_SQL = '/api/database/execSql',
 
   // ------------------------------------ document ------------------------------------
   DOCUMENT = '/api/document',

@@ -426,7 +426,10 @@ public class DataSourceController {
         if (jdbcSelectResult.isSuccess()) {
             return Result.succeed(jdbcSelectResult);
         } else {
-            return Result.failed();
+            // 失败时把 JdbcSelectResult（含 error 详情）随结果返回，
+            // 否则前端控制台只能拿到笼统的「操作失败」，看不到 SQL 的具体错误。
+            String error = jdbcSelectResult.getError() != null ? jdbcSelectResult.getError() : "Exec SQL failed";
+            return Result.failed(jdbcSelectResult, error);
         }
     }
 
