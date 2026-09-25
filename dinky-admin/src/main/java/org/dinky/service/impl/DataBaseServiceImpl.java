@@ -30,6 +30,7 @@ import org.dinky.data.dto.TaskDTO;
 import org.dinky.data.enums.ProcessStepType;
 import org.dinky.data.enums.Status;
 import org.dinky.data.exception.BusException;
+import org.dinky.data.exception.MetaDataException;
 import org.dinky.data.model.Column;
 import org.dinky.data.model.DataBase;
 import org.dinky.data.model.HiveTableDetail;
@@ -37,6 +38,7 @@ import org.dinky.data.model.QueryData;
 import org.dinky.data.model.Schema;
 import org.dinky.data.model.SqlGeneration;
 import org.dinky.data.model.Table;
+import org.dinky.data.model.TableRelations;
 import org.dinky.data.model.Task;
 import org.dinky.data.result.SqlExplainResult;
 import org.dinky.job.Job;
@@ -428,6 +430,26 @@ public class DataBaseServiceImpl extends SuperServiceImpl<DataBaseMapper, DataBa
         Asserts.checkNotNull(dataBase, Status.DATASOURCE_NOT_EXIST.getMessage());
         try (Driver driver = Driver.build(dataBase.getDriverConfig())) {
             return driver.getTable(schemaName, tableName);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Override
+    public TableRelations getTableRelations(Integer id, String schemaName, String tableName) {
+        if (Asserts.isNullString(tableName)) {
+            return null;
+        }
+        DataBase dataBase = getById(id);
+        Asserts.checkNotNull(dataBase, Status.DATASOURCE_NOT_EXIST.getMessage());
+        try (Driver driver = Driver.build(dataBase.getDriverConfig())) {
+            return driver.getTableRelations(schemaName, tableName);
+        } catch (BusException e) {
+            // 业务异常（数据源不支持 / 元数据查询失败）直接透出，便于前端明确提示
+            throw e;
+        } catch (MetaDataException e) {
+            // Driver 能力扩展点默认抛出，转为业务异常以便前端展示可读原因
+            throw new BusException(e.getMessage());
         } catch (Exception e) {
             throw new RuntimeException(e);
         }

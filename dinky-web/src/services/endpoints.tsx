@@ -112,6 +112,7 @@ export enum API_CONSTANTS {
   DATASOURCE_GET_COLUMNS_BY_TABLE = '/api/database/listColumns',
   DATASOURCE_GET_TABLE = '/api/database/getTable',
   DATASOURCE_GET_TABLE_DETAIL = '/api/database/getTableDetail',
+  DATASOURCE_GET_TABLE_RELATIONS = '/api/database/getTableRelations',
   DATASOURCE_HADOOP_CONFIG = '/api/database/hadoopConfig',
   DATASOURCE_GET_GEN_SQL = '/api/database/getSqlGeneration',
   DATASOURCE_QUERY_DATA = '/api/database/queryData',

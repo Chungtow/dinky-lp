@@ -34,6 +34,7 @@ import org.dinky.data.model.QueryData;
 import org.dinky.data.model.Schema;
 import org.dinky.data.model.SqlGeneration;
 import org.dinky.data.model.Table;
+import org.dinky.data.model.TableRelations;
 import org.dinky.data.result.Result;
 import org.dinky.metadata.driver.DriverPool;
 import org.dinky.metadata.result.JdbcSelectResult;
@@ -541,6 +542,55 @@ public class DataSourceController {
     public Result<Table> getTable(
             @RequestParam Integer id, @RequestParam String schemaName, @RequestParam String tableName) {
         return Result.succeed(databaseService.getTable(id, schemaName, tableName));
+    }
+
+    /**
+     * get table relations (foreign keys of upstream and downstream) for ER diagram
+     *
+     * @param id         {@link Integer}
+     * @param schemaName {@link String}
+     * @param tableName  {@link String}
+     * @return {@link Result}< {@link TableRelations}>
+     */
+    @GetMapping("/getTableRelations")
+    @ApiOperation("Get Table Relations (Foreign Keys) For ER Diagram")
+    @ApiImplicitParams(
+            value = {
+                @ApiImplicitParam(
+                        name = "id",
+                        value = "DataBase Id",
+                        required = true,
+                        dataType = "Integer",
+                        paramType = "path",
+                        dataTypeClass = Integer.class,
+                        example = "1"),
+                @ApiImplicitParam(
+                        name = "schemaName",
+                        value = "Schema Name",
+                        required = true,
+                        dataType = "String",
+                        paramType = "query",
+                        dataTypeClass = String.class,
+                        example = "public"),
+                @ApiImplicitParam(
+                        name = "tableName",
+                        value = "Table Name",
+                        required = true,
+                        dataType = "String",
+                        paramType = "query",
+                        dataTypeClass = String.class,
+                        example = "user")
+            })
+    @SaCheckPermission(
+            value = {
+                PermissionConstants.REGISTRATION_DATA_SOURCE_DETAIL_REFRESH,
+                PermissionConstants.REGISTRATION_DATA_SOURCE_DETAIL_TREE,
+                PermissionConstants.REGISTRATION_DATA_SOURCE_DETAIL_DESC,
+            },
+            mode = SaMode.OR)
+    public Result<TableRelations> getTableRelations(
+            @RequestParam Integer id, @RequestParam String schemaName, @RequestParam String tableName) {
+        return Result.succeed(databaseService.getTableRelations(id, schemaName, tableName));
     }
 
     /**
