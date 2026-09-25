@@ -87,6 +87,11 @@ const Visual: React.FC<VisualProps> = (props) => {
   }, [mermaidCode]);
 
   // 交互：平移 / 缩放 / 适应视图
+  //
+  // 依赖必须包含 loading / errorMsg：容器 div 仅在「非加载中且无渲染错误」时才挂载，
+  // 若 mermaid 渲染先于外键请求返回完成，本 effect 首次运行时 div 尚未挂载（containerRef 为 null），
+  // 仅依赖 [svg] 的话后续 div 挂载时 svg 值未变、effect 不会再跑，导致 svg-pan-zoom 永远不初始化
+  // （表现为：图能显示、文字能复制，但拖动/缩放全部失效）。
   useEffect(() => {
     const svgElement = containerRef.current?.querySelector('svg');
     if (!svgElement) {
@@ -122,7 +127,7 @@ const Visual: React.FC<VisualProps> = (props) => {
       instance.destroy();
       panZoomRef.current = null;
     };
-  }, [svg]);
+  }, [svg, loading, errorMsg]);
 
   const handleZoomIn = () => panZoomRef.current?.zoomIn();
   const handleZoomOut = () => panZoomRef.current?.zoomOut();
@@ -147,7 +152,8 @@ const Visual: React.FC<VisualProps> = (props) => {
     } else {
       panZoomRef.current.enablePan();
     }
-  }, [selectMode, svg]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectMode, svg, loading, errorMsg]);
 
   if (loading) {
     return <Spin spinning style={{ width: '100%', padding: '48px 0' }} />;
