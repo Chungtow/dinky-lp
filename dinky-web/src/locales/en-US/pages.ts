@@ -1025,6 +1025,9 @@ export default {
   'rc.ds.erdiagram.empty': 'No ER diagram to display (no columns or no foreign keys)',
   'rc.ds.erdiagram.renderError': 'Failed to render ER diagram',
   'rc.ds.erdiagram.loadError': 'Failed to load table relations',
+  'rc.ds.erdiagram.zoomIn': 'Zoom In',
+  'rc.ds.erdiagram.zoomOut': 'Zoom Out',
+  'rc.ds.erdiagram.fitView': 'Fit View',
   'rc.ds.detail.tips': 'Click on the table on the left to get relevant information',
   'rc.ds.enter':
     'Click the icon picture in the list to enter the details page of the DataSource! Support viewing the database & table information of the DataSource, and timely query',

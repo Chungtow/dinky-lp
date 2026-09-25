@@ -948,6 +948,9 @@ export default {
   'rc.ds.erdiagram.empty': '暂无可展示的 ER 图（表无列信息或无外键关系）',
   'rc.ds.erdiagram.renderError': 'ER 图渲染失败',
   'rc.ds.erdiagram.loadError': '获取表外键关系失败',
+  'rc.ds.erdiagram.zoomIn': '放大',
+  'rc.ds.erdiagram.zoomOut': '缩小',
+  'rc.ds.erdiagram.fitView': '适应视图',
   'rc.ds.detail.tips': '点击左侧的表,获取相关信息',
   'rc.ds.enter':
     '点击列表中的 icon 图片进入该数据源的详情页! 支持查看该数据源的库&表信息,以及可以进行即时查询',
