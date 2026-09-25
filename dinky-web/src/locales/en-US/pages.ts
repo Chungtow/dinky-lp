@@ -1028,7 +1028,8 @@ export default {
   'rc.ds.erdiagram.zoomIn': 'Zoom In',
   'rc.ds.erdiagram.zoomOut': 'Zoom Out',
   'rc.ds.erdiagram.fitView': 'Fit View',
-  'rc.ds.erdiagram.selectHint': 'Drag to pan, hold Shift + drag to select and copy text',
+  'rc.ds.erdiagram.selectHint': 'Drag to pan; enable Select Mode to select and copy text',
+  'rc.ds.erdiagram.selectMode': 'Select Mode (select and copy text)',
   'rc.ds.detail.tips': 'Click on the table on the left to get relevant information',
   'rc.ds.enter':
     'Click the icon picture in the list to enter the details page of the DataSource! Support viewing the database & table information of the DataSource, and timely query',

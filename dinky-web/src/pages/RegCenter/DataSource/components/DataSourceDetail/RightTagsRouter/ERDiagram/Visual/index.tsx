@@ -20,7 +20,12 @@
 import { buildErDiagram } from '@/pages/RegCenter/DataSource/components/DataSourceDetail/RightTagsRouter/ERDiagram/function';
 import { DataSources } from '@/types/RegCenter/data';
 import { l } from '@/utils/intl';
-import { CompressOutlined, ZoomInOutlined, ZoomOutOutlined } from '@ant-design/icons';
+import {
+  CompressOutlined,
+  SelectOutlined,
+  ZoomInOutlined,
+  ZoomOutOutlined
+} from '@ant-design/icons';
 import { Alert, Button, Empty, Space, Spin, Tooltip } from 'antd';
 import { renderMermaid } from 'beautiful-mermaid';
 import svgPanZoom from 'svg-pan-zoom';
@@ -48,6 +53,7 @@ const Visual: React.FC<VisualProps> = (props) => {
 
   const [svg, setSvg] = useState<string>('');
   const [errorMsg, setErrorMsg] = useState<string>('');
+  const [selectMode, setSelectMode] = useState<boolean>(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const panZoomRef = useRef<any>(null);
 
@@ -126,24 +132,22 @@ const Visual: React.FC<VisualProps> = (props) => {
   };
 
   /**
-   * 默认：拖动即平移（任何位置都可拖）。
-   * 按住 Shift：暂停平移后再选字 —— 因为平移时图形随光标移动，会把浏览器的选区撕断导致选不中，
-   * 所以选字必须让图形“不动”。必须用捕获阶段，早于 svg-pan-zoom 绑在 svg 上的监听器。
+   * 选择模式：暂停平移并放开文字选中。
+   *
+   * <p>平移与选中不能同时进行 —— 拖动时图形随光标移动会把浏览器的选区撕断，导致选不中；
+   * 因此选字必须让图形“静止”。（Shift + 拖动也无效：浏览器将其解释为「扩展已有选区」，
+   * 选区为空时什么也选不到。）
    */
-  const handleMouseDownCapture = (e: React.MouseEvent) => {
+  useEffect(() => {
     if (!panZoomRef.current) {
       return;
     }
-    if (e.shiftKey) {
+    if (selectMode) {
       panZoomRef.current.disablePan();
     } else {
       panZoomRef.current.enablePan();
     }
-  };
-
-  const handleMouseUp = () => {
-    panZoomRef.current?.enablePan();
-  };
+  }, [selectMode, svg]);
 
   if (loading) {
     return <Spin spinning style={{ width: '100%', padding: '48px 0' }} />;
@@ -175,6 +179,14 @@ const Visual: React.FC<VisualProps> = (props) => {
         <Tooltip title={l('rc.ds.erdiagram.fitView')}>
           <Button size={'small'} icon={<CompressOutlined />} onClick={handleFit} />
         </Tooltip>
+        <Tooltip title={l('rc.ds.erdiagram.selectMode')}>
+          <Button
+            size={'small'}
+            type={selectMode ? 'primary' : 'default'}
+            icon={<SelectOutlined />}
+            onClick={() => setSelectMode(!selectMode)}
+          />
+        </Tooltip>
       </Space>
 
       {errorMsg ? (
@@ -184,10 +196,7 @@ const Visual: React.FC<VisualProps> = (props) => {
       ) : (
         <div
           ref={containerRef}
-          style={{ width: '100%', height: '100%', userSelect: 'none' }}
-          onMouseDownCapture={handleMouseDownCapture}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
+          style={{ width: '100%', height: '100%', userSelect: selectMode ? 'text' : 'none' }}
           dangerouslySetInnerHTML={{ __html: svg }}
         />
       )}
