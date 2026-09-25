@@ -86,6 +86,13 @@ const Visual: React.FC<VisualProps> = (props) => {
     if (!svgElement) {
       return;
     }
+    // 去掉渲染产物自带的固定宽高（它就是“无形遮罩”的来源：SVG 视口只有原图大小，
+    // 平移/缩放被限制在原图区域内，超出即被裁剪）。改为铺满容器，保留 viewBox 交给 svg-pan-zoom 自适应。
+    svgElement.removeAttribute('width');
+    svgElement.removeAttribute('height');
+    svgElement.style.width = '100%';
+    svgElement.style.height = '100%';
+    svgElement.style.display = 'block';
     const instance = svgPanZoom(svgElement as unknown as SVGSVGElement, {
       zoomEnabled: true,
       panEnabled: true,
@@ -109,6 +116,25 @@ const Visual: React.FC<VisualProps> = (props) => {
   const handleFit = () => {
     panZoomRef.current?.fit();
     panZoomRef.current?.center();
+  };
+
+  // 按住 Shift 进入选择模式：暂停平移，允许选中/复制表名、字段等文字
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (e.shiftKey && panZoomRef.current) {
+      panZoomRef.current.disablePan();
+      if (containerRef.current) {
+        containerRef.current.style.userSelect = 'text';
+      }
+    }
+  };
+
+  const handleMouseUp = () => {
+    if (panZoomRef.current) {
+      panZoomRef.current.enablePan();
+    }
+    if (containerRef.current) {
+      containerRef.current.style.userSelect = 'none';
+    }
   };
 
   if (loading) {
@@ -150,10 +176,16 @@ const Visual: React.FC<VisualProps> = (props) => {
       ) : (
         <div
           ref={containerRef}
-          style={{ width: '100%', height: '100%' }}
+          style={{ width: '100%', height: '100%', userSelect: 'none' }}
+          onMouseDown={handleMouseDown}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
           dangerouslySetInnerHTML={{ __html: svg }}
         />
       )}
+      <span style={{ position: 'absolute', left: 12, bottom: 8, zIndex: 10, fontSize: 12, opacity: 0.5 }}>
+        {l('rc.ds.erdiagram.selectHint')}
+      </span>
     </div>
   );
 };
