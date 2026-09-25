@@ -248,6 +248,43 @@ public class SystemConfiguration {
             .defaultValue(false)
             .note(Status.SYS_LDAP_SETTINGS_ENABLE_NOTE);
 
+    // ==================== AI / LLM ====================
+
+    private final Configuration<Boolean> llmEnable = key(Status.SYS_LLM_SETTINGS_ENABLE)
+            .booleanType()
+            .defaultValue(false)
+            .note(Status.SYS_LLM_SETTINGS_ENABLE_NOTE);
+
+    private final Configuration<String> llmBaseUrl = key(Status.SYS_LLM_SETTINGS_BASEURL)
+            .stringType()
+            .defaultValue("https://api.deepseek.com")
+            .note(Status.SYS_LLM_SETTINGS_BASEURL_NOTE);
+
+    private final Configuration<String> llmCompletionsPath = key(Status.SYS_LLM_SETTINGS_COMPLETIONSPATH)
+            .stringType()
+            .defaultValue("/chat/completions")
+            .note(Status.SYS_LLM_SETTINGS_COMPLETIONSPATH_NOTE);
+
+    /** API Key：对外返回时必须脱敏（/api/sysConfig/getAll 是 @SaIgnore 接口） */
+    private final Configuration<String> llmApiKey = key(Status.SYS_LLM_SETTINGS_APIKEY)
+            .stringType()
+            .defaultValue("")
+            .desensitizedHandler(DesensitizedUtil::password)
+            .note(Status.SYS_LLM_SETTINGS_APIKEY_NOTE);
+
+    private final Configuration<String> llmModel = key(Status.SYS_LLM_SETTINGS_MODEL)
+            .stringType()
+            .defaultValue("deepseek-v4-flash")
+            .note(Status.SYS_LLM_SETTINGS_MODEL_NOTE);
+
+    private final Configuration<Integer> llmTimeout =
+            key(Status.SYS_LLM_SETTINGS_TIMEOUT).intType().defaultValue(60).note(Status.SYS_LLM_SETTINGS_TIMEOUT_NOTE);
+
+    private final Configuration<Integer> llmMaxTokens = key(Status.SYS_LLM_SETTINGS_MAXTOKENS)
+            .intType()
+            .defaultValue(4000)
+            .note(Status.SYS_LLM_SETTINGS_MAXTOKENS_NOTE);
+
     private final Configuration<Boolean> metricsSysEnable = key(Status.SYS_METRICS_SETTINGS_SYS_ENABLE)
             .booleanType()
             .defaultValue(false)
@@ -402,6 +439,37 @@ public class SystemConfiguration {
 
     public boolean isUseRestAPI() {
         return Asserts.isNull(useRestAPI.getValue()) ? useRestAPI.getDefaultValue() : useRestAPI.getValue();
+    }
+
+    // ==================== AI / LLM ====================
+
+    public boolean isLlmEnable() {
+        return Asserts.isNull(llmEnable.getValue()) ? llmEnable.getDefaultValue() : llmEnable.getValue();
+    }
+
+    public String getLlmBaseUrl() {
+        return llmBaseUrl.getValue();
+    }
+
+    public String getLlmCompletionsPath() {
+        return llmCompletionsPath.getValue();
+    }
+
+    /** 仅服务端使用：返回真实 API Key，禁止通过任何接口对外返回 */
+    public String getLlmApiKey() {
+        return llmApiKey.getValue();
+    }
+
+    public String getLlmModel() {
+        return llmModel.getValue();
+    }
+
+    public int getLlmTimeout() {
+        return Asserts.isNull(llmTimeout.getValue()) ? llmTimeout.getDefaultValue() : llmTimeout.getValue();
+    }
+
+    public int getLlmMaxTokens() {
+        return Asserts.isNull(llmMaxTokens.getValue()) ? llmMaxTokens.getDefaultValue() : llmMaxTokens.getValue();
     }
 
     public int GetJobIdWaitValue() {

@@ -93,6 +93,7 @@ export default {
 
   'menu.datastudio.project': '项目',
   'menu.datastudio.catalog': 'Catalog',
+  'menu.datastudio.aiChat': 'AI Chat',
   'menu.datastudio.datasource': '数据源',
   'menu.datastudio.console': '控制台',
   'menu.datastudio.jobConfig': '作业配置',

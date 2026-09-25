@@ -28,6 +28,7 @@ import {
   ResourceIcon
 } from '@/components/Icons/CustomIcons';
 import { TagAlignCenter } from '@/components/StyledComponents';
+import { RobotOutlined } from '@ant-design/icons';
 import { AuthorizedObject, useAccess } from '@/hooks/useAccess';
 import { SettingConfigKeyEnum } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/constants';
 import { DSConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/DSConfig';
@@ -36,6 +37,7 @@ import { FlinkConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView
 import { LdapConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/LdapConfig';
 import { MavenConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/MavenConfig';
 import { MetricsConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/MetricsConfig';
+import { LLMConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/LLMConfig';
 import { ResourcesConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/ResourcesConfig';
 import { handleOption, queryDataByParams } from '@/services/BusinessCrud';
 import { RESPONSE_CODE } from '@/services/constants';
@@ -60,7 +62,8 @@ const SettingOverView = () => {
     maven: [],
     ldap: [],
     metrics: [],
-    resource: []
+    resource: [],
+    llm: []
   });
 
   const fetchData = async () => {
@@ -104,7 +107,8 @@ const SettingOverView = () => {
       dolphinscheduler: dsConfig,
       ldap: ldapConfig,
       metrics: metricsConfig,
-      resource: resourceConfig
+      resource: resourceConfig,
+      llm: llmConfig
     } = data;
 
     return [
@@ -226,6 +230,23 @@ const SettingOverView = () => {
           />
         ),
         path: PermissionConstants.SETTING_GLOBAL_RESOURCE
+      },
+      {
+        key: SettingConfigKeyEnum.LLM,
+        label: (
+          <TagAlignCenter>
+            <RobotOutlined />
+            {l('sys.setting.llm')}
+          </TagAlignCenter>
+        ),
+        children: (
+          <LLMConfig
+            auth={PermissionConstants.SETTING_GLOBAL_LLM_EDIT}
+            onSave={handleSaveSubmit}
+            data={llmConfig}
+          />
+        ),
+        path: PermissionConstants.SETTING_GLOBAL_LLM
       }
     ];
   };

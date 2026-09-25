@@ -76,6 +76,7 @@ export type Settings = {
   ldap: BaseConfigProperties[];
   metrics: BaseConfigProperties[];
   resource: BaseConfigProperties[];
+  llm: BaseConfigProperties[];
 };
 
 export type BaseConfigProperties = {
