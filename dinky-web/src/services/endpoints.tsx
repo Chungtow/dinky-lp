@@ -187,6 +187,10 @@ export enum API_CONSTANTS {
   SYSTEM_GET_ONE_TYPE_CONFIG = '/api/sysConfig/getConfigByType',
   SYSTEM_MODIFY_CONFIG = '/api/sysConfig/modifyConfig',
 
+  /** --------------------------------------------  ai chat  ------------------------------------------------------- */
+  AI_CHAT_CHAT = '/api/aiChat/chat',
+  AI_CHAT_CONFIG = '/api/aiChat/config',
+
   // ------------------------------------ system log ------------------------------------
   SYSTEM_ROOT_LOG = '/api/system/getRootLog',
   SYSTEM_ROOT_LOG_LIST = '/api/system/listLogDir',

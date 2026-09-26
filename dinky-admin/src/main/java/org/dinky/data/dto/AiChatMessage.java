@@ -17,19 +17,32 @@
  *
  */
 
-export enum SettingConfigKeyEnum {
-  DINKY = 'Dinky',
-  FLINK = 'Flink',
-  MAVEN = 'Maven',
-  DOLPHIN_SCHEDULER = 'DolphinScheduler',
-  LDAP = 'LDAP',
-  LLM = 'LLM',
-  METRIC = 'Metric',
-  RESOURCE = 'Resource',
-  ENV = 'Env'
-}
+package org.dinky.data.dto;
 
-export enum ButtonFrontendType {
-  BOOLEAN = 'boolean',
-  OPTION = 'option'
+import io.swagger.annotations.ApiModel;
+import io.swagger.annotations.ApiModelProperty;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+/**
+ * 一条 AI 对话消息。
+ *
+ * @since 2026/09/26
+ */
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@ApiModel(value = "AiChatMessage", description = "AI Chat Message")
+public class AiChatMessage {
+
+    @ApiModelProperty(value = "角色：system / user / assistant", example = "user")
+    private String role;
+
+    @ApiModelProperty(value = "消息内容")
+    private String content;
+
+    public static AiChatMessage of(String role, String content) {
+        return new AiChatMessage(role, content);
+    }
 }

@@ -239,6 +239,8 @@ export enum PermissionConstants {
   SETTING_GLOBAL_DS_EDIT = '/settings/globalsetting/ds/edit',
   SETTING_GLOBAL_LDAP = '/settings/globalsetting/ldap',
   SETTING_GLOBAL_LDAP_EDIT = '/settings/globalsetting/ldap/edit',
+  SETTING_GLOBAL_LLM = '/settings/globalsetting/llm',
+  SETTING_GLOBAL_LLM_EDIT = '/settings/globalsetting/llm/edit',
   SETTING_GLOBAL_METRICS = '/settings/globalsetting/metrics',
   SETTING_GLOBAL_METRICS_EDIT = '/settings/globalsetting/metrics/edit',
   SETTING_GLOBAL_RESOURCE = '/settings/globalsetting/resource',

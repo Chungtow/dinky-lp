@@ -24,6 +24,7 @@ import {
   DatabaseOutlined,
   FileZipOutlined,
   FunctionOutlined,
+  RobotOutlined,
   SettingOutlined,
   TableOutlined,
   ToolOutlined
@@ -41,6 +42,7 @@ const GlobalVariable = lazy(() => import('@/pages/DataStudio/Toolbar/GlobalVaria
 const Service = lazy(() => import('@/pages/DataStudio/Toolbar/Service'));
 const Tool = lazy(() => import('@/pages/DataStudio/Toolbar/Tool'));
 const Catalog = lazy(() => import('@/pages/DataStudio/Toolbar/Catalog'));
+const AiChat = lazy(() => import('@/pages/DataStudio/Toolbar/AiChat'));
 const FlinkSqlClient = lazy(() => import('@/pages/DataStudio/Toolbar/FlinkSqlClient'));
 const Resource = lazy(() => import('@/pages/DataStudio/Toolbar/Resource'));
 export const ToolbarRoutes: ToolbarRoute[] = [
@@ -64,6 +66,13 @@ export const ToolbarRoutes: ToolbarRoute[] = [
     icon: <TableOutlined />,
     position: 'right',
     content: () => lazyComponent(<Catalog />)
+  },
+  {
+    key: 'aiChat',
+    title: () => l('menu.datastudio.aiChat'),
+    icon: <RobotOutlined />,
+    position: 'right',
+    content: () => lazyComponent(<AiChat />)
   },
   {
     key: 'datasource',

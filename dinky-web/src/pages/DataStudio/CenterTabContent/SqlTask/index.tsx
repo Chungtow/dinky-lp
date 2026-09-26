@@ -355,6 +355,25 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
     }
     return [currentState.type, currentState.clusterConfigurationId];
   };
+  /**
+   * AI Chat：把生成的 SQL 插入到当前编辑器的光标处。
+   * 仅对当前激活的 tab 生效；处理完成后立即清空 action，避免被其它 tab 重复消费。
+   */
+  useEffect(() => {
+    const currentAction = props?.action;
+    if (currentAction?.actionType !== DataStudioActionType.TASK_INSERT_SQL) {
+      return;
+    }
+    const sql: string | undefined = currentAction?.params?.sql;
+    updateAction({ actionType: null, params: null });
+    if (!sql || activeTab !== id || !editorInstance.current) {
+      return;
+    }
+    const editor = editorInstance.current;
+    editor.focus();
+    editor.trigger('ai-chat', 'type', { text: sql });
+  }, [props?.action?.actionType, props?.action?.params]);
+
   const onEditorChange = (value: string | undefined, ev: editor.IModelContentChangedEvent) => {
     updateCenterTab({
       ...props.tabData,
@@ -1266,7 +1285,8 @@ export default connect(
     enabledDs: SysConfig.enabledDs,
     taskOwnerLockingStrategy: SysConfig.taskOwnerLockingStrategy,
     users: DataStudio.users,
-    tabs: DataStudio.centerContent.tabs
+    tabs: DataStudio.centerContent.tabs,
+    action: DataStudio.action
   }),
   mapDispatchToProps
 )(SqlTask);

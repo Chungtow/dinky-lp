@@ -17,19 +17,34 @@
  *
  */
 
-export enum SettingConfigKeyEnum {
-  DINKY = 'Dinky',
-  FLINK = 'Flink',
-  MAVEN = 'Maven',
-  DOLPHIN_SCHEDULER = 'DolphinScheduler',
-  LDAP = 'LDAP',
-  LLM = 'LLM',
-  METRIC = 'Metric',
-  RESOURCE = 'Resource',
-  ENV = 'Env'
-}
+package org.dinky.service;
 
-export enum ButtonFrontendType {
-  BOOLEAN = 'boolean',
-  OPTION = 'option'
+import org.dinky.data.dto.AiChatRequest;
+import org.dinky.data.vo.AiChatConfig;
+
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+
+/**
+ * AI Chat 服务。
+ *
+ * <p>上下文只包含<strong>元数据</strong>（库/表/列/类型/注释/外键），绝不携带业务数据行。
+ *
+ * @since 2026/09/26
+ */
+public interface AiChatService {
+
+    /**
+     * 发起一次对话，以 SSE 流式返回大模型输出。
+     *
+     * @param request 对话请求（含上下文定位信息，仅元数据）
+     * @return {@link SseEmitter}
+     */
+    SseEmitter chat(AiChatRequest request);
+
+    /**
+     * 获取前端可用的 AI 配置状态（不含密钥）。
+     *
+     * @return {@link AiChatConfig}
+     */
+    AiChatConfig getConfig();
 }
