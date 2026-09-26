@@ -633,6 +633,8 @@ export default {
   'datastudio.aiChat.disabled': 'AI is disabled, please enable and configure it in [Setting Center - Global Setting - LLM]',
   'datastudio.aiChat.unconfigured': 'No model configured',
   'datastudio.aiChat.noMetaDataContext': 'No datasource context available for the current job',
+  'datastudio.aiChat.showReasoning': 'Show reasoning',
+  'datastudio.aiChat.hideReasoning': 'Hide reasoning',
 
   'pages.datastudio.label.history.title': 'Job:【{name}】Execution History',
   'pages.datastudio.label.history.noData': 'Please click the job to view the job execution history',

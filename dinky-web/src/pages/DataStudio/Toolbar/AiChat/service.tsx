@@ -22,10 +22,11 @@ import { API_CONSTANTS } from '@/services/endpoints';
 
 export type AiChatRole = 'user' | 'assistant';
 
-/** 页面内的一条消息 */
+/** 页面内的一条消息（reasoning 为模型的思考过程，仅部分模型提供） */
 export type AiChatMessage = {
   role: AiChatRole;
   content: string;
+  reasoning?: string;
 };
 
 /** 前端可用的 AI 配置（不含密钥） */
@@ -62,7 +63,7 @@ export const getAiChatConfig = async (): Promise<AiChatConfig> => {
  */
 export const aiChatStream = async (
   body: AiChatRequestBody,
-  onContent: (text: string) => void,
+  onFrame: (frame: { content?: string; reasoning?: string }) => void,
   onError?: (message: string) => void,
   signal?: AbortSignal
 ): Promise<void> => {
@@ -103,14 +104,17 @@ export const aiChatStream = async (
       try {
         const frame = JSON.parse(data);
         if (typeof frame?.content === 'string' && frame.content.length > 0) {
-          onContent(frame.content);
+          onFrame({ content: frame.content });
+        }
+        if (typeof frame?.reasoning === 'string' && frame.reasoning.length > 0) {
+          onFrame({ reasoning: frame.reasoning });
         }
         if (typeof frame?.error === 'string' && frame.error.length > 0) {
           onError?.(frame.error);
         }
       } catch (e) {
-        // 非 JSON 帧（兼容旧格式）直接当文本处理
-        onContent(data);
+        // 非 JSON 帧（兼容旧格式）：补回换行，避免多行 SQL 被压成一行
+        onFrame({ content: `${data}\n` });
       }
     }
   }

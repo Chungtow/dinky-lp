@@ -52,6 +52,8 @@ const AiChat = (props: AiChatProps) => {
   const [schemas, setSchemas] = useState<any[]>([]);
   const [schemaName, setSchemaName] = useState<string>();
   const [tableName, setTableName] = useState<string>();
+  // 每条 assistant 消息的"思考过程"是否展开
+  const [expandedReasoning, setExpandedReasoning] = useState<Record<number, boolean>>({});
   const abortRef = useRef<AbortController>();
   // 面板级会话标识：首轮不带 sessionId（后端才携带 schema 上下文），后续带上以复用上下文
   const sessionIdRef = useRef<string>(`${Date.now()}`);
@@ -87,7 +89,19 @@ const AiChat = (props: AiChatProps) => {
       const next = [...prev];
       const last = next[next.length - 1];
       if (last && last.role === 'assistant') {
-        next[next.length - 1] = { role: 'assistant', content: last.content + text };
+        next[next.length - 1] = { ...last, content: last.content + text };
+      }
+      return next;
+    });
+  };
+
+  /** 追加模型的思考过程（reasoning），与正文分开存放 */
+  const appendReasoning = (text: string) => {
+    setMessages((prev) => {
+      const next = [...prev];
+      const last = next[next.length - 1];
+      if (last && last.role === 'assistant') {
+        next[next.length - 1] = { ...last, reasoning: (last.reasoning ?? '') + text };
       }
       return next;
     });
@@ -131,7 +145,14 @@ const AiChat = (props: AiChatProps) => {
           dialect,
           sql: action === 'EXPLAIN' ? currentSql : undefined
         },
-        appendToLastAssistant,
+        ({ content, reasoning }) => {
+          if (reasoning) {
+            appendReasoning(reasoning);
+          }
+          if (content) {
+            appendToLastAssistant(content);
+          }
+        },
         (errorMessage) => {
           message.error(errorMessage);
           appendToLastAssistant(`\n[ERROR] ${errorMessage}`);
@@ -315,6 +336,35 @@ const AiChat = (props: AiChatProps) => {
                   padding: '6px 10px'
                 }}
               >
+                {item.role === 'assistant' && item.reasoning ? (
+                  <div style={{ marginBottom: 6 }}>
+                    <Typography.Link
+                      style={{ fontSize: 12 }}
+                      onClick={() =>
+                        setExpandedReasoning((prev) => ({ ...prev, [index]: !prev[index] }))
+                      }
+                    >
+                      {expandedReasoning[index]
+                        ? l('datastudio.aiChat.hideReasoning')
+                        : l('datastudio.aiChat.showReasoning')}
+                    </Typography.Link>
+                    {expandedReasoning[index] ? (
+                      <div
+                        style={{
+                          whiteSpace: 'pre-wrap',
+                          marginTop: 4,
+                          padding: 6,
+                          borderRadius: 4,
+                          background: 'rgba(0,0,0,0.04)',
+                          fontSize: 12,
+                          color: 'rgba(0,0,0,0.55)'
+                        }}
+                      >
+                        {item.reasoning}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
                 {item.role === 'assistant' ? (
                   renderContent(item.content)
                 ) : (

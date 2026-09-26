@@ -568,6 +568,8 @@ export default {
   'datastudio.aiChat.disabled': 'AI 能力未启用，请在【配置中心 - 全局设置 - LLM 配置】中开启并配置',
   'datastudio.aiChat.unconfigured': '未配置模型',
   'datastudio.aiChat.noMetaDataContext': '当前作业无可用数据源上下文',
+  'datastudio.aiChat.showReasoning': '查看思考过程',
+  'datastudio.aiChat.hideReasoning': '收起思考过程',
 
   'pages.datastudio.print.table.inputTableName': '请选择表名',
   'pages.devops.jobinfo.localenv': '本地环境',

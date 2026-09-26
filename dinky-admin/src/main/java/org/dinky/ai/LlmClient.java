@@ -70,9 +70,11 @@ public class LlmClient {
      * 发起流式对话。
      *
      * @param messages 完整消息列表（system / history / user）
-     * @param onDelta 每个文本片段的回调
+     * @param onDelta 每个正文文本片段的回调
+     * @param onReasoning 每个"思考过程"片段的回调（仅推理类模型会产生，如 DeepSeek 的
+     *     <code>reasoning_content</code>）
      */
-    public void streamChat(List<AiChatMessage> messages, Consumer<String> onDelta) {
+    public void streamChat(List<AiChatMessage> messages, Consumer<String> onDelta, Consumer<String> onReasoning) {
         SystemConfiguration config = SystemConfiguration.getInstances();
         String baseUrl = StrUtil.trimToEmpty(config.getLlmBaseUrl());
         String apiKey = StrUtil.trimToEmpty(config.getLlmApiKey());
@@ -132,10 +134,7 @@ public class LlmClient {
                     if (StrUtil.isBlank(data) || STREAM_DONE.equals(data)) {
                         break;
                     }
-                    String content = extractDelta(data);
-                    if (StrUtil.isNotEmpty(content)) {
-                        onDelta.accept(content);
-                    }
+                    dispatch(data, onDelta, onReasoning);
                 }
             }
         } catch (BusException e) {
@@ -149,27 +148,38 @@ public class LlmClient {
         }
     }
 
-    /** 从 SSE 的 data 行中取出增量文本（兼容 delta / message 两种返回结构） */
-    private String extractDelta(String data) {
+    /**
+     * 解析一个 SSE 数据块，把"正文"与"思考过程"分发给对应回调。
+     *
+     * <p>兼容三种返回结构：流式 <code>choices[].delta</code>、非流式 <code>choices[].message</code>，
+     * 以及推理模型的 <code>delta.reasoning_content</code> / <code>delta.reasoning</code>。
+     */
+    private void dispatch(String data, Consumer<String> onDelta, Consumer<String> onReasoning) {
         try {
             JSONObject json = JSONUtil.parseObj(data);
             JSONArray choices = json.getJSONArray("choices");
             if (choices == null || choices.isEmpty()) {
-                return null;
+                return;
             }
             JSONObject first = choices.getJSONObject(0);
             JSONObject delta = first.getJSONObject("delta");
-            if (delta != null && StrUtil.isNotEmpty(delta.getStr("content"))) {
-                return delta.getStr("content");
+            if (delta == null) {
+                delta = first.getJSONObject("message");
             }
-            JSONObject message = first.getJSONObject("message");
-            if (message != null) {
-                return message.getStr("content");
+            if (delta == null) {
+                return;
             }
-            return null;
+            // 思考过程：DeepSeek-R1 系列为 reasoning_content，部分网关为 reasoning
+            String reasoning = StrUtil.emptyToDefault(delta.getStr("reasoning_content"), delta.getStr("reasoning"));
+            if (StrUtil.isNotEmpty(reasoning) && onReasoning != null) {
+                onReasoning.accept(reasoning);
+            }
+            String content = delta.getStr("content");
+            if (StrUtil.isNotEmpty(content) && onDelta != null) {
+                onDelta.accept(content);
+            }
         } catch (Exception e) {
             log.warn("Failed to parse LLM stream chunk: {}", StrUtil.sub(data, 0, 200));
-            return null;
         }
     }
 

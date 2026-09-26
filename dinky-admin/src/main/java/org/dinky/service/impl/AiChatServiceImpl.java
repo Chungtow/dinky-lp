@@ -68,12 +68,14 @@ public class AiChatServiceImpl implements AiChatService {
     private static final String ACTION_TEXT_TO_SQL = "TEXT_TO_SQL";
     private static final String ACTION_EXPLAIN = "EXPLAIN";
 
-    /** 上下文最多包含的表数量（未选中具体表时） */
-    private static final int MAX_CONTEXT_TABLES = 10;
+    /** 表清单最多列出的表名数量（表名很短，尽量全列，否则模型看不到目标表） */
+    private static final int MAX_TABLE_LIST = 300;
+    /** 表数量不超过该阈值时，才逐表附带字段详情（避免 token 爆炸） */
+    private static final int COLUMN_DETAIL_THRESHOLD = 8;
     /** 每张表最多包含的列数量 */
     private static final int MAX_COLUMNS_PER_TABLE = 40;
     /** schema 上下文的最大字符数，超出即截断（避免 token 爆炸） */
-    private static final int MAX_SCHEMA_CHARS = 12000;
+    private static final int MAX_SCHEMA_CHARS = 24000;
     /** 最多携带的历史对话轮次（一问一答算一轮，此处按消息条数算） */
     private static final int MAX_HISTORY_MESSAGES = 10;
 
@@ -105,28 +107,42 @@ public class AiChatServiceImpl implements AiChatService {
     private void doChat(AiChatRequest request, SseEmitter emitter) {
         try {
             if (!SystemConfiguration.getInstances().isLlmEnable()) {
-                send(emitter, "AI 能力未启用：请先在【配置中心 - 全局设置 - LLM 配置】中开启并配置模型服务。");
+                sendFrame(emitter, "error", "AI 能力未启用：请先在【配置中心 - 全局设置 - LLM 配置】中开启并配置模型服务。");
                 emitter.complete();
                 return;
             }
             if (request == null) {
-                send(emitter, "请求参数为空。");
+                sendFrame(emitter, "error", "请求参数为空。");
                 emitter.complete();
                 return;
             }
             List<AiChatMessage> messages = buildMessages(request);
-            llmClient.streamChat(messages, delta -> send(emitter, delta));
+            llmClient.streamChat(
+                    messages, delta -> sendFrame(emitter, "content", delta), delta -> sendFrame(
+                            emitter, "reasoning", delta));
             emitter.complete();
         } catch (Exception e) {
             log.error("AI chat failed", e);
-            send(emitter, "\n[ERROR] " + e.getMessage());
+            sendFrame(emitter, "error", e.getMessage());
             emitter.completeWithError(e);
         }
     }
 
-    private void send(SseEmitter emitter, String data) {
+    /**
+     * 下发一个 SSE 帧。
+     *
+     * <p><b>必须按 JSON 帧下发</b>：若直接下发纯文本，Spring 会把文本中的换行拆成多个
+     * <code>data:</code> 行，前端逐行拼接后换行丢失（多行 SQL 会被压成一行），因此这里统一序列化为
+     * JSON（换行被转义为 <code>\n</code>），由前端解析还原。
+     *
+     * @param type 帧类型：content（正文）/ reasoning（思考过程）/ error（错误）
+     */
+    private void sendFrame(SseEmitter emitter, String type, String text) {
+        if (StrUtil.isEmpty(text)) {
+            return;
+        }
         try {
-            emitter.send(SseEmitter.event().data(data));
+            emitter.send(SseEmitter.event().data(new JSONObject().set(type, text).toString()));
         } catch (Exception e) {
             log.warn("Send SSE message failed: {}", e.getMessage());
         }
@@ -201,17 +217,33 @@ public class AiChatServiceImpl implements AiChatService {
                 if (CollUtil.isEmpty(tables)) {
                     return "(schema 下未获取到表信息)";
                 }
-                sb.append("Schema: ").append(schemaName).append("\n");
-                int limit = Math.min(tables.size(), MAX_CONTEXT_TABLES);
+                sb.append("Schema: ")
+                        .append(schemaName)
+                        .append(" (共 ")
+                        .append(tables.size())
+                        .append(" 张表)\n");
+                sb.append("Tables:\n");
+                int limit = Math.min(tables.size(), MAX_TABLE_LIST);
                 for (int i = 0; i < limit; i++) {
-                    appendTableDetail(sb, databaseId, schemaName, tables.get(i).getName());
+                    Table table = tables.get(i);
+                    sb.append("  - ").append(table.getName());
+                    if (StrUtil.isNotBlank(table.getComment())) {
+                        sb.append(" -- ").append(table.getComment());
+                    }
+                    sb.append("\n");
                 }
                 if (tables.size() > limit) {
-                    sb.append("... (共 ")
-                            .append(tables.size())
-                            .append(" 张表，仅展示前 ")
-                            .append(limit)
-                            .append(" 张)\n");
+                    sb.append("  ... (表过多，仅列出前 ").append(limit).append(" 张)\n");
+                }
+                if (tables.size() <= COLUMN_DETAIL_THRESHOLD) {
+                    sb.append("\nColumns per table:\n");
+                    for (int i = 0; i < limit; i++) {
+                        appendTableDetail(sb, databaseId, schemaName, tables.get(i).getName());
+                    }
+                } else {
+                    // 表多时逐表拉字段成本高且易超长：由模型基于表名作答，必要时引导查元数据表
+                    sb.append("\n(表数量较多，未逐表列出字段。需要某表字段时：让用户在该面板选中具体表，"
+                            + "或使用 information_schema / SHOW COLUMNS 等元数据查询语句。)\n");
                 }
             } catch (Exception e) {
                 log.warn("Build schema context failed, databaseId: {}, schema: {}", databaseId, schemaName, e);
