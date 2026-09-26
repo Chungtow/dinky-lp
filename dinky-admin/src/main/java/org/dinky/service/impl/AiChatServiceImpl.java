@@ -48,7 +48,6 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONObject;
-import cn.hutool.json.JSONUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
@@ -118,8 +117,9 @@ public class AiChatServiceImpl implements AiChatService {
             }
             List<AiChatMessage> messages = buildMessages(request);
             llmClient.streamChat(
-                    messages, delta -> sendFrame(emitter, "content", delta), delta -> sendFrame(
-                            emitter, "reasoning", delta));
+                    messages,
+                    delta -> sendFrame(emitter, "content", delta),
+                    delta -> sendFrame(emitter, "reasoning", delta));
             emitter.complete();
         } catch (Exception e) {
             log.error("AI chat failed", e);
@@ -142,7 +142,8 @@ public class AiChatServiceImpl implements AiChatService {
             return;
         }
         try {
-            emitter.send(SseEmitter.event().data(new JSONObject().set(type, text).toString()));
+            emitter.send(
+                    SseEmitter.event().data(new JSONObject().set(type, text).toString()));
         } catch (Exception e) {
             log.warn("Send SSE message failed: {}", e.getMessage());
         }
@@ -238,7 +239,8 @@ public class AiChatServiceImpl implements AiChatService {
                 if (tables.size() <= COLUMN_DETAIL_THRESHOLD) {
                     sb.append("\nColumns per table:\n");
                     for (int i = 0; i < limit; i++) {
-                        appendTableDetail(sb, databaseId, schemaName, tables.get(i).getName());
+                        appendTableDetail(
+                                sb, databaseId, schemaName, tables.get(i).getName());
                     }
                 } else {
                     // 表多时逐表拉字段成本高且易超长：由模型基于表名作答，必要时引导查元数据表
