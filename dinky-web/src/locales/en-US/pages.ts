@@ -633,10 +633,6 @@ export default {
   'datastudio.aiChat.disabled': 'AI is disabled, please enable and configure it in [Setting Center - Global Setting - LLM]',
   'datastudio.aiChat.unconfigured': 'No model configured',
   'datastudio.aiChat.noMetaDataContext': 'No datasource context available for the current job',
-  'datastudio.aiChat.boundJob': 'Job: {name}',
-  'datastudio.aiChat.boundDatasource': 'Datasource id: {id}',
-  'datastudio.aiChat.editorLines': 'Editor: {lines} lines',
-  'datastudio.aiChat.schemaNotSelected': 'No schema selected',
   'datastudio.aiChat.bindGuide':
     'No datasource bound: select one in Catalog, or open a job with a datasource',
   'datastudio.aiChat.needSavedTask': 'Please save the job as a task first',
@@ -648,6 +644,7 @@ export default {
   'datastudio.aiChat.verify.retrying': 'Execution failed, auto repairing…',
   'datastudio.aiChat.verify.failed': 'Execution failed',
   'datastudio.aiChat.verify.rejected': 'Verification skipped',
+  'datastudio.aiChat.modelTip': 'Current model, configurable in System Config - AI Settings',
 
   'pages.datastudio.label.history.title': 'Job:【{name}】Execution History',
   'pages.datastudio.label.history.noData': 'Please click the job to view the job execution history',

@@ -374,32 +374,10 @@ const AiChat = (props: AiChatProps) => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: 8 }}>
       <Space direction={'vertical'} size={4} style={{ width: '100%' }}>
-        <Space size={4} wrap>
-          <Tag icon={<RobotOutlined />} color={config?.hasApiKey ? 'success' : 'warning'}>
-            {config?.model || l('datastudio.aiChat.unconfigured')}
-          </Tag>
-          {metaDataAvailable ? (
-            <>
-              <Tag color={'blue'}>
-                {l('datastudio.aiChat.boundJob', { name: currentTab?.title || '' })}
-              </Tag>
-              <Tag>{l('datastudio.aiChat.boundDatasource', { id: databaseId })}</Tag>
-              <Tag>
-                {l('datastudio.aiChat.editorLines', {
-                  lines: currentSql ? currentSql.split('\n').length : 0
-                })}
-              </Tag>
-              {!schemaName && <Tag color={'warning'}>{l('datastudio.aiChat.schemaNotSelected')}</Tag>}
-            </>
-          ) : (
-            <Tag color={'warning'}>{l('datastudio.aiChat.noMetaDataContext')}</Tag>
-          )}
-        </Space>
         {!metaDataAvailable && (
           <Alert
             type={'warning'}
             showIcon
-            size={'small'}
             message={l('datastudio.aiChat.bindGuide')}
           />
         )}
@@ -522,6 +500,15 @@ const AiChat = (props: AiChatProps) => {
         }}
       />
       <Space style={{ marginTop: 8 }}>
+        <Tooltip title={l('datastudio.aiChat.modelTip')}>
+          <Tag
+            icon={<RobotOutlined />}
+            color={config?.hasApiKey ? 'success' : 'warning'}
+            style={{ marginRight: 0 }}
+          >
+            {config?.model || l('datastudio.aiChat.unconfigured')}
+          </Tag>
+        </Tooltip>
         <Tooltip title={l('datastudio.aiChat.explainTip')}>
           <Button
             icon={<PlayCircleOutlined />}
