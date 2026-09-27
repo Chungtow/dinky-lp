@@ -21,7 +21,7 @@ import { isSql } from '@/pages/DataStudio/utils';
 import { DataStudioActionType } from '@/pages/DataStudio/data.d';
 import { mapDispatchToProps } from '@/pages/DataStudio/DvaFunction';
 import { showDataSourceTable } from '@/pages/DataStudio/Toolbar/DataSource/service';
-import { AiChatConfig, AiChatMessage, aiChatStream, getAiChatConfig } from './service';
+import { AiChatConfig, AiChatMessage, AiChatVerify, aiChatStream, getAiChatConfig } from './service';
 import { l } from '@/utils/intl';
 import {
   CopyOutlined,
@@ -31,7 +31,7 @@ import {
   StopOutlined
 } from '@ant-design/icons';
 import { connect } from '@umijs/max';
-import { Button, Empty, Input, Select, Space, Tag, Tooltip, Typography, message } from 'antd';
+import { Alert, Button, Empty, Input, Select, Space, Tag, Tooltip, Typography, message } from 'antd';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 const CODE_BLOCK_REGEX = /```[a-zA-Z]*\s*\n?([\s\S]*?)```/g;
@@ -95,6 +95,18 @@ const AiChat = (props: AiChatProps) => {
     });
   };
 
+  /** 更新最后一条 assistant 消息的 SQL 校验状态（阶段 0：正确性闭环） */
+  const updateLastVerify = (patch: AiChatVerify) => {
+    setMessages((prev) => {
+      const next = [...prev];
+      const last = next[next.length - 1];
+      if (last && last.role === 'assistant') {
+        next[next.length - 1] = { ...last, verify: { ...(last.verify ?? {}), ...patch } };
+      }
+      return next;
+    });
+  };
+
   /** 追加模型的思考过程（reasoning），与正文分开存放 */
   const appendReasoning = (text: string) => {
     setMessages((prev) => {
@@ -143,14 +155,26 @@ const AiChat = (props: AiChatProps) => {
           schemaName,
           tableName,
           dialect,
-          sql: action === 'EXPLAIN' ? currentSql : undefined
+          // 阶段 1.0「作业上下文绑定」：编辑区内容全动作下发（早期仅 EXPLAIN 携带，
+          // 导致正常提问时模型看不到用户正在写的代码），并带上作业 id 以支持排障提问
+          sql: currentSql,
+          taskId: tabParams?.taskId
         },
-        ({ content, reasoning }) => {
+        ({ content, reasoning, sql, status, execResult }) => {
           if (reasoning) {
             appendReasoning(reasoning);
           }
           if (content) {
             appendToLastAssistant(content);
+          }
+          if (sql) {
+            updateLastVerify({ sql });
+          }
+          if (status) {
+            updateLastVerify({ status: status as AiChatVerify['status'] });
+          }
+          if (execResult) {
+            updateLastVerify(execResult);
           }
         },
         (errorMessage) => {
@@ -182,11 +206,101 @@ const AiChat = (props: AiChatProps) => {
   };
 
   const handleRunSql = (sql: string) => {
+    // 执行依赖当前 Tab 已保存为作业（TASK_RUN_SUBMIT 需要 taskId），否则点击无反应
+    if (!tabParams?.taskId) {
+      message.warning(l('datastudio.aiChat.needSavedTask'));
+      return;
+    }
     handleInsertSql(sql);
     updateAction({
       actionType: DataStudioActionType.TASK_RUN_SUBMIT,
       params: { taskId: tabParams?.taskId }
     });
+  };
+
+  /**
+   * 复制到剪贴板。
+   *
+   * <p>navigator.clipboard 仅在 secure context（HTTPS / localhost）下存在；内网以 IP + HTTP
+   * 访问时为 undefined，此前直接使用导致点击「复制」静默失败。此处降级为 textarea +
+   * execCommand 兜底。
+   */
+  const copyToClipboard = (text: string) => {
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard
+        .writeText(text)
+        .then(() => message.success(l('datastudio.aiChat.copySuccess')), () => fallbackCopy(text));
+      return;
+    }
+    fallbackCopy(text);
+  };
+
+  const fallbackCopy = (text: string) => {
+    try {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(textarea);
+      ok
+        ? message.success(l('datastudio.aiChat.copySuccess'))
+        : message.warning(l('datastudio.aiChat.copyFailed'));
+    } catch (e) {
+      message.warning(l('datastudio.aiChat.copyFailed'));
+    }
+  };
+
+  /** 渲染 SQL 校验状态条（生成 → 执行校验 → 报错自动修复） */
+  const renderVerify = (verify: AiChatVerify) => {
+    if (!verify.status && !verify.sql) {
+      return null;
+    }
+    const { status, rowCount, costMs, error } = verify;
+    let color = 'default';
+    let text = '';
+    if (status === 'verifying') {
+      color = 'processing';
+      text = l('datastudio.aiChat.verify.verifying');
+    } else if (status === 'verified') {
+      color = 'success';
+      text = `${l('datastudio.aiChat.verify.verified')}（${rowCount ?? 0} 行 / ${costMs ?? 0}ms）`;
+    } else if (status === 'retrying') {
+      color = 'warning';
+      text = l('datastudio.aiChat.verify.retrying');
+    } else if (status === 'failed') {
+      color = 'error';
+      text = l('datastudio.aiChat.verify.failed');
+    } else if (status === 'rejected') {
+      color = 'warning';
+      text = l('datastudio.aiChat.verify.rejected');
+    } else {
+      return null;
+    }
+    return (
+      <div style={{ marginTop: 6 }}>
+        <Tag color={color} style={{ marginInlineEnd: 0 }}>
+          {text}
+        </Tag>
+        {status === 'failed' || status === 'rejected' ? (
+          <div
+            style={{
+              whiteSpace: 'pre-wrap',
+              marginTop: 4,
+              padding: 6,
+              borderRadius: 4,
+              background: 'rgba(0,0,0,0.04)',
+              fontSize: 12,
+              color: 'rgba(0,0,0,0.65)'
+            }}
+          >
+            {error}
+          </div>
+        ) : null}
+      </div>
+    );
   };
 
   const renderContent = (content: string) => {
@@ -225,10 +339,7 @@ const AiChat = (props: AiChatProps) => {
               size={'small'}
               type={'link'}
               icon={<CopyOutlined />}
-              onClick={() => {
-                navigator.clipboard?.writeText(code);
-                message.success(l('datastudio.aiChat.copySuccess'));
-              }}
+              onClick={() => copyToClipboard(code)}
             />
           </Space>
         </div>
@@ -263,14 +374,13 @@ const AiChat = (props: AiChatProps) => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: 8 }}>
       <Space direction={'vertical'} size={4} style={{ width: '100%' }}>
-        <Space size={4} wrap>
-          <Tag icon={<RobotOutlined />} color={config?.hasApiKey ? 'success' : 'warning'}>
-            {config?.model || l('datastudio.aiChat.unconfigured')}
-          </Tag>
-          {!metaDataAvailable && (
-            <Tag color={'default'}>{l('datastudio.aiChat.noMetaDataContext')}</Tag>
-          )}
-        </Space>
+        {!metaDataAvailable && (
+          <Alert
+            type={'warning'}
+            showIcon
+            message={l('datastudio.aiChat.bindGuide')}
+          />
+        )}
         {metaDataAvailable && (
           <Space size={4}>
             <Select
@@ -370,6 +480,7 @@ const AiChat = (props: AiChatProps) => {
                 ) : (
                   <span style={{ whiteSpace: 'pre-wrap' }}>{item.content}</span>
                 )}
+                {item.role === 'assistant' && item.verify ? renderVerify(item.verify) : null}
               </div>
             </div>
           ))
@@ -389,6 +500,15 @@ const AiChat = (props: AiChatProps) => {
         }}
       />
       <Space style={{ marginTop: 8 }}>
+        <Tooltip title={l('datastudio.aiChat.modelTip')}>
+          <Tag
+            icon={<RobotOutlined />}
+            color={config?.hasApiKey ? 'success' : 'warning'}
+            style={{ marginRight: 0 }}
+          >
+            {config?.model || l('datastudio.aiChat.unconfigured')}
+          </Tag>
+        </Tooltip>
         <Tooltip title={l('datastudio.aiChat.explainTip')}>
           <Button
             icon={<PlayCircleOutlined />}

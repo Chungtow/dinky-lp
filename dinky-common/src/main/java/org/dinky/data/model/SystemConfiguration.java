@@ -285,6 +285,90 @@ public class SystemConfiguration {
             .defaultValue(4000)
             .note(Status.SYS_LLM_SETTINGS_MAXTOKENS_NOTE);
 
+    /** 生成 SQL 后是否自动执行校验（阶段 0：正确性闭环） */
+    private final Configuration<Boolean> llmSqlVerifyEnable = key(Status.SYS_LLM_SETTINGS_SQLVERIFYENABLE)
+            .booleanType()
+            .defaultValue(true)
+            .note(Status.SYS_LLM_SETTINGS_SQLVERIFYENABLE_NOTE);
+
+    /** 校验失败后的自动修复重试上限（对齐 pgconsole 的 max 2 次） */
+    private final Configuration<Integer> llmSqlVerifyMaxRetry = key(Status.SYS_LLM_SETTINGS_SQLVERIFYMAXRETRY)
+            .intType()
+            .defaultValue(2)
+            .note(Status.SYS_LLM_SETTINGS_SQLVERIFYMAXRETRY_NOTE);
+
+    /** 校验执行超时（秒） */
+    private final Configuration<Integer> llmSqlExecTimeout = key(Status.SYS_LLM_SETTINGS_SQLEXECTIMEOUT)
+            .intType()
+            .defaultValue(10)
+            .note(Status.SYS_LLM_SETTINGS_SQLEXECTIMEOUT_NOTE);
+
+    /** 是否允许执行 SHOW / DESC / EXPLAIN 等元数据语句 */
+    private final Configuration<Boolean> llmSqlExecAllowMetadata = key(Status.SYS_LLM_SETTINGS_SQLEXECALLOWMETADATA)
+            .booleanType()
+            .defaultValue(true)
+            .note(Status.SYS_LLM_SETTINGS_SQLEXECALLOWMETADATA_NOTE);
+
+    /** 是否允许执行 DML（默认禁止） */
+    private final Configuration<Boolean> llmSqlExecAllowDml = key(Status.SYS_LLM_SETTINGS_SQLEXECALLOWDML)
+            .booleanType()
+            .defaultValue(false)
+            .note(Status.SYS_LLM_SETTINGS_SQLEXECALLOWDML_NOTE);
+
+    /** 是否允许执行 DDL（默认禁止） */
+    private final Configuration<Boolean> llmSqlExecAllowDdl = key(Status.SYS_LLM_SETTINGS_SQLEXECALLOWDDL)
+            .booleanType()
+            .defaultValue(false)
+            .note(Status.SYS_LLM_SETTINGS_SQLEXECALLOWDDL_NOTE);
+
+    /**
+     * 表数不超过该阈值时才「全量表 + 全部字段」；超过则改为「关键词召回相关表 + 相关表字段」。
+     *
+     * <p>默认值刻意取小：中等规模库（几十张表）若只给表名不给字段，模型会因看不到列而无法写 SQL
+     * （实测 45 张表的库：字段缺失时 Text-to-SQL 成功率不足 50%）。
+     */
+    private final Configuration<Integer> llmSchemaTableDetailThreshold =
+            key(Status.SYS_LLM_SETTINGS_SCHEMATABLEDETAILTHRESHOLD)
+                    .intType()
+                    .defaultValue(8)
+                    .note(Status.SYS_LLM_SETTINGS_SCHEMATABLEDETAILTHRESHOLD_NOTE);
+
+    /** 大库场景下关键词召回的表数量上限 */
+    private final Configuration<Integer> llmSchemaRecallTopN = key(Status.SYS_LLM_SETTINGS_SCHEMARECALLTOPN)
+            .intType()
+            .defaultValue(20)
+            .note(Status.SYS_LLM_SETTINGS_SCHEMARECALLTOPN_NOTE);
+
+    /** 单用户每分钟请求上限（0 表示不限） */
+    private final Configuration<Integer> llmRateLimitPerMinute = key(Status.SYS_LLM_SETTINGS_RATELIMITPERMINUTE)
+            .intType()
+            .defaultValue(10)
+            .note(Status.SYS_LLM_SETTINGS_RATELIMITPERMINUTE_NOTE);
+
+    /** 单用户每日请求上限（0 表示不限） */
+    private final Configuration<Integer> llmMaxRequestsPerDay = key(Status.SYS_LLM_SETTINGS_MAXREQUESTSPERDAY)
+            .intType()
+            .defaultValue(200)
+            .note(Status.SYS_LLM_SETTINGS_MAXREQUESTSPERDAY_NOTE);
+
+    /** 单用户每日 token 上限（0 表示不限） */
+    private final Configuration<Integer> llmMaxTokensPerDay = key(Status.SYS_LLM_SETTINGS_MAXTOKENSPERDAY)
+            .intType()
+            .defaultValue(200000)
+            .note(Status.SYS_LLM_SETTINGS_MAXTOKENSPERDAY_NOTE);
+
+    /** 是否记录 AI 对话审计日志 */
+    private final Configuration<Boolean> llmAuditEnable = key(Status.SYS_LLM_SETTINGS_AUDITENABLE)
+            .booleanType()
+            .defaultValue(true)
+            .note(Status.SYS_LLM_SETTINGS_AUDITENABLE_NOTE);
+
+    /** 是否流式输出（评测脚本可置 false 走一次性返回） */
+    private final Configuration<Boolean> llmStream = key(Status.SYS_LLM_SETTINGS_STREAM)
+            .booleanType()
+            .defaultValue(true)
+            .note(Status.SYS_LLM_SETTINGS_STREAM_NOTE);
+
     private final Configuration<Boolean> metricsSysEnable = key(Status.SYS_METRICS_SETTINGS_SYS_ENABLE)
             .booleanType()
             .defaultValue(false)
@@ -470,6 +554,80 @@ public class SystemConfiguration {
 
     public int getLlmMaxTokens() {
         return Asserts.isNull(llmMaxTokens.getValue()) ? llmMaxTokens.getDefaultValue() : llmMaxTokens.getValue();
+    }
+
+    public boolean isLlmSqlVerifyEnable() {
+        return Asserts.isNull(llmSqlVerifyEnable.getValue())
+                ? llmSqlVerifyEnable.getDefaultValue()
+                : llmSqlVerifyEnable.getValue();
+    }
+
+    public int getLlmSqlVerifyMaxRetry() {
+        return Asserts.isNull(llmSqlVerifyMaxRetry.getValue())
+                ? llmSqlVerifyMaxRetry.getDefaultValue()
+                : llmSqlVerifyMaxRetry.getValue();
+    }
+
+    public int getLlmSqlExecTimeout() {
+        return Asserts.isNull(llmSqlExecTimeout.getValue())
+                ? llmSqlExecTimeout.getDefaultValue()
+                : llmSqlExecTimeout.getValue();
+    }
+
+    public boolean isLlmSqlExecAllowMetadata() {
+        return Asserts.isNull(llmSqlExecAllowMetadata.getValue())
+                ? llmSqlExecAllowMetadata.getDefaultValue()
+                : llmSqlExecAllowMetadata.getValue();
+    }
+
+    public boolean isLlmSqlExecAllowDml() {
+        return Asserts.isNull(llmSqlExecAllowDml.getValue())
+                ? llmSqlExecAllowDml.getDefaultValue()
+                : llmSqlExecAllowDml.getValue();
+    }
+
+    public boolean isLlmSqlExecAllowDdl() {
+        return Asserts.isNull(llmSqlExecAllowDdl.getValue())
+                ? llmSqlExecAllowDdl.getDefaultValue()
+                : llmSqlExecAllowDdl.getValue();
+    }
+
+    public int getLlmSchemaTableDetailThreshold() {
+        return Asserts.isNull(llmSchemaTableDetailThreshold.getValue())
+                ? llmSchemaTableDetailThreshold.getDefaultValue()
+                : llmSchemaTableDetailThreshold.getValue();
+    }
+
+    public int getLlmSchemaRecallTopN() {
+        return Asserts.isNull(llmSchemaRecallTopN.getValue())
+                ? llmSchemaRecallTopN.getDefaultValue()
+                : llmSchemaRecallTopN.getValue();
+    }
+
+    public int getLlmRateLimitPerMinute() {
+        return Asserts.isNull(llmRateLimitPerMinute.getValue())
+                ? llmRateLimitPerMinute.getDefaultValue()
+                : llmRateLimitPerMinute.getValue();
+    }
+
+    public int getLlmMaxRequestsPerDay() {
+        return Asserts.isNull(llmMaxRequestsPerDay.getValue())
+                ? llmMaxRequestsPerDay.getDefaultValue()
+                : llmMaxRequestsPerDay.getValue();
+    }
+
+    public int getLlmMaxTokensPerDay() {
+        return Asserts.isNull(llmMaxTokensPerDay.getValue())
+                ? llmMaxTokensPerDay.getDefaultValue()
+                : llmMaxTokensPerDay.getValue();
+    }
+
+    public boolean isLlmAuditEnable() {
+        return Asserts.isNull(llmAuditEnable.getValue()) ? llmAuditEnable.getDefaultValue() : llmAuditEnable.getValue();
+    }
+
+    public boolean isLlmStream() {
+        return Asserts.isNull(llmStream.getValue()) ? llmStream.getDefaultValue() : llmStream.getValue();
     }
 
     public int GetJobIdWaitValue() {

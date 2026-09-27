@@ -63,6 +63,26 @@ public class AiChatRequest {
     @ApiModelProperty(value = "SQL 方言，用于提示词", example = "MySQL")
     private String dialect;
 
-    @ApiModelProperty(value = "EXPLAIN 动作的目标 SQL")
+    /**
+     * 当前作业的编辑区内容（阶段 1.0「作业上下文绑定」）。
+     *
+     * <p>早期版本仅 EXPLAIN 动作携带，导致普通提问时模型看不到用户正在写的代码；现已改为全动作下发。
+     */
+    @ApiModelProperty(value = "当前作业编辑区内容")
     private String sql;
+
+    /**
+     * 当前作业 id，用于读取最近一次执行状态与报错原文，帮助模型回答“为什么跑挂了”。
+     *
+     * <p>只取 JobInstance 的 status / error 等元信息，不取业务数据行。
+     */
+    @ApiModelProperty(value = "当前作业 id")
+    private Integer taskId;
+
+    /**
+     * 服务端填充的当前用户 id（限流 / 配额 / 审计用）。
+     *
+     * <p><b>不接受前端传入</b>：Controller 会用 Sa-Token 的登录 id 覆盖，防止伪造绕过限流。
+     */
+    private Integer userId;
 }

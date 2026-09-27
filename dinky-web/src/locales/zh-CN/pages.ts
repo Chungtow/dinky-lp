@@ -568,8 +568,18 @@ export default {
   'datastudio.aiChat.disabled': 'AI 能力未启用，请在【配置中心 - 全局设置 - LLM 配置】中开启并配置',
   'datastudio.aiChat.unconfigured': '未配置模型',
   'datastudio.aiChat.noMetaDataContext': '当前作业无可用数据源上下文',
+  'datastudio.aiChat.bindGuide':
+    '未绑定数据源：请在左侧 Catalog 选中数据源，或打开一个已绑定数据源的作业',
+  'datastudio.aiChat.needSavedTask': '请先将作业保存为任务后再执行',
+  'datastudio.aiChat.copyFailed': '复制失败，请手动选中后复制',
   'datastudio.aiChat.showReasoning': '查看思考过程',
   'datastudio.aiChat.hideReasoning': '收起思考过程',
+  'datastudio.aiChat.verify.verifying': '正在校验 SQL 是否可执行…',
+  'datastudio.aiChat.verify.verified': '校验通过：可执行',
+  'datastudio.aiChat.verify.retrying': '执行失败，正在自动修复…',
+  'datastudio.aiChat.verify.failed': '执行失败',
+  'datastudio.aiChat.verify.rejected': '已跳过执行校验',
+  'datastudio.aiChat.modelTip': '当前使用的模型，可在 系统配置 → AI 设置 中修改',
 
   'pages.datastudio.print.table.inputTableName': '请选择表名',
   'pages.devops.jobinfo.localenv': '本地环境',

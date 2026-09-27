@@ -39,6 +39,11 @@ public final class PromptStore {
     public static final String PLACEHOLDER_SCHEMA = "{{schema}}";
     public static final String PLACEHOLDER_DIALECT = "{{dialect}}";
     public static final String PLACEHOLDER_SQL = "{{sql}}";
+    public static final String PLACEHOLDER_ERROR = "{{error}}";
+    /** 当前作业编辑区内容（整体区块，含标题；无内容时后端传空串） */
+    public static final String PLACEHOLDER_EDITOR_SQL = "{{editorSql}}";
+    /** 当前作业最近一次执行情况（整体区块，含标题；无内容时后端传空串） */
+    public static final String PLACEHOLDER_JOB_CONTEXT = "{{jobContext}}";
 
     /** 自然语言取数 / 元数据咨询 */
     public static final String TEXT_TO_SQL = "你是资深数据工程师，正在 Dinky 数据开发平台内协助用户。\n"
@@ -46,6 +51,8 @@ public final class PromptStore {
             + "## 你拿到的数据库元数据（只有表名/字段/类型/注释/外键等元数据，不含任何业务数据行）\n"
             + PLACEHOLDER_SCHEMA
             + "\n"
+            + PLACEHOLDER_EDITOR_SQL
+            + PLACEHOLDER_JOB_CONTEXT
             + "## 回答问题的方式\n"
             + "1. 先判断问题类型：\n"
             + "   - 咨询类（例如“哪张表是设备信息表”“有没有跟订单相关的表”“某字段是什么意思”）：\n"
@@ -56,14 +63,49 @@ public final class PromptStore {
             + "   ② 结论：咨询类给中文结论；取数类给出一个 ```sql 代码块，里面是完整 SQL。\n"
             + "\n"
             + "## 硬性约束\n"
-            + "1. 只能使用元数据中出现过的表名与字段名，禁止编造；若元数据不完整（例如未列出字段），\n"
-            + "   请明确说明，并可给出通过 information_schema / SHOW 语句 发现元数据的 SQL。\n"
+            + "1. 只能使用元数据中出现过的表名与字段名，禁止编造；若确实缺少所需字段，请直接说明缺什么，\n"
+            + "   并引导用户在 AI Chat 面板顶部选择 schema / 具体表后重试，**不要**自行编写\n"
+            + "   information_schema / SHOW 之类的元数据探测 SQL，也不要谎称数据库无法访问。\n"
             + "2. SQL 必须完整可执行：不得省略、不得使用占位符、不得截断、不得写伪代码。\n"
             + "3. 方言："
             + PLACEHOLDER_DIALECT
             + "；优先写显式列名，避免 SELECT *。\n"
             + "4. 不要输出“我无法访问数据库”这类无意义的免责声明——你确实只拿到了元数据，请基于元数据作答。\n"
-            + "5. 用中文回答。\n";
+            + "5. 用中文回答。\n"
+            + "6. 若上下文中提供了「当前编辑区内容」，用户口中的“这段代码”“这段 SQL”“这里”均指它；\n"
+            + "   改写或续写时必须保留原有业务口径，不要另起炉灶。\n"
+            + "7. 若上下文中提供了「当前作业最近一次执行情况」，当用户问“为什么跑挂了 / 报错了 / 失败了”时，\n"
+            + "   必须基于其中的状态与报错原文分析根因并给出修复建议，不要泛泛而谈。\n";
+
+    /**
+     * 依据数据源返回的<b>真实报错</b>修复 SQL（阶段 0：正确性闭环）。
+     *
+     * <p>关键设计：把执行引擎的原始错误原文回传给模型，而不是让它凭空重写——
+     * 这是"语法自动纠错"能真正收敛的前提。
+     */
+    public static final String SQL_REPAIR = "你上一步生成的 SQL 在目标数据源上执行失败了，请修复它。\n"
+            + "\n"
+            + "## 执行失败的 SQL\n"
+            + "```sql\n"
+            + PLACEHOLDER_SQL
+            + "\n```\n"
+            + "\n"
+            + "## 数据源返回的真实错误（原文）\n"
+            + PLACEHOLDER_ERROR
+            + "\n"
+            + "\n"
+            + "## 可用的数据库元数据（只有元数据，不含任何数据行）\n"
+            + PLACEHOLDER_SCHEMA
+            + "\n"
+            + "\n"
+            + "## 修复要求\n"
+            + "1. 只修导致报错的地方，保持用户的取数意图不变；\n"
+            + "2. 只能使用元数据中出现过的表名与字段名，禁止编造；\n"
+            + "3. 若错误提示表/字段不存在，请改用元数据中真实存在的名称；\n"
+            + "4. 只输出一个 ```sql 代码块，里面是完整可执行的 SQL，不要任何解释文字；\n"
+            + "5. 方言："
+            + PLACEHOLDER_DIALECT
+            + "。\n";
 
     /** 解释 SQL */
     public static final String EXPLAIN = "You are a senior data engineer. Explain the given SQL in Chinese.\n"
