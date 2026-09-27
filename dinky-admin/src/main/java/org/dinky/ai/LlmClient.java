@@ -73,9 +73,11 @@ public class LlmClient {
      * @param onDelta 每个正文文本片段的回调
      * @param onReasoning 每个"思考过程"片段的回调（仅推理类模型会产生，如 DeepSeek 的
      *     <code>reasoning_content</code>）
+     * @return 本次调用的 token 用量（模型未返回 usage 时为 0）
      */
-    public void streamChat(List<AiChatMessage> messages, Consumer<String> onDelta, Consumer<String> onReasoning) {
+    public TokenUsage streamChat(List<AiChatMessage> messages, Consumer<String> onDelta, Consumer<String> onReasoning) {
         SystemConfiguration config = SystemConfiguration.getInstances();
+        boolean stream = config.isLlmStream();
         String baseUrl = StrUtil.trimToEmpty(config.getLlmBaseUrl());
         String apiKey = StrUtil.trimToEmpty(config.getLlmApiKey());
         String model = StrUtil.trimToEmpty(config.getLlmModel());
@@ -101,9 +103,13 @@ public class LlmClient {
 
         JSONObject body = new JSONObject();
         body.set("model", model);
-        body.set("stream", true);
+        body.set("stream", stream);
         body.set("max_tokens", maxTokens);
         body.set("temperature", 0.2);
+        if (stream) {
+            // 流式调用默认不返回 usage，显式要求后才能统计 token（审计与配额依赖此项）
+            body.set("stream_options", new JSONObject().set("include_usage", true));
+        }
         JSONArray messageArray = new JSONArray();
         if (messages != null) {
             for (AiChatMessage message : messages) {
@@ -123,20 +129,28 @@ public class LlmClient {
                 log.error("LLM request failed, status: {}, body: {}", statusCode, StrUtil.sub(errorBody, 0, 500));
                 throw new BusException("大模型服务返回异常（HTTP " + statusCode + "），请检查模型服务配置");
             }
+            TokenUsage usage = new TokenUsage();
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(response.getEntity().getContent(), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    if (StrUtil.isBlank(line) || !line.startsWith(DATA_PREFIX)) {
-                        continue;
+                if (stream) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        if (StrUtil.isBlank(line) || !line.startsWith(DATA_PREFIX)) {
+                            continue;
+                        }
+                        String data = StrUtil.trim(line.substring(DATA_PREFIX.length()));
+                        if (StrUtil.isBlank(data) || STREAM_DONE.equals(data)) {
+                            continue;
+                        }
+                        mergeUsage(usage, dispatch(data, onDelta, onReasoning));
                     }
-                    String data = StrUtil.trim(line.substring(DATA_PREFIX.length()));
-                    if (StrUtil.isBlank(data) || STREAM_DONE.equals(data)) {
-                        break;
-                    }
-                    dispatch(data, onDelta, onReasoning);
+                } else {
+                    // 非流式：响应体是一次性 JSON（评测脚本走此分支）
+                    String body2 = cn.hutool.core.io.IoUtil.read(reader);
+                    mergeUsage(usage, parseWhole(body2, onDelta, onReasoning));
                 }
             }
+            return usage;
         } catch (BusException e) {
             throw e;
         } catch (java.net.SocketTimeoutException e) {
@@ -154,12 +168,14 @@ public class LlmClient {
      * <p>兼容三种返回结构：流式 <code>choices[].delta</code>、非流式 <code>choices[].message</code>，
      * 以及推理模型的 <code>delta.reasoning_content</code> / <code>delta.reasoning</code>。
      */
-    private void dispatch(String data, Consumer<String> onDelta, Consumer<String> onReasoning) {
+    private JSONObject dispatch(String data, Consumer<String> onDelta, Consumer<String> onReasoning) {
         try {
             JSONObject json = JSONUtil.parseObj(data);
+            JSONObject usage = json.getJSONObject("usage");
             JSONArray choices = json.getJSONArray("choices");
             if (choices == null || choices.isEmpty()) {
-                return;
+                // 流式最后一个块通常只有 usage、没有 choices
+                return usage;
             }
             JSONObject first = choices.getJSONObject(0);
             JSONObject delta = first.getJSONObject("delta");
@@ -167,7 +183,7 @@ public class LlmClient {
                 delta = first.getJSONObject("message");
             }
             if (delta == null) {
-                return;
+                return usage;
             }
             // 思考过程：DeepSeek-R1 系列为 reasoning_content，部分网关为 reasoning
             String reasoning = StrUtil.emptyToDefault(delta.getStr("reasoning_content"), delta.getStr("reasoning"));
@@ -178,9 +194,48 @@ public class LlmClient {
             if (StrUtil.isNotEmpty(content) && onDelta != null) {
                 onDelta.accept(content);
             }
+            return usage;
         } catch (Exception e) {
             log.warn("Failed to parse LLM stream chunk: {}", StrUtil.sub(data, 0, 200));
+            return null;
         }
+    }
+
+    /** 非流式响应：一次性解析出正文与 usage */
+    private JSONObject parseWhole(String body, Consumer<String> onDelta, Consumer<String> onReasoning) {
+        try {
+            JSONObject json = JSONUtil.parseObj(body);
+            JSONArray choices = json.getJSONArray("choices");
+            if (choices != null && !choices.isEmpty()) {
+                JSONObject message = choices.getJSONObject(0).getJSONObject("message");
+                if (message != null) {
+                    String reasoning = StrUtil.emptyToDefault(
+                            message.getStr("reasoning_content"), message.getStr("reasoning"));
+                    if (StrUtil.isNotEmpty(reasoning) && onReasoning != null) {
+                        onReasoning.accept(reasoning);
+                    }
+                    String content = message.getStr("content");
+                    if (StrUtil.isNotEmpty(content) && onDelta != null) {
+                        onDelta.accept(content);
+                    }
+                }
+            }
+            return json.getJSONObject("usage");
+        } catch (Exception e) {
+            log.warn("Failed to parse LLM response: {}", StrUtil.sub(body, 0, 200));
+            return null;
+        }
+    }
+
+    /** 累积 token 用量（多次调用中 usage 只出现在其中一块） */
+    private void mergeUsage(TokenUsage target, JSONObject usage) {
+        if (target == null || usage == null) {
+            return;
+        }
+        int prompt = usage.getInt("prompt_tokens", 0);
+        int completion = usage.getInt("completion_tokens", 0);
+        target.setPromptTokens(target.getPromptTokens() + prompt);
+        target.setCompletionTokens(target.getCompletionTokens() + completion);
     }
 
     @PreDestroy

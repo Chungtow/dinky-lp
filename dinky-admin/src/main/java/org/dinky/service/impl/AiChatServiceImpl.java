@@ -19,20 +19,27 @@
 
 package org.dinky.service.impl;
 
+import org.dinky.ai.AiChatRateLimiter;
 import org.dinky.ai.LlmClient;
 import org.dinky.ai.PromptStore;
+import org.dinky.ai.SqlVerifier;
+import org.dinky.ai.TableSelector;
+import org.dinky.ai.TokenUsage;
 import org.dinky.data.dto.AiChatMessage;
 import org.dinky.data.dto.AiChatRequest;
+import org.dinky.data.model.AiChatLog;
 import org.dinky.data.model.Column;
 import org.dinky.data.model.ForeignKey;
 import org.dinky.data.model.SystemConfiguration;
 import org.dinky.data.model.Table;
 import org.dinky.data.model.TableRelations;
 import org.dinky.data.vo.AiChatConfig;
+import org.dinky.service.AiChatLogService;
 import org.dinky.service.AiChatService;
 import org.dinky.service.DataBaseService;
 import org.dinky.sse.SseEmitterUTF8;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -45,6 +52,7 @@ import javax.annotation.PreDestroy;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import cn.dev33.satoken.stp.StpUtil;
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONObject;
@@ -71,6 +79,8 @@ public class AiChatServiceImpl implements AiChatService {
     private static final int MAX_TABLE_LIST = 300;
     /** 表数量不超过该阈值时，才逐表附带字段详情（避免 token 爆炸） */
     private static final int COLUMN_DETAIL_THRESHOLD = 8;
+    /** 走召回时，最多附带字段详情的表数量（召回结果通常已较精准，但仍需限量） */
+    private static final int RECALL_COLUMN_DETAIL_TABLES = 5;
     /** 每张表最多包含的列数量 */
     private static final int MAX_COLUMNS_PER_TABLE = 40;
     /** schema 上下文的最大字符数，超出即截断（避免 token 爆炸） */
@@ -80,6 +90,9 @@ public class AiChatServiceImpl implements AiChatService {
 
     private final DataBaseService dataBaseService;
     private final LlmClient llmClient;
+    private final SqlVerifier sqlVerifier;
+    private final AiChatRateLimiter rateLimiter;
+    private final AiChatLogService aiChatLogService;
 
     private final ExecutorService chatExecutor = Executors.newCachedThreadPool();
 
@@ -104,8 +117,12 @@ public class AiChatServiceImpl implements AiChatService {
 
     /** 实际对话逻辑（在异步线程中执行） */
     private void doChat(AiChatRequest request, SseEmitter emitter) {
+        long start = System.currentTimeMillis();
+        TokenUsage totalUsage = new TokenUsage();
+        AiChatLog audit = new AiChatLog();
         try {
-            if (!SystemConfiguration.getInstances().isLlmEnable()) {
+            SystemConfiguration config = SystemConfiguration.getInstances();
+            if (!config.isLlmEnable()) {
                 sendFrame(emitter, "error", "AI 能力未启用：请先在【配置中心 - 全局设置 - LLM 配置】中开启并配置模型服务。");
                 emitter.complete();
                 return;
@@ -115,17 +132,185 @@ public class AiChatServiceImpl implements AiChatService {
                 emitter.complete();
                 return;
             }
-            List<AiChatMessage> messages = buildMessages(request);
-            llmClient.streamChat(
-                    messages,
-                    delta -> sendFrame(emitter, "content", delta),
-                    delta -> sendFrame(emitter, "reasoning", delta));
+
+            Integer userId = request.getUserId();
+            audit.setUserId(userId);
+            audit.setSessionId(request.getSessionId());
+            audit.setAction(StrUtil.blankToDefault(request.getAction(), ACTION_TEXT_TO_SQL));
+            audit.setModel(config.getLlmModel());
+            audit.setDatabaseId(request.getDatabaseId());
+            audit.setSchemaName(request.getSchemaName());
+            audit.setQuestion(request.getMessage());
+
+            // 限流（每分钟）
+            String limited = rateLimiter.tryAcquire(userId == null ? 0 : userId, config.getLlmRateLimitPerMinute());
+            if (limited != null) {
+                sendFrame(emitter, "error", limited);
+                emitter.complete();
+                audit.setSuccess(false);
+                audit.setExecStatus("rejected");
+                audit.setExecError(limited);
+                return;
+            }
+            // 配额（按天）
+            String quotaExceeded = checkDailyQuota(userId, config);
+            if (quotaExceeded != null) {
+                sendFrame(emitter, "error", quotaExceeded);
+                emitter.complete();
+                audit.setSuccess(false);
+                audit.setExecStatus("rejected");
+                audit.setExecError(quotaExceeded);
+                return;
+            }
+
+            boolean isExplain = ACTION_EXPLAIN.equals(
+                    StrUtil.blankToDefault(request.getAction(), ACTION_TEXT_TO_SQL)
+                            .trim()
+                            .toUpperCase());
+            String schemaContext = buildSchemaContext(request);
+            List<AiChatMessage> messages = buildMessages(request, schemaContext);
+
+            StringBuilder answer = new StringBuilder();
+            mergeUsage(totalUsage, generate(messages, emitter, answer));
+
+            int retryCount = 0;
+            String finalSql = null;
+            String execStatus = "none";
+            String execError = null;
+
+            // 正确性闭环：生成 → 执行校验 → 报错回传 → 自动修复（最多 maxRetry 次）
+            if (!isExplain && config.isLlmSqlVerifyEnable()) {
+                int maxRetry = Math.max(config.getLlmSqlVerifyMaxRetry(), 0);
+                String sql = sqlVerifier.extractSql(answer.toString());
+                if (StrUtil.isNotBlank(sql)) {
+                    sendFrame(emitter, "sql", sql);
+                    for (int attempt = 0; attempt <= maxRetry; attempt++) {
+                        sendFrame(emitter, "status", "verifying");
+                        SqlVerifier.VerifyResult verifyResult = sqlVerifier.verify(request.getDatabaseId(), sql);
+                        sendExecResult(emitter, verifyResult);
+                        finalSql = sql;
+                        if (verifyResult.isSuccess()) {
+                            execStatus = "verified";
+                            sendFrame(emitter, "status", "verified");
+                            break;
+                        }
+                        execStatus = (verifyResult.isRejected() || !verifyResult.isExecuted()) ? "rejected" : "failed";
+                        execError = verifyResult.getError();
+                        sendFrame(emitter, "status", execStatus);
+                        if (!verifyResult.isRepairable() || attempt == maxRetry) {
+                            break;
+                        }
+                        // 把数据源返回的真实报错回传给模型修复
+                        retryCount++;
+                        sendFrame(emitter, "status", "retrying");
+                        messages.add(AiChatMessage.of("assistant", answer.toString()));
+                        messages.add(AiChatMessage.of(
+                                "user",
+                                buildRepairPrompt(
+                                        sql, verifyResult.getError(), schemaContext, request.getDialect())));
+                        answer.setLength(0);
+                        sendFrame(emitter, "content", "\n\n> 自动修复 " + retryCount + "/" + maxRetry + "：\n");
+                        mergeUsage(totalUsage, generate(messages, emitter, answer));
+                        sql = sqlVerifier.extractSql(answer.toString());
+                        if (StrUtil.isBlank(sql)) {
+                            break;
+                        }
+                        sendFrame(emitter, "sql", sql);
+                    }
+                }
+            }
+
+            audit.setSqlText(finalSql);
+            audit.setExecStatus(execStatus);
+            audit.setExecError(StrUtil.sub(execError, 0, 2000));
+            audit.setRetryCount(retryCount);
+            audit.setSuccess(!"failed".equals(execStatus));
             emitter.complete();
         } catch (Exception e) {
             log.error("AI chat failed", e);
             sendFrame(emitter, "error", e.getMessage());
+            audit.setSuccess(false);
+            audit.setExecStatus("failed");
+            audit.setExecError(StrUtil.sub(e.getMessage(), 0, 2000));
             emitter.completeWithError(e);
+        } finally {
+            recordAudit(audit, totalUsage, start);
         }
+    }
+
+    /** 调用模型一次：流式内容同时下发给前端并累积到 answer */
+    private TokenUsage generate(List<AiChatMessage> messages, SseEmitter emitter, StringBuilder answer) {
+        TokenUsage usage = llmClient.streamChat(
+                messages,
+                delta -> {
+                    answer.append(delta);
+                    sendFrame(emitter, "content", delta);
+                },
+                delta -> sendFrame(emitter, "reasoning", delta));
+        return usage == null ? new TokenUsage() : usage;
+    }
+
+    /** 构造"依据真实报错修复 SQL"的提示词 */
+    private String buildRepairPrompt(String sql, String error, String schemaContext, String dialect) {
+        Map<String, String> params = new HashMap<>(4);
+        params.put(PromptStore.PLACEHOLDER_SQL, StrUtil.nullToEmpty(sql));
+        params.put(PromptStore.PLACEHOLDER_ERROR, StrUtil.nullToEmpty(error));
+        params.put(PromptStore.PLACEHOLDER_SCHEMA, StrUtil.nullToEmpty(schemaContext));
+        params.put(PromptStore.PLACEHOLDER_DIALECT, StrUtil.blankToDefault(dialect, "SQL"));
+        return PromptStore.render(PromptStore.SQL_REPAIR, params);
+    }
+
+    /** 下发校验结果帧（JSON 对象） */
+    private void sendExecResult(SseEmitter emitter, SqlVerifier.VerifyResult result) {
+        JSONObject payload = new JSONObject()
+                .set("success", result.isSuccess())
+                .set("executed", result.isExecuted())
+                .set("rejected", result.isRejected())
+                .set("rowCount", result.getRowCount())
+                .set("costMs", result.getCostMs())
+                .set("error", StrUtil.nullToEmpty(result.getError()));
+        sendJsonFrame(emitter, "execResult", payload);
+    }
+
+    /** 按天配额检查：超限返回提示文案，未超限返回 null */
+    private String checkDailyQuota(Integer userId, SystemConfiguration config) {
+        int maxRequests = config.getLlmMaxRequestsPerDay();
+        long maxTokens = config.getLlmMaxTokensPerDay();
+        if (maxRequests <= 0 && maxTokens <= 0) {
+            return null;
+        }
+        AiChatLogService.DailyUsage usage = aiChatLogService.todayUsage(userId);
+        if (maxRequests > 0 && usage.getRequests() >= maxRequests) {
+            return "今日 AI 对话次数已达上限（" + maxRequests + " 次），请明天再试或联系管理员调整配额";
+        }
+        if (maxTokens > 0 && usage.getTokens() >= maxTokens) {
+            return "今日 AI 对话 token 用量已达上限（" + maxTokens + "），请明天再试或联系管理员调整配额";
+        }
+        return null;
+    }
+
+    /** 写审计日志（旁路：失败不影响对话） */
+    private void recordAudit(AiChatLog audit, TokenUsage usage, long start) {
+        try {
+            if (!SystemConfiguration.getInstances().isLlmAuditEnable()) {
+                return;
+            }
+            audit.setPromptTokens(usage.getPromptTokens());
+            audit.setCompletionTokens(usage.getCompletionTokens());
+            audit.setDurationMs(System.currentTimeMillis() - start);
+            audit.setCreateTime(LocalDateTime.now());
+            aiChatLogService.record(audit);
+        } catch (Exception e) {
+            log.warn("Record AI chat audit failed: {}", e.getMessage());
+        }
+    }
+
+    private void mergeUsage(TokenUsage target, TokenUsage delta) {
+        if (delta == null) {
+            return;
+        }
+        target.setPromptTokens(target.getPromptTokens() + delta.getPromptTokens());
+        target.setCompletionTokens(target.getCompletionTokens() + delta.getCompletionTokens());
     }
 
     /**
@@ -149,8 +334,21 @@ public class AiChatServiceImpl implements AiChatService {
         }
     }
 
+    /** 下发一个值为 JSON 对象的 SSE 帧（用于结构化数据，如校验结果） */
+    private void sendJsonFrame(SseEmitter emitter, String type, JSONObject payload) {
+        if (payload == null) {
+            return;
+        }
+        try {
+            emitter.send(
+                    SseEmitter.event().data(new JSONObject().set(type, payload).toString()));
+        } catch (Exception e) {
+            log.warn("Send SSE message failed: {}", e.getMessage());
+        }
+    }
+
     /** 组装发送给大模型的消息：system（首轮含 schema）+ 历史 + 本轮 user */
-    private List<AiChatMessage> buildMessages(AiChatRequest request) {
+    private List<AiChatMessage> buildMessages(AiChatRequest request, String schemaContext) {
         String action = StrUtil.blankToDefault(request.getAction(), ACTION_TEXT_TO_SQL)
                 .trim()
                 .toUpperCase();
@@ -159,7 +357,9 @@ public class AiChatServiceImpl implements AiChatService {
         boolean firstTurn = StrUtil.isBlank(request.getSessionId());
 
         Map<String, String> params = new HashMap<>(4);
-        params.put(PromptStore.PLACEHOLDER_SCHEMA, firstTurn ? buildSchemaContext(request) : "(schema 已在首轮提供，请沿用)");
+        params.put(
+                PromptStore.PLACEHOLDER_SCHEMA,
+                firstTurn ? schemaContext : "(schema 已在首轮提供，请沿用)");
         params.put(PromptStore.PLACEHOLDER_DIALECT, StrUtil.blankToDefault(request.getDialect(), "SQL"));
         params.put(PromptStore.PLACEHOLDER_SQL, StrUtil.nullToEmpty(request.getSql()));
 
@@ -218,29 +418,48 @@ public class AiChatServiceImpl implements AiChatService {
                 if (CollUtil.isEmpty(tables)) {
                     return "(schema 下未获取到表信息)";
                 }
+                SystemConfiguration config = SystemConfiguration.getInstances();
+                int threshold = config.getLlmSchemaTableDetailThreshold();
+                int recallTopN = config.getLlmSchemaRecallTopN();
+                // 大库场景：按问题关键词召回相关表，避免把上千张表全塞进 context
+                List<Table> candidates = tables;
+                boolean recalled = tables.size() > threshold;
+                if (recalled) {
+                    candidates = TableSelector.select(tables, request.getMessage(), recallTopN);
+                }
+
                 sb.append("Schema: ")
                         .append(schemaName)
                         .append(" (共 ")
                         .append(tables.size())
-                        .append(" 张表)\n");
+                        .append(" 张表");
+                if (recalled) {
+                    sb.append("，已按问题关键词召回 ")
+                            .append(candidates.size())
+                            .append(" 张相关表");
+                }
+                sb.append(")\n");
                 sb.append("Tables:\n");
-                int limit = Math.min(tables.size(), MAX_TABLE_LIST);
+                int limit = Math.min(candidates.size(), MAX_TABLE_LIST);
                 for (int i = 0; i < limit; i++) {
-                    Table table = tables.get(i);
+                    Table table = candidates.get(i);
                     sb.append("  - ").append(table.getName());
                     if (StrUtil.isNotBlank(table.getComment())) {
                         sb.append(" -- ").append(table.getComment());
                     }
                     sb.append("\n");
                 }
-                if (tables.size() > limit) {
-                    sb.append("  ... (表过多，仅列出前 ").append(limit).append(" 张)\n");
-                }
-                if (tables.size() <= COLUMN_DETAIL_THRESHOLD) {
+                if (recalled || candidates.size() <= COLUMN_DETAIL_THRESHOLD) {
+                    int detailLimit = Math.min(
+                            candidates.size(), recalled ? RECALL_COLUMN_DETAIL_TABLES : COLUMN_DETAIL_THRESHOLD);
                     sb.append("\nColumns per table:\n");
-                    for (int i = 0; i < limit; i++) {
-                        appendTableDetail(
-                                sb, databaseId, schemaName, tables.get(i).getName());
+                    for (int i = 0; i < detailLimit; i++) {
+                        appendTableDetail(sb, databaseId, schemaName, candidates.get(i).getName());
+                    }
+                    if (detailLimit < candidates.size()) {
+                        sb.append("  ... (仅列出前 ")
+                                .append(detailLimit)
+                                .append(" 张表的字段，其余表只有表名)\n");
                     }
                 } else {
                     // 表多时逐表拉字段成本高且易超长：由模型基于表名作答，必要时引导查元数据表

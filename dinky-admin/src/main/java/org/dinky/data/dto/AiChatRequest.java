@@ -65,4 +65,11 @@ public class AiChatRequest {
 
     @ApiModelProperty(value = "EXPLAIN 动作的目标 SQL")
     private String sql;
+
+    /**
+     * 服务端填充的当前用户 id（限流 / 配额 / 审计用）。
+     *
+     * <p><b>不接受前端传入</b>：Controller 会用 Sa-Token 的登录 id 覆盖，防止伪造绕过限流。
+     */
+    private Integer userId;
 }

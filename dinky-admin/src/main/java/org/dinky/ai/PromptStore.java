@@ -39,6 +39,7 @@ public final class PromptStore {
     public static final String PLACEHOLDER_SCHEMA = "{{schema}}";
     public static final String PLACEHOLDER_DIALECT = "{{dialect}}";
     public static final String PLACEHOLDER_SQL = "{{sql}}";
+    public static final String PLACEHOLDER_ERROR = "{{error}}";
 
     /** 自然语言取数 / 元数据咨询 */
     public static final String TEXT_TO_SQL = "你是资深数据工程师，正在 Dinky 数据开发平台内协助用户。\n"
@@ -64,6 +65,36 @@ public final class PromptStore {
             + "；优先写显式列名，避免 SELECT *。\n"
             + "4. 不要输出“我无法访问数据库”这类无意义的免责声明——你确实只拿到了元数据，请基于元数据作答。\n"
             + "5. 用中文回答。\n";
+
+    /**
+     * 依据数据源返回的<b>真实报错</b>修复 SQL（阶段 0：正确性闭环）。
+     *
+     * <p>关键设计：把执行引擎的原始错误原文回传给模型，而不是让它凭空重写——
+     * 这是"语法自动纠错"能真正收敛的前提。
+     */
+    public static final String SQL_REPAIR = "你上一步生成的 SQL 在目标数据源上执行失败了，请修复它。\n"
+            + "\n"
+            + "## 执行失败的 SQL\n"
+            + "```sql\n"
+            + PLACEHOLDER_SQL
+            + "\n```\n"
+            + "\n"
+            + "## 数据源返回的真实错误（原文）\n"
+            + PLACEHOLDER_ERROR
+            + "\n"
+            + "\n"
+            + "## 可用的数据库元数据（只有元数据，不含任何数据行）\n"
+            + PLACEHOLDER_SCHEMA
+            + "\n"
+            + "\n"
+            + "## 修复要求\n"
+            + "1. 只修导致报错的地方，保持用户的取数意图不变；\n"
+            + "2. 只能使用元数据中出现过的表名与字段名，禁止编造；\n"
+            + "3. 若错误提示表/字段不存在，请改用元数据中真实存在的名称；\n"
+            + "4. 只输出一个 ```sql 代码块，里面是完整可执行的 SQL，不要任何解释文字；\n"
+            + "5. 方言："
+            + PLACEHOLDER_DIALECT
+            + "。\n";
 
     /** 解释 SQL */
     public static final String EXPLAIN = "You are a senior data engineer. Explain the given SQL in Chinese.\n"

@@ -32,6 +32,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import cn.dev33.satoken.annotation.SaCheckLogin;
+import cn.dev33.satoken.stp.StpUtil;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
 import lombok.RequiredArgsConstructor;
@@ -63,6 +64,14 @@ public class AiChatController {
     @PostMapping("/chat")
     @ApiOperation("Chat With AI (SSE Stream)")
     public SseEmitter chat(@RequestBody AiChatRequest request) {
+        if (request != null) {
+            try {
+                // 同步线程中取登录用户并覆盖，避免前端伪造 userId 绕过限流/配额
+                request.setUserId(StpUtil.getLoginIdAsInt());
+            } catch (Exception e) {
+                log.warn("Resolve current user for AI chat failed: {}", e.getMessage());
+            }
+        }
         return aiChatService.chat(request);
     }
 
