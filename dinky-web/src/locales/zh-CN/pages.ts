@@ -570,6 +570,11 @@ export default {
   'datastudio.aiChat.noMetaDataContext': '当前作业无可用数据源上下文',
   'datastudio.aiChat.showReasoning': '查看思考过程',
   'datastudio.aiChat.hideReasoning': '收起思考过程',
+  'datastudio.aiChat.verify.verifying': '正在校验 SQL 是否可执行…',
+  'datastudio.aiChat.verify.verified': '校验通过：可执行',
+  'datastudio.aiChat.verify.retrying': '执行失败，正在自动修复…',
+  'datastudio.aiChat.verify.failed': '执行失败',
+  'datastudio.aiChat.verify.rejected': '已跳过执行校验',
 
   'pages.datastudio.print.table.inputTableName': '请选择表名',
   'pages.devops.jobinfo.localenv': '本地环境',

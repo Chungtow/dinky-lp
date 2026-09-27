@@ -22,11 +22,24 @@ import { API_CONSTANTS } from '@/services/endpoints';
 
 export type AiChatRole = 'user' | 'assistant';
 
+/** 单条消息的 SQL 校验状态（阶段 0：正确性闭环） */
+export type AiChatVerify = {
+  status?: 'verifying' | 'verified' | 'failed' | 'rejected' | 'retrying';
+  sql?: string;
+  success?: boolean;
+  executed?: boolean;
+  rejected?: boolean;
+  rowCount?: number;
+  costMs?: number;
+  error?: string;
+};
+
 /** 页面内的一条消息（reasoning 为模型的思考过程，仅部分模型提供） */
 export type AiChatMessage = {
   role: AiChatRole;
   content: string;
   reasoning?: string;
+  verify?: AiChatVerify;
 };
 
 /** 前端可用的 AI 配置（不含密钥） */
@@ -63,7 +76,13 @@ export const getAiChatConfig = async (): Promise<AiChatConfig> => {
  */
 export const aiChatStream = async (
   body: AiChatRequestBody,
-  onFrame: (frame: { content?: string; reasoning?: string }) => void,
+  onFrame: (frame: {
+    content?: string;
+    reasoning?: string;
+    sql?: string;
+    status?: string;
+    execResult?: AiChatVerify;
+  }) => void,
   onError?: (message: string) => void,
   signal?: AbortSignal
 ): Promise<void> => {
@@ -108,6 +127,15 @@ export const aiChatStream = async (
         }
         if (typeof frame?.reasoning === 'string' && frame.reasoning.length > 0) {
           onFrame({ reasoning: frame.reasoning });
+        }
+        if (typeof frame?.sql === 'string' && frame.sql.length > 0) {
+          onFrame({ sql: frame.sql });
+        }
+        if (typeof frame?.status === 'string' && frame.status.length > 0) {
+          onFrame({ status: frame.status });
+        }
+        if (frame?.execResult && typeof frame.execResult === 'object') {
+          onFrame({ execResult: frame.execResult });
         }
         if (typeof frame?.error === 'string' && frame.error.length > 0) {
           onError?.(frame.error);

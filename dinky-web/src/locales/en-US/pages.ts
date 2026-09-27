@@ -635,6 +635,11 @@ export default {
   'datastudio.aiChat.noMetaDataContext': 'No datasource context available for the current job',
   'datastudio.aiChat.showReasoning': 'Show reasoning',
   'datastudio.aiChat.hideReasoning': 'Hide reasoning',
+  'datastudio.aiChat.verify.verifying': 'Verifying SQL executability…',
+  'datastudio.aiChat.verify.verified': 'Verified: executable',
+  'datastudio.aiChat.verify.retrying': 'Execution failed, auto repairing…',
+  'datastudio.aiChat.verify.failed': 'Execution failed',
+  'datastudio.aiChat.verify.rejected': 'Verification skipped',
 
   'pages.datastudio.label.history.title': 'Job:【{name}】Execution History',
   'pages.datastudio.label.history.noData': 'Please click the job to view the job execution history',

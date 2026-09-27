@@ -21,7 +21,7 @@ import { isSql } from '@/pages/DataStudio/utils';
 import { DataStudioActionType } from '@/pages/DataStudio/data.d';
 import { mapDispatchToProps } from '@/pages/DataStudio/DvaFunction';
 import { showDataSourceTable } from '@/pages/DataStudio/Toolbar/DataSource/service';
-import { AiChatConfig, AiChatMessage, aiChatStream, getAiChatConfig } from './service';
+import { AiChatConfig, AiChatMessage, AiChatVerify, aiChatStream, getAiChatConfig } from './service';
 import { l } from '@/utils/intl';
 import {
   CopyOutlined,
@@ -95,6 +95,18 @@ const AiChat = (props: AiChatProps) => {
     });
   };
 
+  /** 更新最后一条 assistant 消息的 SQL 校验状态（阶段 0：正确性闭环） */
+  const updateLastVerify = (patch: AiChatVerify) => {
+    setMessages((prev) => {
+      const next = [...prev];
+      const last = next[next.length - 1];
+      if (last && last.role === 'assistant') {
+        next[next.length - 1] = { ...last, verify: { ...(last.verify ?? {}), ...patch } };
+      }
+      return next;
+    });
+  };
+
   /** 追加模型的思考过程（reasoning），与正文分开存放 */
   const appendReasoning = (text: string) => {
     setMessages((prev) => {
@@ -145,12 +157,21 @@ const AiChat = (props: AiChatProps) => {
           dialect,
           sql: action === 'EXPLAIN' ? currentSql : undefined
         },
-        ({ content, reasoning }) => {
+        ({ content, reasoning, sql, status, execResult }) => {
           if (reasoning) {
             appendReasoning(reasoning);
           }
           if (content) {
             appendToLastAssistant(content);
+          }
+          if (sql) {
+            updateLastVerify({ sql });
+          }
+          if (status) {
+            updateLastVerify({ status: status as AiChatVerify['status'] });
+          }
+          if (execResult) {
+            updateLastVerify(execResult);
           }
         },
         (errorMessage) => {
@@ -187,6 +208,56 @@ const AiChat = (props: AiChatProps) => {
       actionType: DataStudioActionType.TASK_RUN_SUBMIT,
       params: { taskId: tabParams?.taskId }
     });
+  };
+
+  /** 渲染 SQL 校验状态条（生成 → 执行校验 → 报错自动修复） */
+  const renderVerify = (verify: AiChatVerify) => {
+    if (!verify.status && !verify.sql) {
+      return null;
+    }
+    const { status, rowCount, costMs, error } = verify;
+    let color = 'default';
+    let text = '';
+    if (status === 'verifying') {
+      color = 'processing';
+      text = l('datastudio.aiChat.verify.verifying');
+    } else if (status === 'verified') {
+      color = 'success';
+      text = `${l('datastudio.aiChat.verify.verified')}（${rowCount ?? 0} 行 / ${costMs ?? 0}ms）`;
+    } else if (status === 'retrying') {
+      color = 'warning';
+      text = l('datastudio.aiChat.verify.retrying');
+    } else if (status === 'failed') {
+      color = 'error';
+      text = l('datastudio.aiChat.verify.failed');
+    } else if (status === 'rejected') {
+      color = 'warning';
+      text = l('datastudio.aiChat.verify.rejected');
+    } else {
+      return null;
+    }
+    return (
+      <div style={{ marginTop: 6 }}>
+        <Tag color={color} style={{ marginInlineEnd: 0 }}>
+          {text}
+        </Tag>
+        {status === 'failed' || status === 'rejected' ? (
+          <div
+            style={{
+              whiteSpace: 'pre-wrap',
+              marginTop: 4,
+              padding: 6,
+              borderRadius: 4,
+              background: 'rgba(0,0,0,0.04)',
+              fontSize: 12,
+              color: 'rgba(0,0,0,0.65)'
+            }}
+          >
+            {error}
+          </div>
+        ) : null}
+      </div>
+    );
   };
 
   const renderContent = (content: string) => {
@@ -370,6 +441,7 @@ const AiChat = (props: AiChatProps) => {
                 ) : (
                   <span style={{ whiteSpace: 'pre-wrap' }}>{item.content}</span>
                 )}
+                {item.role === 'assistant' && item.verify ? renderVerify(item.verify) : null}
               </div>
             </div>
           ))
