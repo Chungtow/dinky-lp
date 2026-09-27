@@ -50,6 +50,27 @@ if ! java -version 2>&1 | grep -q 'version "1\.8'; then
 fi
 echo "✓ JDK 8 检查通过"
 
+# 1.5 spotless 自愈
+#   背景: 主构建用 JDK 8（代码按 JDK 8 编译），而 palantir-java-format 需 JDK 11+，
+#         两者互斥 → fast profile 跳过了 spotless → 本地构建从不检查格式，
+#         只能等 GitHub CI 的 spotless:check 报错（已发生过一次）。
+#   处置: 检测到 JDK 11+ 就先跑一遍 spotless:apply，把格式问题消灭在本地。
+#         找不到 JDK 11+ 时仅告警，不阻断构建。
+SPOTLESS_JDK=""
+for jd in /usr/lib/jvm/java-11-openjdk* /usr/lib/jvm/java-17-openjdk* /usr/lib/jvm/java-21-openjdk*; do
+    [ -d "$jd" ] && SPOTLESS_JDK="$jd" && break
+done
+if [ -n "$SPOTLESS_JDK" ]; then
+    echo "执行 spotless:apply（JDK: $(basename "$SPOTLESS_JDK")）..."
+    if JAVA_HOME="$SPOTLESS_JDK" ./mvnw -q spotless:apply 2>&1 | tail -5; then
+        echo "✓ spotless 格式化完成（避免 GitHub CI 因格式失败）"
+    else
+        echo "⚠ spotless:apply 执行异常，继续构建（GitHub CI 可能会报格式问题）"
+    fi
+else
+    echo "⚠ 未找到 JDK 11+，跳过 spotless；GitHub CI 的 spotless:check 可能因格式问题失败"
+fi
+
 # 2. 前置: 清理前端缓存与旧产物（避免 umi safe-delete 非交互卡住）
 #    - .umi-production / src/.umi-production: umi 编译缓存
 #    - dist: 上次构建产物，若残留 ≥500 文件会触发 SAFE_DELETE_BULK_CONFIRM_REQUIRED
