@@ -31,7 +31,7 @@ import {
   StopOutlined
 } from '@ant-design/icons';
 import { connect } from '@umijs/max';
-import { Button, Empty, Input, Select, Space, Tag, Tooltip, Typography, message } from 'antd';
+import { Alert, Button, Empty, Input, Select, Space, Tag, Tooltip, Typography, message } from 'antd';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 const CODE_BLOCK_REGEX = /```[a-zA-Z]*\s*\n?([\s\S]*?)```/g;
@@ -155,7 +155,10 @@ const AiChat = (props: AiChatProps) => {
           schemaName,
           tableName,
           dialect,
-          sql: action === 'EXPLAIN' ? currentSql : undefined
+          // 阶段 1.0「作业上下文绑定」：编辑区内容全动作下发（早期仅 EXPLAIN 携带，
+          // 导致正常提问时模型看不到用户正在写的代码），并带上作业 id 以支持排障提问
+          sql: currentSql,
+          taskId: tabParams?.taskId
         },
         ({ content, reasoning, sql, status, execResult }) => {
           if (reasoning) {
@@ -203,11 +206,51 @@ const AiChat = (props: AiChatProps) => {
   };
 
   const handleRunSql = (sql: string) => {
+    // 执行依赖当前 Tab 已保存为作业（TASK_RUN_SUBMIT 需要 taskId），否则点击无反应
+    if (!tabParams?.taskId) {
+      message.warning(l('datastudio.aiChat.needSavedTask'));
+      return;
+    }
     handleInsertSql(sql);
     updateAction({
       actionType: DataStudioActionType.TASK_RUN_SUBMIT,
       params: { taskId: tabParams?.taskId }
     });
+  };
+
+  /**
+   * 复制到剪贴板。
+   *
+   * <p>navigator.clipboard 仅在 secure context（HTTPS / localhost）下存在；内网以 IP + HTTP
+   * 访问时为 undefined，此前直接使用导致点击「复制」静默失败。此处降级为 textarea +
+   * execCommand 兜底。
+   */
+  const copyToClipboard = (text: string) => {
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard
+        .writeText(text)
+        .then(() => message.success(l('datastudio.aiChat.copySuccess')), () => fallbackCopy(text));
+      return;
+    }
+    fallbackCopy(text);
+  };
+
+  const fallbackCopy = (text: string) => {
+    try {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(textarea);
+      ok
+        ? message.success(l('datastudio.aiChat.copySuccess'))
+        : message.warning(l('datastudio.aiChat.copyFailed'));
+    } catch (e) {
+      message.warning(l('datastudio.aiChat.copyFailed'));
+    }
   };
 
   /** 渲染 SQL 校验状态条（生成 → 执行校验 → 报错自动修复） */
@@ -296,10 +339,7 @@ const AiChat = (props: AiChatProps) => {
               size={'small'}
               type={'link'}
               icon={<CopyOutlined />}
-              onClick={() => {
-                navigator.clipboard?.writeText(code);
-                message.success(l('datastudio.aiChat.copySuccess'));
-              }}
+              onClick={() => copyToClipboard(code)}
             />
           </Space>
         </div>
@@ -338,10 +378,31 @@ const AiChat = (props: AiChatProps) => {
           <Tag icon={<RobotOutlined />} color={config?.hasApiKey ? 'success' : 'warning'}>
             {config?.model || l('datastudio.aiChat.unconfigured')}
           </Tag>
-          {!metaDataAvailable && (
-            <Tag color={'default'}>{l('datastudio.aiChat.noMetaDataContext')}</Tag>
+          {metaDataAvailable ? (
+            <>
+              <Tag color={'blue'}>
+                {l('datastudio.aiChat.boundJob', { name: currentTab?.title || '' })}
+              </Tag>
+              <Tag>{l('datastudio.aiChat.boundDatasource', { id: databaseId })}</Tag>
+              <Tag>
+                {l('datastudio.aiChat.editorLines', {
+                  lines: currentSql ? currentSql.split('\n').length : 0
+                })}
+              </Tag>
+              {!schemaName && <Tag color={'warning'}>{l('datastudio.aiChat.schemaNotSelected')}</Tag>}
+            </>
+          ) : (
+            <Tag color={'warning'}>{l('datastudio.aiChat.noMetaDataContext')}</Tag>
           )}
         </Space>
+        {!metaDataAvailable && (
+          <Alert
+            type={'warning'}
+            showIcon
+            size={'small'}
+            message={l('datastudio.aiChat.bindGuide')}
+          />
+        )}
         {metaDataAvailable && (
           <Space size={4}>
             <Select

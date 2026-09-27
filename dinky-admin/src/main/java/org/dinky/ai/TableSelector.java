@@ -100,6 +100,37 @@ public final class TableSelector {
         return result;
     }
 
+    /**
+     * 按与问题的相关度对<b>全部</b>表排序（不截断数量）。
+     *
+     * <p>与 {@link #select} 的区别：select 只返回 TopN，适合「先挑选」；rank 返回全部表的有序列表，
+     * 适合「按预算装填」——调用方从头往下加，直到上下文预算用尽为止（阶段 1.5：Token 预算与优先级裁剪）。
+     * 排序稳定，得分为 0 的表保持原始顺序排在末尾，保证不会漏表、顺序可预期。
+     *
+     * @param tables 该 schema 下的全部表
+     * @param question 用户问题
+     * @return 按分值降序的全部表
+     */
+    public static List<Table> rank(List<Table> tables, String question) {
+        if (CollUtil.isEmpty(tables)) {
+            return new ArrayList<>();
+        }
+        Set<String> keywords = extractKeywords(question);
+        if (keywords.isEmpty()) {
+            return new ArrayList<>(tables);
+        }
+        List<ScoredTable> scored = new ArrayList<>(tables.size());
+        for (Table table : tables) {
+            scored.add(new ScoredTable(table, score(table, keywords)));
+        }
+        scored.sort(Comparator.comparingInt(ScoredTable::getScore).reversed());
+        List<Table> result = new ArrayList<>(scored.size());
+        for (ScoredTable scoredTable : scored) {
+            result.add(scoredTable.getTable());
+        }
+        return result;
+    }
+
     /** 抽取问题关键词（英文标识符 + 中文 2-gram） */
     public static Set<String> extractKeywords(String question) {
         Set<String> keywords = new LinkedHashSet<>();

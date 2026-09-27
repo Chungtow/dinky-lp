@@ -34,10 +34,12 @@ import org.dinky.data.model.ForeignKey;
 import org.dinky.data.model.SystemConfiguration;
 import org.dinky.data.model.Table;
 import org.dinky.data.model.TableRelations;
+import org.dinky.data.model.job.JobInstance;
 import org.dinky.data.vo.AiChatConfig;
 import org.dinky.service.AiChatLogService;
 import org.dinky.service.AiChatService;
 import org.dinky.service.DataBaseService;
+import org.dinky.service.JobInstanceService;
 import org.dinky.sse.SseEmitterUTF8;
 
 import java.time.LocalDateTime;
@@ -78,14 +80,16 @@ public class AiChatServiceImpl implements AiChatService {
 
     /** 表清单最多列出的表名数量（表名很短，尽量全列，否则模型看不到目标表） */
     private static final int MAX_TABLE_LIST = 300;
-    /** 表数量不超过该阈值时，才逐表附带字段详情（避免 token 爆炸） */
-    private static final int COLUMN_DETAIL_THRESHOLD = 8;
-    /** 走召回时，最多附带字段详情的表数量（召回结果已按相关度排序，取前几张即可） */
-    private static final int RECALL_COLUMN_DETAIL_TABLES = 8;
     /** 每张表最多包含的列数量 */
     private static final int MAX_COLUMNS_PER_TABLE = 40;
-    /** schema 上下文的最大字符数，超出即截断（避免 token 爆炸） */
+    /** 字段详情的字符预算：逐表累加到此为止（小于 MAX_SCHEMA_CHARS，给表清单留余量） */
+    private static final int COLUMN_BUDGET_CHARS = 20000;
+    /** schema 上下文的最大字符数，超出即截断（兜底，避免 token 爆炸） */
     private static final int MAX_SCHEMA_CHARS = 24000;
+    /** 注入上下文的编辑区内容字符上限 */
+    private static final int MAX_EDITOR_SQL_CHARS = 6000;
+    /** 注入上下文的作业报错原文字符上限 */
+    private static final int MAX_JOB_ERROR_CHARS = 1500;
     /** 最多携带的历史对话轮次（一问一答算一轮，此处按消息条数算） */
     private static final int MAX_HISTORY_MESSAGES = 10;
 
@@ -94,6 +98,7 @@ public class AiChatServiceImpl implements AiChatService {
     private final SqlVerifier sqlVerifier;
     private final AiChatRateLimiter rateLimiter;
     private final AiChatLogService aiChatLogService;
+    private final JobInstanceService jobInstanceService;
 
     private final ExecutorService chatExecutor = Executors.newCachedThreadPool();
 
@@ -392,6 +397,10 @@ public class AiChatServiceImpl implements AiChatService {
                 firstTurn ? schemaContext : "(schema 已在首轮提供，请沿用)");
         params.put(PromptStore.PLACEHOLDER_DIALECT, StrUtil.blankToDefault(request.getDialect(), "SQL"));
         params.put(PromptStore.PLACEHOLDER_SQL, StrUtil.nullToEmpty(request.getSql()));
+        // 阶段 1.0「作业上下文绑定」：编辑区内容（EXPLAIN 时 SQL 已在用户消息中给出，无需重复注入）
+        // + 当前作业最近一次执行报错（排障场景）
+        params.put(PromptStore.PLACEHOLDER_EDITOR_SQL, isExplain ? "" : buildEditorContext(request));
+        params.put(PromptStore.PLACEHOLDER_JOB_CONTEXT, buildJobContext(request));
 
         String systemPrompt = isExplain
                 ? PromptStore.render(PromptStore.EXPLAIN, params)
@@ -425,6 +434,65 @@ public class AiChatServiceImpl implements AiChatService {
     }
 
     /**
+     * 构建「当前编辑区内容」区块（阶段 1.0 作业上下文绑定）。
+     *
+     * <p>早期实现只在 EXPLAIN 动作下发编辑区内容，导致用户正常追问时模型看不到他正在写的代码；
+     * 现已改为全动作注入（EXPLAIN 除外，其 SQL 已在用户消息中给出）。
+     *
+     * @return 含标题的完整区块；编辑区为空时返回空串
+     */
+    private String buildEditorContext(AiChatRequest request) {
+        String sql = StrUtil.trimToNull(request.getSql());
+        if (sql == null) {
+            return "";
+        }
+        if (sql.length() > MAX_EDITOR_SQL_CHARS) {
+            sql = sql.substring(0, MAX_EDITOR_SQL_CHARS) + "\n... (编辑区内容过长，已截断)";
+        }
+        return "## 当前编辑区内容（用户正在 Dinky 数据开发编辑器中编写的代码）\n"
+                + "```sql\n"
+                + sql
+                + "\n```\n\n";
+    }
+
+    /**
+     * 构建「当前作业最近一次执行情况」区块（阶段 1.0，用于「为什么跑挂了」类排障提问）。
+     *
+     * <p>只取 {@link JobInstance} 的状态与报错等<b>元信息</b>，不含业务数据行。
+     * 仅在确实存在报错时注入，避免成功场景下白白占用上下文预算。
+     *
+     * @return 含标题的完整区块；无报错信息时返回空串
+     */
+    private String buildJobContext(AiChatRequest request) {
+        Integer taskId = request.getTaskId();
+        if (taskId == null) {
+            return "";
+        }
+        try {
+            JobInstance jobInstance = jobInstanceService.getJobInstanceByTaskId(taskId);
+            if (jobInstance == null || StrUtil.isBlank(jobInstance.getError())) {
+                return "";
+            }
+            String error = jobInstance.getError().trim();
+            if (error.length() > MAX_JOB_ERROR_CHARS) {
+                error = error.substring(0, MAX_JOB_ERROR_CHARS) + "\n... (报错过长，已截断)";
+            }
+            StringBuilder sb = new StringBuilder();
+            sb.append("## 当前作业最近一次执行情况（用于排障，非业务数据）\n");
+            sb.append("- 作业 id：").append(taskId).append("\n");
+            sb.append("- 状态：").append(StrUtil.nullToEmpty(jobInstance.getStatus())).append("\n");
+            if (jobInstance.getStep() != null) {
+                sb.append("- 执行步骤(step)：").append(jobInstance.getStep()).append("\n");
+            }
+            sb.append("- 报错原文：\n```\n").append(error).append("\n```\n\n");
+            return sb.toString();
+        } catch (Exception e) {
+            log.warn("Build job context failed, taskId: {}", taskId, e);
+            return "";
+        }
+    }
+
+    /**
      * 构建元数据上下文（<b>只含元数据，绝不含数据行</b>）。
      *
      * <ul>
@@ -450,53 +518,46 @@ public class AiChatServiceImpl implements AiChatService {
                 }
                 SystemConfiguration config = SystemConfiguration.getInstances();
                 int threshold = config.getLlmSchemaTableDetailThreshold();
-                int recallTopN = config.getLlmSchemaRecallTopN();
-                // 大库场景：按问题关键词召回相关表，避免把上千张表全塞进 context
-                List<Table> candidates = tables;
-                boolean recalled = tables.size() > threshold;
-                if (recalled) {
-                    candidates = TableSelector.select(tables, request.getMessage(), recallTopN);
-                }
+                // 阶段 1.5（预算自适应）：小库直接按原顺序全给；仅大库才先按与问题的相关度排序，
+                // 再由下方字符预算决定到底给出多少张表的字段。
+                // ——取代原先“召回后固定只给前 N 张字段”的做法：固定张数裁剪会把真正需要的表砍掉，
+                //   此问题在 2026-09-27 UAT 中已实测暴露（见阶段 0 计划 §9.8）。
+                List<Table> ordered =
+                        tables.size() > threshold ? TableSelector.rank(tables, request.getMessage()) : tables;
 
                 sb.append("Schema: ")
                         .append(schemaName)
                         .append(" (共 ")
                         .append(tables.size())
                         .append(" 张表");
-                if (recalled) {
-                    sb.append("，已按问题关键词召回 ")
-                            .append(candidates.size())
-                            .append(" 张相关表");
+                if (tables.size() > threshold) {
+                    sb.append("，已按与问题的相关度排序");
                 }
                 sb.append(")\n");
                 sb.append("Tables:\n");
-                int limit = Math.min(candidates.size(), MAX_TABLE_LIST);
+                int limit = Math.min(ordered.size(), MAX_TABLE_LIST);
                 for (int i = 0; i < limit; i++) {
-                    Table table = candidates.get(i);
+                    Table table = ordered.get(i);
                     sb.append("  - ").append(table.getName());
                     if (StrUtil.isNotBlank(table.getComment())) {
                         sb.append(" -- ").append(table.getComment());
                     }
                     sb.append("\n");
                 }
-                // 字段详情：全量档给全部；召回档按相关度给前 N 张（模型要用的表通常就在其中）
-                int detailLimit = recalled
-                        ? Math.min(candidates.size(), RECALL_COLUMN_DETAIL_TABLES)
-                        : candidates.size();
-                if (detailLimit > 0) {
-                    sb.append("\nColumns per table:\n");
-                    for (int i = 0; i < detailLimit; i++) {
-                        appendTableDetail(sb, databaseId, schemaName, candidates.get(i).getName());
+                // 字段详情：按上述顺序逐表装填，直到上下文预算用尽为止
+                sb.append("\nColumns per table:\n");
+                int detailGiven = 0;
+                for (int i = 0; i < limit; i++) {
+                    StringBuilder piece = new StringBuilder();
+                    appendTableDetail(piece, databaseId, schemaName, ordered.get(i).getName());
+                    if (sb.length() + piece.length() > COLUMN_BUDGET_CHARS) {
+                        sb.append("  ... (上下文预算已用尽，剩余 ")
+                                .append(limit - detailGiven)
+                                .append(" 张表只给出了表名。如需其中某张表的字段，用户可在面板顶部的表下拉中选中该表后重试。)\n");
+                        break;
                     }
-                    if (detailLimit < candidates.size()) {
-                        sb.append("  ... (仅列出相关度最高的 ")
-                                .append(detailLimit)
-                                .append(" 张表的字段，其余表只有表名)\n");
-                    }
-                } else {
-                    // 表多时逐表拉字段成本高且易超长：由模型基于表名作答，必要时引导查元数据表
-                    sb.append("\n(表数量较多，未逐表列出字段。需要某表字段时：请引导用户在左侧 Catalog 选中具体表后"
-                            + "再提问，不要自行编写 information_schema 等元数据探测 SQL。)\n");
+                    sb.append(piece);
+                    detailGiven++;
                 }
             } catch (Exception e) {
                 log.warn("Build schema context failed, databaseId: {}, schema: {}", databaseId, schemaName, e);
@@ -512,7 +573,16 @@ public class AiChatServiceImpl implements AiChatService {
     }
 
     /** 追加单表的列信息与外键关系（元数据） */
-    private void appendTableDetail(StringBuilder sb, Integer databaseId, String schemaName, String tableName) {
+    /**
+     * 把单表的列详情写入 {@code target}。
+     *
+     * <p>写入前先在临时缓冲中拼装，便于调用方在<b>拼装完成后</b>再决定是否纳入context（预算控制）。
+     *
+     * @return true 表示成功写入；false 表示获取列失败
+     */
+    private boolean appendTableDetail(
+            StringBuilder target, Integer databaseId, String schemaName, String tableName) {
+        StringBuilder sb = new StringBuilder();
         try {
             List<Column> columns = dataBaseService.listColumns(databaseId, schemaName, tableName);
             sb.append("Table: ").append(tableName);
@@ -548,9 +618,12 @@ public class AiChatServiceImpl implements AiChatService {
                 }
             }
             appendForeignKeys(sb, databaseId, schemaName, tableName);
+            target.append(sb);
+            return true;
         } catch (Exception e) {
             log.warn("List columns failed, table: {}", tableName, e);
-            sb.append("  (获取列信息失败)\n");
+            target.append("Table: ").append(tableName).append("\n  (获取列信息失败)\n");
+            return false;
         }
     }
 
