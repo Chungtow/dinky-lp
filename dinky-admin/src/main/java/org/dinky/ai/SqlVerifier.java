@@ -182,9 +182,41 @@ public class SqlVerifier {
             result.setError("未绑定数据源，无法执行校验");
             return result;
         }
+        DataBase dataBase = dataBaseService.getById(databaseId);
+        return doVerify(dataBase, sql, result);
+    }
 
+    /**
+     * 用已解析好的数据源对象执行校验。
+     *
+     * <p><b>为什么要传入 DataBase 而不是 id</b>：dinky 的租户过滤基于 ThreadLocal，而对话在
+     * <b>异步线程</b>中执行，此时租户上下文已丢失，再按 id 查询会查不到数据源。因此由 Controller
+     * 所在请求线程先取出数据源，再传入本方法。
+     */
+    public VerifyResult verify(DataBase dataBase, String sql) {
+        SqlType type = classify(sql);
+        VerifyResult result = new VerifyResult();
+        result.setSqlType(type == null ? null : type.name());
+
+        String reason = rejectReason(type);
+        if (reason != null) {
+            result.setExecuted(false);
+            result.setRejected(true);
+            result.setError(reason);
+            return result;
+        }
+        if (dataBase == null) {
+            result.setExecuted(false);
+            result.setError("未绑定数据源，无法执行校验");
+            return result;
+        }
+        return doVerify(dataBase, sql, result);
+    }
+
+    /** 统一的执行入口：超时控制 + 实际执行 */
+    private VerifyResult doVerify(DataBase dataBase, String sql, VerifyResult result) {
         int timeoutSeconds = Math.max(SystemConfiguration.getInstances().getLlmSqlExecTimeout(), 1);
-        Future<VerifyResult> future = verifyExecutor.submit(() -> doExecute(databaseId, sql));
+        Future<VerifyResult> future = verifyExecutor.submit(() -> doExecute(dataBase, sql));
         try {
             return future.get(timeoutSeconds, TimeUnit.SECONDS);
         } catch (TimeoutException e) {
@@ -193,7 +225,7 @@ public class SqlVerifier {
             result.setError("校验执行超时（超过 " + timeoutSeconds + " 秒），已中断");
             return result;
         } catch (Exception e) {
-            log.warn("SQL verify failed, databaseId: {}", databaseId, e);
+            log.warn("SQL verify failed, databaseId: {}", dataBase.getId(), e);
             result.setExecuted(false);
             result.setError("校验执行失败：" + e.getMessage());
             return result;
@@ -201,15 +233,10 @@ public class SqlVerifier {
     }
 
     /** 真正执行查询（在独立线程中运行，便于超时中断） */
-    private VerifyResult doExecute(Integer databaseId, String sql) {
+    private VerifyResult doExecute(DataBase dataBase, String sql) {
         VerifyResult result = new VerifyResult();
         result.setExecuted(true);
         long start = System.currentTimeMillis();
-        DataBase dataBase = dataBaseService.getById(databaseId);
-        if (dataBase == null) {
-            result.setError("数据源不存在（id=" + databaseId + "）");
-            return result;
-        }
         try (Driver driver = Driver.build(dataBase.getDriverConfig())) {
             JdbcSelectResult selectResult = driver.query(sql, MAX_ROWS);
             result.setCostMs(System.currentTimeMillis() - start);

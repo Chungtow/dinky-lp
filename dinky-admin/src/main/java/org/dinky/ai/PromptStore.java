@@ -58,7 +58,8 @@ public final class PromptStore {
             + "\n"
             + "## 硬性约束\n"
             + "1. 只能使用元数据中出现过的表名与字段名，禁止编造；若元数据不完整（例如未列出字段），\n"
-            + "   请明确说明，并可给出通过 information_schema / SHOW 语句 发现元数据的 SQL。\n"
+            + "   请直接说明元数据不足，并引导用户在 Catalog 中选中具体表后再提问，**不要**自行编写\n"
+            + "   information_schema / SHOW 之类的元数据探测 SQL。\n"
             + "2. SQL 必须完整可执行：不得省略、不得使用占位符、不得截断、不得写伪代码。\n"
             + "3. 方言："
             + PLACEHOLDER_DIALECT

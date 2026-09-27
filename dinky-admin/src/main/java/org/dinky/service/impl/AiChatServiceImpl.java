@@ -29,6 +29,7 @@ import org.dinky.data.dto.AiChatMessage;
 import org.dinky.data.dto.AiChatRequest;
 import org.dinky.data.model.AiChatLog;
 import org.dinky.data.model.Column;
+import org.dinky.data.model.DataBase;
 import org.dinky.data.model.ForeignKey;
 import org.dinky.data.model.SystemConfiguration;
 import org.dinky.data.model.Table;
@@ -100,8 +101,24 @@ public class AiChatServiceImpl implements AiChatService {
     public SseEmitter chat(AiChatRequest request) {
         int timeoutSeconds = Math.max(SystemConfiguration.getInstances().getLlmTimeout(), 1);
         SseEmitter emitter = new SseEmitterUTF8((timeoutSeconds + 30) * 1000L);
-        chatExecutor.execute(() -> doChat(request, emitter));
+        // 数据源必须在请求线程中解析：对话跑在异步线程，此时租户上下文（ThreadLocal）已丢失，
+        // 再按 id 查询会因租户过滤而查不到数据源（此前表现为"数据源不存在"）。
+        DataBase dataBase = resolveDataBase(request);
+        chatExecutor.execute(() -> doChat(request, emitter, dataBase));
         return emitter;
+    }
+
+    /** 解析当前作业绑定的数据源（失败时返回 null，由 SqlVerifier 给出明确提示） */
+    private DataBase resolveDataBase(AiChatRequest request) {
+        if (request == null || request.getDatabaseId() == null) {
+            return null;
+        }
+        try {
+            return dataBaseService.getById(request.getDatabaseId());
+        } catch (Exception e) {
+            log.warn("Resolve data base failed, databaseId: {}", request.getDatabaseId(), e);
+            return null;
+        }
     }
 
     @Override
@@ -116,7 +133,7 @@ public class AiChatServiceImpl implements AiChatService {
     }
 
     /** 实际对话逻辑（在异步线程中执行） */
-    private void doChat(AiChatRequest request, SseEmitter emitter) {
+    private void doChat(AiChatRequest request, SseEmitter emitter, DataBase dataBase) {
         long start = System.currentTimeMillis();
         TokenUsage totalUsage = new TokenUsage();
         AiChatLog audit = new AiChatLog();
@@ -186,7 +203,7 @@ public class AiChatServiceImpl implements AiChatService {
                     sendFrame(emitter, "sql", sql);
                     for (int attempt = 0; attempt <= maxRetry; attempt++) {
                         sendFrame(emitter, "status", "verifying");
-                        SqlVerifier.VerifyResult verifyResult = sqlVerifier.verify(request.getDatabaseId(), sql);
+                        SqlVerifier.VerifyResult verifyResult = sqlVerifier.verify(dataBase, sql);
                         sendExecResult(emitter, verifyResult);
                         finalSql = sql;
                         if (verifyResult.isSuccess()) {
@@ -463,8 +480,8 @@ public class AiChatServiceImpl implements AiChatService {
                     }
                 } else {
                     // 表多时逐表拉字段成本高且易超长：由模型基于表名作答，必要时引导查元数据表
-                    sb.append("\n(表数量较多，未逐表列出字段。需要某表字段时：让用户在该面板选中具体表，"
-                            + "或使用 information_schema / SHOW COLUMNS 等元数据查询语句。)\n");
+                    sb.append("\n(表数量较多，未逐表列出字段。需要某表字段时：请引导用户在左侧 Catalog 选中具体表后"
+                            + "再提问，不要自行编写 information_schema 等元数据探测 SQL。)\n");
                 }
             } catch (Exception e) {
                 log.warn("Build schema context failed, databaseId: {}, schema: {}", databaseId, schemaName, e);
