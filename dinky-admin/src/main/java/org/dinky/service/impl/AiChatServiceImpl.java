@@ -104,7 +104,17 @@ public class AiChatServiceImpl implements AiChatService {
         // 数据源必须在请求线程中解析：对话跑在异步线程，此时租户上下文（ThreadLocal）已丢失，
         // 再按 id 查询会因租户过滤而查不到数据源（此前表现为"数据源不存在"）。
         DataBase dataBase = resolveDataBase(request);
-        chatExecutor.execute(() -> doChat(request, emitter, dataBase));
+        // schema 也在请求线程构建：元数据接口内部按 id 反查数据源，同样依赖租户上下文
+        String built = null;
+        try {
+            if (request != null) {
+                built = buildSchemaContext(request);
+            }
+        } catch (Exception e) {
+            log.warn("Build schema context before stream failed", e);
+        }
+        final String schemaContext = built;
+        chatExecutor.execute(() -> doChat(request, emitter, dataBase, schemaContext));
         return emitter;
     }
 
@@ -133,7 +143,8 @@ public class AiChatServiceImpl implements AiChatService {
     }
 
     /** 实际对话逻辑（在异步线程中执行） */
-    private void doChat(AiChatRequest request, SseEmitter emitter, DataBase dataBase) {
+    private void doChat(
+            AiChatRequest request, SseEmitter emitter, DataBase dataBase, String prebuiltSchemaContext) {
         long start = System.currentTimeMillis();
         TokenUsage totalUsage = new TokenUsage();
         AiChatLog audit = new AiChatLog();
@@ -184,7 +195,9 @@ public class AiChatServiceImpl implements AiChatService {
                     StrUtil.blankToDefault(request.getAction(), ACTION_TEXT_TO_SQL)
                             .trim()
                             .toUpperCase());
-            String schemaContext = buildSchemaContext(request);
+            String schemaContext = StrUtil.isNotEmpty(prebuiltSchemaContext)
+                    ? prebuiltSchemaContext
+                    : buildSchemaContext(request);
             List<AiChatMessage> messages = buildMessages(request, schemaContext);
 
             StringBuilder answer = new StringBuilder();
