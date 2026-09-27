@@ -246,7 +246,10 @@ public class SqlVerifier {
             }
             result.setSuccess(selectResult.isSuccess());
             result.setError(selectResult.getError());
-            result.setRowCount(selectResult.getRowData() == null ? 0 : selectResult.getRowData().size());
+            result.setRowCount(
+                    selectResult.getRowData() == null
+                            ? 0
+                            : selectResult.getRowData().size());
             if (!selectResult.isSuccess() && StrUtil.isBlank(selectResult.getError())) {
                 result.setError("SQL 执行失败（数据源未返回具体错误）");
             }

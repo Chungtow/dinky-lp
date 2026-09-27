@@ -292,11 +292,10 @@ public class SystemConfiguration {
             .note(Status.SYS_LLM_SETTINGS_SQLVERIFYENABLE_NOTE);
 
     /** 校验失败后的自动修复重试上限（对齐 pgconsole 的 max 2 次） */
-    private final Configuration<Integer> llmSqlVerifyMaxRetry =
-            key(Status.SYS_LLM_SETTINGS_SQLVERIFYMAXRETRY)
-                    .intType()
-                    .defaultValue(2)
-                    .note(Status.SYS_LLM_SETTINGS_SQLVERIFYMAXRETRY_NOTE);
+    private final Configuration<Integer> llmSqlVerifyMaxRetry = key(Status.SYS_LLM_SETTINGS_SQLVERIFYMAXRETRY)
+            .intType()
+            .defaultValue(2)
+            .note(Status.SYS_LLM_SETTINGS_SQLVERIFYMAXRETRY_NOTE);
 
     /** 校验执行超时（秒） */
     private final Configuration<Integer> llmSqlExecTimeout = key(Status.SYS_LLM_SETTINGS_SQLEXECTIMEOUT)
@@ -305,11 +304,10 @@ public class SystemConfiguration {
             .note(Status.SYS_LLM_SETTINGS_SQLEXECTIMEOUT_NOTE);
 
     /** 是否允许执行 SHOW / DESC / EXPLAIN 等元数据语句 */
-    private final Configuration<Boolean> llmSqlExecAllowMetadata =
-            key(Status.SYS_LLM_SETTINGS_SQLEXECALLOWMETADATA)
-                    .booleanType()
-                    .defaultValue(true)
-                    .note(Status.SYS_LLM_SETTINGS_SQLEXECALLOWMETADATA_NOTE);
+    private final Configuration<Boolean> llmSqlExecAllowMetadata = key(Status.SYS_LLM_SETTINGS_SQLEXECALLOWMETADATA)
+            .booleanType()
+            .defaultValue(true)
+            .note(Status.SYS_LLM_SETTINGS_SQLEXECALLOWMETADATA_NOTE);
 
     /** 是否允许执行 DML（默认禁止） */
     private final Configuration<Boolean> llmSqlExecAllowDml = key(Status.SYS_LLM_SETTINGS_SQLEXECALLOWDML)
@@ -625,9 +623,7 @@ public class SystemConfiguration {
     }
 
     public boolean isLlmAuditEnable() {
-        return Asserts.isNull(llmAuditEnable.getValue())
-                ? llmAuditEnable.getDefaultValue()
-                : llmAuditEnable.getValue();
+        return Asserts.isNull(llmAuditEnable.getValue()) ? llmAuditEnable.getDefaultValue() : llmAuditEnable.getValue();
     }
 
     public boolean isLlmStream() {

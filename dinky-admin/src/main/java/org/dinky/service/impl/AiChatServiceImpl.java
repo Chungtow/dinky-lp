@@ -55,7 +55,6 @@ import javax.annotation.PreDestroy;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-import cn.dev33.satoken.stp.StpUtil;
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONObject;
@@ -148,8 +147,7 @@ public class AiChatServiceImpl implements AiChatService {
     }
 
     /** 实际对话逻辑（在异步线程中执行） */
-    private void doChat(
-            AiChatRequest request, SseEmitter emitter, DataBase dataBase, String prebuiltSchemaContext) {
+    private void doChat(AiChatRequest request, SseEmitter emitter, DataBase dataBase, String prebuiltSchemaContext) {
         long start = System.currentTimeMillis();
         TokenUsage totalUsage = new TokenUsage();
         AiChatLog audit = new AiChatLog();
@@ -196,13 +194,11 @@ public class AiChatServiceImpl implements AiChatService {
                 return;
             }
 
-            boolean isExplain = ACTION_EXPLAIN.equals(
-                    StrUtil.blankToDefault(request.getAction(), ACTION_TEXT_TO_SQL)
-                            .trim()
-                            .toUpperCase());
-            String schemaContext = StrUtil.isNotEmpty(prebuiltSchemaContext)
-                    ? prebuiltSchemaContext
-                    : buildSchemaContext(request);
+            boolean isExplain = ACTION_EXPLAIN.equals(StrUtil.blankToDefault(request.getAction(), ACTION_TEXT_TO_SQL)
+                    .trim()
+                    .toUpperCase());
+            String schemaContext =
+                    StrUtil.isNotEmpty(prebuiltSchemaContext) ? prebuiltSchemaContext : buildSchemaContext(request);
             List<AiChatMessage> messages = buildMessages(request, schemaContext);
 
             StringBuilder answer = new StringBuilder();
@@ -241,8 +237,7 @@ public class AiChatServiceImpl implements AiChatService {
                         messages.add(AiChatMessage.of("assistant", answer.toString()));
                         messages.add(AiChatMessage.of(
                                 "user",
-                                buildRepairPrompt(
-                                        sql, verifyResult.getError(), schemaContext, request.getDialect())));
+                                buildRepairPrompt(sql, verifyResult.getError(), schemaContext, request.getDialect())));
                         answer.setLength(0);
                         sendFrame(emitter, "content", "\n\n> 自动修复 " + retryCount + "/" + maxRetry + "：\n");
                         mergeUsage(totalUsage, generate(messages, emitter, answer));
@@ -392,9 +387,7 @@ public class AiChatServiceImpl implements AiChatService {
         boolean firstTurn = StrUtil.isBlank(request.getSessionId());
 
         Map<String, String> params = new HashMap<>(4);
-        params.put(
-                PromptStore.PLACEHOLDER_SCHEMA,
-                firstTurn ? schemaContext : "(schema 已在首轮提供，请沿用)");
+        params.put(PromptStore.PLACEHOLDER_SCHEMA, firstTurn ? schemaContext : "(schema 已在首轮提供，请沿用)");
         params.put(PromptStore.PLACEHOLDER_DIALECT, StrUtil.blankToDefault(request.getDialect(), "SQL"));
         params.put(PromptStore.PLACEHOLDER_SQL, StrUtil.nullToEmpty(request.getSql()));
         // 阶段 1.0「作业上下文绑定」：编辑区内容（EXPLAIN 时 SQL 已在用户消息中给出，无需重复注入）
@@ -449,10 +442,7 @@ public class AiChatServiceImpl implements AiChatService {
         if (sql.length() > MAX_EDITOR_SQL_CHARS) {
             sql = sql.substring(0, MAX_EDITOR_SQL_CHARS) + "\n... (编辑区内容过长，已截断)";
         }
-        return "## 当前编辑区内容（用户正在 Dinky 数据开发编辑器中编写的代码）\n"
-                + "```sql\n"
-                + sql
-                + "\n```\n\n";
+        return "## 当前编辑区内容（用户正在 Dinky 数据开发编辑器中编写的代码）\n" + "```sql\n" + sql + "\n```\n\n";
     }
 
     /**
@@ -480,7 +470,9 @@ public class AiChatServiceImpl implements AiChatService {
             StringBuilder sb = new StringBuilder();
             sb.append("## 当前作业最近一次执行情况（用于排障，非业务数据）\n");
             sb.append("- 作业 id：").append(taskId).append("\n");
-            sb.append("- 状态：").append(StrUtil.nullToEmpty(jobInstance.getStatus())).append("\n");
+            sb.append("- 状态：")
+                    .append(StrUtil.nullToEmpty(jobInstance.getStatus()))
+                    .append("\n");
             if (jobInstance.getStep() != null) {
                 sb.append("- 执行步骤(step)：").append(jobInstance.getStep()).append("\n");
             }
@@ -549,7 +541,8 @@ public class AiChatServiceImpl implements AiChatService {
                 int detailGiven = 0;
                 for (int i = 0; i < limit; i++) {
                     StringBuilder piece = new StringBuilder();
-                    appendTableDetail(piece, databaseId, schemaName, ordered.get(i).getName());
+                    appendTableDetail(
+                            piece, databaseId, schemaName, ordered.get(i).getName());
                     if (sb.length() + piece.length() > COLUMN_BUDGET_CHARS) {
                         sb.append("  ... (上下文预算已用尽，剩余 ")
                                 .append(limit - detailGiven)
@@ -580,8 +573,7 @@ public class AiChatServiceImpl implements AiChatService {
      *
      * @return true 表示成功写入；false 表示获取列失败
      */
-    private boolean appendTableDetail(
-            StringBuilder target, Integer databaseId, String schemaName, String tableName) {
+    private boolean appendTableDetail(StringBuilder target, Integer databaseId, String schemaName, String tableName) {
         StringBuilder sb = new StringBuilder();
         try {
             List<Column> columns = dataBaseService.listColumns(databaseId, schemaName, tableName);

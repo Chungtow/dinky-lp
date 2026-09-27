@@ -209,8 +209,8 @@ public class LlmClient {
             if (choices != null && !choices.isEmpty()) {
                 JSONObject message = choices.getJSONObject(0).getJSONObject("message");
                 if (message != null) {
-                    String reasoning = StrUtil.emptyToDefault(
-                            message.getStr("reasoning_content"), message.getStr("reasoning"));
+                    String reasoning =
+                            StrUtil.emptyToDefault(message.getStr("reasoning_content"), message.getStr("reasoning"));
                     if (StrUtil.isNotEmpty(reasoning) && onReasoning != null) {
                         onReasoning.accept(reasoning);
                     }
