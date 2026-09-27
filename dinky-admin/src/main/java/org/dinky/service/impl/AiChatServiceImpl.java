@@ -80,8 +80,8 @@ public class AiChatServiceImpl implements AiChatService {
     private static final int MAX_TABLE_LIST = 300;
     /** 表数量不超过该阈值时，才逐表附带字段详情（避免 token 爆炸） */
     private static final int COLUMN_DETAIL_THRESHOLD = 8;
-    /** 走召回时，最多附带字段详情的表数量（召回结果通常已较精准，但仍需限量） */
-    private static final int RECALL_COLUMN_DETAIL_TABLES = 5;
+    /** 走召回时，最多附带字段详情的表数量（召回结果已按相关度排序，取前几张即可） */
+    private static final int RECALL_COLUMN_DETAIL_TABLES = 8;
     /** 每张表最多包含的列数量 */
     private static final int MAX_COLUMNS_PER_TABLE = 40;
     /** schema 上下文的最大字符数，超出即截断（避免 token 爆炸） */
@@ -479,15 +479,17 @@ public class AiChatServiceImpl implements AiChatService {
                     }
                     sb.append("\n");
                 }
-                if (recalled || candidates.size() <= COLUMN_DETAIL_THRESHOLD) {
-                    int detailLimit = Math.min(
-                            candidates.size(), recalled ? RECALL_COLUMN_DETAIL_TABLES : COLUMN_DETAIL_THRESHOLD);
+                // 字段详情：全量档给全部；召回档按相关度给前 N 张（模型要用的表通常就在其中）
+                int detailLimit = recalled
+                        ? Math.min(candidates.size(), RECALL_COLUMN_DETAIL_TABLES)
+                        : candidates.size();
+                if (detailLimit > 0) {
                     sb.append("\nColumns per table:\n");
                     for (int i = 0; i < detailLimit; i++) {
                         appendTableDetail(sb, databaseId, schemaName, candidates.get(i).getName());
                     }
                     if (detailLimit < candidates.size()) {
-                        sb.append("  ... (仅列出前 ")
+                        sb.append("  ... (仅列出相关度最高的 ")
                                 .append(detailLimit)
                                 .append(" 张表的字段，其余表只有表名)\n");
                     }

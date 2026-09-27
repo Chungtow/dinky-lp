@@ -323,11 +323,16 @@ public class SystemConfiguration {
             .defaultValue(false)
             .note(Status.SYS_LLM_SETTINGS_SQLEXECALLOWDDL_NOTE);
 
-    /** 表数不超过该阈值时才全量带字段详情；超过则走关键词召回 */
+    /**
+     * 表数不超过该阈值时才「全量表 + 全部字段」；超过则改为「关键词召回相关表 + 相关表字段」。
+     *
+     * <p>默认值刻意取小：中等规模库（几十张表）若只给表名不给字段，模型会因看不到列而无法写 SQL
+     * （实测 45 张表的库：字段缺失时 Text-to-SQL 成功率不足 50%）。
+     */
     private final Configuration<Integer> llmSchemaTableDetailThreshold =
             key(Status.SYS_LLM_SETTINGS_SCHEMATABLEDETAILTHRESHOLD)
                     .intType()
-                    .defaultValue(50)
+                    .defaultValue(8)
                     .note(Status.SYS_LLM_SETTINGS_SCHEMATABLEDETAILTHRESHOLD_NOTE);
 
     /** 大库场景下关键词召回的表数量上限 */
