@@ -659,10 +659,13 @@ export default {
   'datastudio.aiChat.mention.recent': 'Recent',
   'datastudio.aiChat.mention.noMatch': 'No match',
   'datastudio.aiChat.mention.noDataSource': 'No datasource bound; only jobs or selection can be referenced',
-  // Phase 1b: read-only tool process
-  'datastudio.aiChat.tool.listTables': 'Listing tables of the datasource',
-  'datastudio.aiChat.tool.describeTable': 'Reading table structure',
-  'datastudio.aiChat.tool.sampleRows': 'Fetching sample rows',
+  // Phase 1b: read-only tool process (neutral phrases; prefix/suffix composed by status)
+  'datastudio.aiChat.tool.listTables': 'List tables of the datasource',
+  'datastudio.aiChat.tool.describeTable': 'Read table structure',
+  'datastudio.aiChat.tool.sampleRows': 'Fetch sample rows',
+  'datastudio.aiChat.tool.running': 'Running',
+  'datastudio.aiChat.tool.done': 'Done',
+  'datastudio.aiChat.tool.failed': 'Failed',
 
   'pages.datastudio.label.history.title': 'Job:【{name}】Execution History',
   'pages.datastudio.label.history.noData': 'Please click the job to view the job execution history',

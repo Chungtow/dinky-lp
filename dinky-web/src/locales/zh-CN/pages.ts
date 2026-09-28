@@ -594,10 +594,13 @@ export default {
   'datastudio.aiChat.mention.recent': '最近用过',
   'datastudio.aiChat.mention.noMatch': '无匹配项',
   'datastudio.aiChat.mention.noDataSource': '未绑定数据源，只能引用作业或选中片段',
-  // 阶段 1b：只读工具的过程展示
-  'datastudio.aiChat.tool.listTables': '正在查询数据源下的表清单',
-  'datastudio.aiChat.tool.describeTable': '正在读取表结构',
-  'datastudio.aiChat.tool.sampleRows': '正在取样例数据',
+  // 阶段 1b：只读工具的过程展示（词条为中性短语，前/后缀按状态由前端拼接）
+  'datastudio.aiChat.tool.listTables': '查询数据源下的表清单',
+  'datastudio.aiChat.tool.describeTable': '读取表结构',
+  'datastudio.aiChat.tool.sampleRows': '取样例数据',
+  'datastudio.aiChat.tool.running': '正在',
+  'datastudio.aiChat.tool.done': '已完成',
+  'datastudio.aiChat.tool.failed': '失败',
 
   'pages.datastudio.print.table.inputTableName': '请选择表名',
   'pages.devops.jobinfo.localenv': '本地环境',

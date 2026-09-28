@@ -358,13 +358,16 @@ public class AiChatServiceImpl implements AiChatService {
                 new AiToolLoop.Listener() {
                     @Override
                     public void onToolCall(AiToolCall call) {
+                        // status 必须与前端 AiChatToolStep.status 的三态完全一致：
+                        // running 表示已发起但尚未返回，toolResult 帧会把它更新为 success / failed
                         sendJsonFrame(
                                 emitter,
                                 "toolCall",
                                 new JSONObject()
                                         .set("toolCallId", StrUtil.nullToEmpty(call.getId()))
                                         .set("name", StrUtil.nullToEmpty(call.getName()))
-                                        .set("argsSummary", summarizeArgs(call.getArguments())));
+                                        .set("argsSummary", summarizeArgs(call.getArguments()))
+                                        .set("status", "running"));
                     }
 
                     @Override
@@ -375,7 +378,8 @@ public class AiChatServiceImpl implements AiChatService {
                                 new JSONObject()
                                         .set("toolCallId", StrUtil.nullToEmpty(call.getId()))
                                         .set("name", StrUtil.nullToEmpty(call.getName()))
-                                        .set("success", result.isSuccess())
+                                        // 用 status 而不是布尔 success：前端按三态渲染（进行中 / 成功 / 失败）
+                                        .set("status", result.isSuccess() ? "success" : "failed")
                                         .set("costMs", result.getCostMs())
                                         .set("error", StrUtil.nullToEmpty(result.getErrorMessage())));
                     }
@@ -404,10 +408,14 @@ public class AiChatServiceImpl implements AiChatService {
             JSONObject json = JSONUtil.parseObj(arguments);
             StringBuilder sb = new StringBuilder();
             for (String key : json.keySet()) {
+                if (StrUtil.isBlank(json.getStr(key))) {
+                    continue;
+                }
                 if (sb.length() > 0) {
                     sb.append(" ");
                 }
-                sb.append(json.getStr(key));
+                // 保留参数名：只显示裸值会让"两个值"无从分辨来自哪个参数
+                sb.append(key).append("=").append(json.getStr(key));
             }
             return StrUtil.sub(sb.length() > 0 ? sb.toString() : arguments, 0, MAX_TOOL_ARGS_CHARS);
         } catch (Exception e) {

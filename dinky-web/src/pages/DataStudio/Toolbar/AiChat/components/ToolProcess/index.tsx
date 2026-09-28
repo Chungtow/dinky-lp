@@ -27,6 +27,10 @@ import { AiChatToolStep } from '../../service';
  *
  * <p>模型决定调工具的那一轮<b>正文为空</b>（2026-09-28 探针实测：content 帧数为 0），
  * 若不把过程显示出来，用户看到的就是"点了提问之后黑屏几秒"——这是过程可见性的全部来源。
+ *
+ * <p><b>三态由后端驱动的 status 决定</b>：toolCall 帧下发 running，toolResult 帧覆盖为
+ * success / failed。字段名必须与后端 {@code AiToolRunResult} 侧的 SSE 帧严格一致
+ * （曾因后端发 success 布尔、前端读 status 字符串，导致终态永远停在"进行中"）。
  */
 const toolLabel = (name: string): string => {
   switch (name) {
@@ -50,19 +54,24 @@ const ToolProcess = ({ steps }: { steps?: AiChatToolStep[] }) => {
       {steps.map((step, index) => {
         const key = step.toolCallId || `${step.name}-${index}`;
         const label = toolLabel(step.name);
-        const summary = step.argsSummary ? ` ${step.argsSummary}` : '';
-        let icon = (
+        const target = step.argsSummary ? `: ${step.argsSummary}` : '';
+
+        let icon: React.ReactNode = (
           <LoadingOutlined style={{ color: 'rgba(22,119,255,0.75)', fontSize: 12 }} />
         );
-        let suffix: React.ReactNode = null;
+        let text = `${l('datastudio.aiChat.tool.running')} ${label}${target}…`;
+
         if (step.status === 'success') {
           icon = <CheckCircleOutlined style={{ color: 'rgba(82,196,26,0.85)', fontSize: 12 }} />;
-          suffix = <span style={{ opacity: 0.75 }}>{` · ${step.costMs ?? 0}ms`}</span>;
+          text = `${label}${target} · ${l('datastudio.aiChat.tool.done')} · ${step.costMs ?? 0}ms`;
         } else if (step.status === 'failed') {
           icon = <CloseCircleOutlined style={{ color: 'rgba(255,77,79,0.85)', fontSize: 12 }} />;
           // 失败文案已在服务端脱敏（不含连接串 / 账号 / 内网地址），可直接展示
-          suffix = step.error ? <span style={{ opacity: 0.75 }}>{` · ${step.error}`}</span> : null;
+          text = `${label}${target} · ${l('datastudio.aiChat.tool.failed')}${
+            step.error ? ` · ${step.error}` : ''
+          }`;
         }
+
         return (
           <div
             key={key}
@@ -77,11 +86,7 @@ const ToolProcess = ({ steps }: { steps?: AiChatToolStep[] }) => {
             }}
           >
             {icon}
-            <span style={{ whiteSpace: 'pre-wrap' }}>
-              {label}
-              {summary}
-              {suffix}
-            </span>
+            <span style={{ whiteSpace: 'pre-wrap' }}>{text}</span>
           </div>
         );
       })}
