@@ -21,10 +21,12 @@ import { isSql } from '@/pages/DataStudio/utils';
 import { DataStudioActionType } from '@/pages/DataStudio/data.d';
 import { mapDispatchToProps } from '@/pages/DataStudio/DvaFunction';
 import { showDataSourceTable } from '@/pages/DataStudio/Toolbar/DataSource/service';
+import ToolProcess from './components/ToolProcess';
 import {
   AiChatConfig,
   AiChatMentionItem,
   AiChatMessage,
+  AiChatToolStep,
   AiChatVerify,
   aiChatStream,
   getAiChatConfig
@@ -290,6 +292,31 @@ const AiChat = (props: AiChatProps) => {
     });
   };
 
+  /**
+   * 追加或更新一条工具步骤（阶段 1b）。
+   *
+   * <p>后端按 toolCallId 先后下发 toolCall（已发起）与 toolResult（已结束），这里据此把同一条
+   * 记录从"执行中"就地更新为"成功/失败"，而不是新增两条——消息是流式追加的，不支持重排。
+   */
+  const upsertToolStep = (step: AiChatToolStep) => {
+    setMessages((prev) => {
+      const next = [...prev];
+      const last = next[next.length - 1];
+      if (!last || last.role !== 'assistant') {
+        return next;
+      }
+      const tools = [...(last.tools ?? [])];
+      const index = tools.findIndex((item) => item.toolCallId === step.toolCallId);
+      if (index >= 0) {
+        tools[index] = { ...tools[index], ...step };
+      } else {
+        tools.push(step);
+      }
+      next[next.length - 1] = { ...last, tools };
+      return next;
+    });
+  };
+
   const handleSend = async (action: 'TEXT_TO_SQL' | 'EXPLAIN') => {
     const text = inputValue.trim();
     if (action === 'TEXT_TO_SQL' && !text) {
@@ -341,7 +368,7 @@ const AiChat = (props: AiChatProps) => {
           // 阶段 1a（1.4）：@ 显式引用，后端最高优先级且不裁剪
           mentions: mentions.length > 0 ? mentions : undefined
         },
-        ({ content, reasoning, sql, status, execResult }) => {
+        ({ content, reasoning, sql, status, execResult, toolCall, toolResult }) => {
           if (reasoning) {
             appendReasoning(reasoning);
           }
@@ -356,6 +383,12 @@ const AiChat = (props: AiChatProps) => {
           }
           if (execResult) {
             updateLastVerify(execResult);
+          }
+          if (toolCall) {
+            upsertToolStep(toolCall);
+          }
+          if (toolResult) {
+            upsertToolStep(toolResult);
           }
         },
         (errorMessage) => {
@@ -683,6 +716,9 @@ const AiChat = (props: AiChatProps) => {
                       </div>
                     ) : null}
                   </div>
+                ) : null}
+                {item.role === 'assistant' && item.tools && item.tools.length > 0 ? (
+                  <ToolProcess steps={item.tools} />
                 ) : null}
                 {item.role === 'assistant' ? (
                   renderContent(item.content)

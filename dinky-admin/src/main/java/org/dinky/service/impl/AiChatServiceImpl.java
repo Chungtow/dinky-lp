@@ -20,6 +20,11 @@
 package org.dinky.service.impl;
 
 import org.dinky.ai.AiChatRateLimiter;
+import org.dinky.ai.AiToolCall;
+import org.dinky.ai.AiToolContext;
+import org.dinky.ai.AiToolLoop;
+import org.dinky.ai.AiToolResult;
+import org.dinky.ai.AiToolRunResult;
 import org.dinky.ai.LlmClient;
 import org.dinky.ai.PromptStore;
 import org.dinky.ai.SqlVerifier;
@@ -59,6 +64,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONObject;
+import cn.hutool.json.JSONUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
@@ -100,6 +106,12 @@ public class AiChatServiceImpl implements AiChatService {
     private static final int MAX_JOB_ERROR_CHARS = 1500;
     /** 最多携带的历史对话轮次（一问一答算一轮，此处按消息条数算） */
     private static final int MAX_HISTORY_MESSAGES = 10;
+    /** 单个工具返回给模型的字符上限（超长清单既费 token 又挤占上下文） */
+    private static final int MAX_TOOL_RESULT_CHARS = 8000;
+    /** 审计列 tool_calls 的字符上限 */
+    private static final int MAX_TOOL_AUDIT_CHARS = 2000;
+    /** 工具参数在一帧里展示的字符上限 */
+    private static final int MAX_TOOL_ARGS_CHARS = 60;
 
     private final DataBaseService dataBaseService;
     private final LlmClient llmClient;
@@ -107,13 +119,22 @@ public class AiChatServiceImpl implements AiChatService {
     private final AiChatRateLimiter rateLimiter;
     private final AiChatLogService aiChatLogService;
     private final JobInstanceService jobInstanceService;
+    private final AiToolLoop toolLoop;
 
     private final ExecutorService chatExecutor = Executors.newCachedThreadPool();
 
     @Override
     public SseEmitter chat(AiChatRequest request) {
-        int timeoutSeconds = Math.max(SystemConfiguration.getInstances().getLlmTimeout(), 1);
-        SseEmitter emitter = new SseEmitterUTF8((timeoutSeconds + 30) * 1000L);
+        SystemConfiguration chatConfig = SystemConfiguration.getInstances();
+        int timeoutSeconds = Math.max(chatConfig.getLlmTimeout(), 1);
+        // 工具循环会把「多轮 LLM 请求」与「多次工具执行」串接起来，原先「单次 LLM 超时 + 30s」
+        // 的 emitter 超时已不再够用，需按轮数与工具超时放大
+        int toolRounds = Math.max(chatConfig.getLlmToolCallMaxRounds(), 1);
+        int toolTimeout = Math.max(chatConfig.getLlmToolTimeoutSeconds(), 1);
+        long emitterTimeoutMs = chatConfig.isLlmToolCallEnable()
+                ? (timeoutSeconds * (toolRounds + 1L) + toolTimeout * (long) toolRounds + 30L) * 1000L
+                : (timeoutSeconds + 30L) * 1000L;
+        SseEmitter emitter = new SseEmitterUTF8(emitterTimeoutMs);
         // 数据源必须在请求线程中解析：对话跑在异步线程，此时租户上下文（ThreadLocal）已丢失，
         // 再按 id 查询会因租户过滤而查不到数据源（此前表现为"数据源不存在"）。
         DataBase dataBase = resolveDataBase(request);
@@ -211,7 +232,13 @@ public class AiChatServiceImpl implements AiChatService {
             List<AiChatMessage> messages = buildMessages(request, schemaContext);
 
             StringBuilder answer = new StringBuilder();
-            mergeUsage(totalUsage, generate(messages, emitter, answer));
+            AiToolRunResult toolRun = null;
+            if (config.isLlmToolCallEnable()) {
+                toolRun = runToolLoop(request, messages, emitter, answer, dataBase, config);
+                mergeUsage(totalUsage, toolRun.getUsage());
+            } else {
+                mergeUsage(totalUsage, generate(messages, emitter, answer));
+            }
 
             int retryCount = 0;
             String finalSql = null;
@@ -263,6 +290,13 @@ public class AiChatServiceImpl implements AiChatService {
             audit.setExecStatus(execStatus);
             audit.setExecError(StrUtil.sub(execError, 0, 2000));
             audit.setRetryCount(retryCount);
+            if (toolRun != null) {
+                audit.setToolCallCount(toolRun.getToolCallCount());
+                String logs = toolRun.getToolCallLogs() == null
+                        ? ""
+                        : toolRun.getToolCallLogs().toString();
+                audit.setToolCalls(StrUtil.sub(logs, 0, MAX_TOOL_AUDIT_CHARS));
+            }
             audit.setSuccess(!"failed".equals(execStatus));
             emitter.complete();
         } catch (Exception e) {
@@ -287,6 +321,106 @@ public class AiChatServiceImpl implements AiChatService {
                 },
                 delta -> sendFrame(emitter, "reasoning", delta));
         return usage == null ? new TokenUsage() : usage;
+    }
+
+    /**
+     * 运行工具循环（阶段 1b）。
+     *
+     * <p>它与下面的 SQL 修复重试是两个<b>独立</b>闭环：工具循环解决"模型自己去查"，修复重试解决
+     * "照着报错改"。这里只做前者，但 {@code messages} 会被追加工具轮次的消息，后者继续复用。
+     *
+     * <p><b>为什么可以放心让模型自己查</b>：list_tables / describe_table 只返回元数据；唯一触碰业务
+     * 数据行的 sample_rows 默认不注册（即不出现在下发给模型的工具清单里），且其结果与调用过程
+     * 全程入审计。
+     */
+    private AiToolRunResult runToolLoop(
+            AiChatRequest request,
+            List<AiChatMessage> messages,
+            SseEmitter emitter,
+            StringBuilder answer,
+            DataBase dataBase,
+            SystemConfiguration config) {
+        AiToolContext context = AiToolContext.create(
+                dataBase,
+                StrUtil.nullToEmpty(request.getSchemaName()),
+                request.getUserId(),
+                null,
+                Math.max(config.getLlmToolTimeoutSeconds(), 1),
+                MAX_TOOL_RESULT_CHARS);
+        return toolLoop.run(
+                messages,
+                context,
+                delta -> {
+                    answer.append(delta);
+                    sendFrame(emitter, "content", delta);
+                },
+                delta -> sendFrame(emitter, "reasoning", delta),
+                new AiToolLoop.Listener() {
+                    @Override
+                    public void onToolCall(AiToolCall call) {
+                        // status 必须与前端 AiChatToolStep.status 的三态完全一致：
+                        // running 表示已发起但尚未返回，toolResult 帧会把它更新为 success / failed
+                        sendJsonFrame(
+                                emitter,
+                                "toolCall",
+                                new JSONObject()
+                                        .set("toolCallId", StrUtil.nullToEmpty(call.getId()))
+                                        .set("name", StrUtil.nullToEmpty(call.getName()))
+                                        .set("argsSummary", summarizeArgs(call.getArguments()))
+                                        .set("status", "running"));
+                    }
+
+                    @Override
+                    public void onToolResult(AiToolCall call, AiToolResult result) {
+                        sendJsonFrame(
+                                emitter,
+                                "toolResult",
+                                new JSONObject()
+                                        .set("toolCallId", StrUtil.nullToEmpty(call.getId()))
+                                        .set("name", StrUtil.nullToEmpty(call.getName()))
+                                        // 用 status 而不是布尔 success：前端按三态渲染（进行中 / 成功 / 失败）
+                                        .set("status", result.isSuccess() ? "success" : "failed")
+                                        .set("costMs", result.getCostMs())
+                                        .set("error", StrUtil.nullToEmpty(result.getErrorMessage())));
+                    }
+
+                    @Override
+                    public void onRoundCompleted(int round, int maxRounds) {
+                        // 心跳帧：既保活 SseEmitter，也让用户看到"还在查"而不是黑屏等待
+                        sendJsonFrame(
+                                emitter,
+                                "heartbeat",
+                                new JSONObject().set("round", round).set("maxRounds", maxRounds));
+                    }
+                });
+    }
+
+    /**
+     * 把工具参数压成一句人类可读的摘要：{@code {"tableName":"tc_users"}} → {@code tc_users}。
+     *
+     * <p>参数只用于过程展示，不打真实请求体——展示层不需要完整 JSON，短摘要更利于阅读。
+     */
+    private String summarizeArgs(String arguments) {
+        if (StrUtil.isBlank(arguments)) {
+            return "";
+        }
+        try {
+            JSONObject json = JSONUtil.parseObj(arguments);
+            StringBuilder sb = new StringBuilder();
+            for (String key : json.keySet()) {
+                if (StrUtil.isBlank(json.getStr(key))) {
+                    continue;
+                }
+                if (sb.length() > 0) {
+                    sb.append(" ");
+                }
+                // 保留参数名：只显示裸值会让"两个值"无从分辨来自哪个参数
+                sb.append(key).append("=").append(json.getStr(key));
+            }
+            return StrUtil.sub(sb.length() > 0 ? sb.toString() : arguments, 0, MAX_TOOL_ARGS_CHARS);
+        } catch (Exception e) {
+            return StrUtil.sub(arguments, 0, MAX_TOOL_ARGS_CHARS);
+        }
     }
 
     /** 构造"依据真实报错修复 SQL"的提示词 */

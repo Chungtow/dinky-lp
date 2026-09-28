@@ -34,12 +34,29 @@ export type AiChatVerify = {
   error?: string;
 };
 
+/**
+ * 一次工具调用的展示状态（阶段 1b：只读工具）。
+ *
+ * <p>后端按 toolCallId 先后下发 toolCall（已发起）与 toolResult（已结束）两帧，前端据此把同一条
+ * 记录从"执行中"更新为"成功/失败"。
+ */
+export type AiChatToolStep = {
+  toolCallId: string;
+  name: string;
+  argsSummary?: string;
+  status: 'running' | 'success' | 'failed';
+  costMs?: number;
+  error?: string;
+};
+
 /** 页面内的一条消息（reasoning 为模型的思考过程，仅部分模型提供） */
 export type AiChatMessage = {
   role: AiChatRole;
   content: string;
   reasoning?: string;
   verify?: AiChatVerify;
+  /** 工具调用过程；只能按 toolCallId 追加或就地更新，不做重排 */
+  tools?: AiChatToolStep[];
 };
 
 /** 前端可用的 AI 配置（不含密钥） */
@@ -105,6 +122,10 @@ export const aiChatStream = async (
     sql?: string;
     status?: string;
     execResult?: AiChatVerify;
+    /** 工具已发起（可能尚在执行） */
+    toolCall?: AiChatToolStep;
+    /** 工具执行结束（成功或失败） */
+    toolResult?: AiChatToolStep;
   }) => void,
   onError?: (message: string) => void,
   signal?: AbortSignal
@@ -160,6 +181,14 @@ export const aiChatStream = async (
         if (frame?.execResult && typeof frame.execResult === 'object') {
           onFrame({ execResult: frame.execResult });
         }
+        if (frame?.toolCall && typeof frame.toolCall === 'object') {
+          onFrame({ toolCall: frame.toolCall });
+        }
+        if (frame?.toolResult && typeof frame.toolResult === 'object') {
+          onFrame({ toolResult: frame.toolResult });
+        }
+        // 其余帧（如 heartbeat）无需处理：此处刻意保持「未知帧静默丢弃」，
+        // 避免把结构化数据误当成正文拼接出来。
         if (typeof frame?.error === 'string' && frame.error.length > 0) {
           onError?.(frame.error);
         }

@@ -91,6 +91,14 @@ public class AiChatLog implements Serializable {
     @ApiModelProperty(value = "Duration Ms", dataType = "Long", notes = "端到端耗时")
     private Long durationMs;
 
+    /** 阶段 1b：本次对话的工具调用次数（0 表示未使用工具） */
+    @ApiModelProperty(value = "Tool Call Count", dataType = "Integer", notes = "工具调用次数")
+    private Integer toolCallCount;
+
+    /** 阶段 1b：工具调用摘要 JSON（工具名 / 参数 / 成败 / 耗时），已做字符限制 */
+    @ApiModelProperty(value = "Tool Calls", dataType = "String", notes = "工具调用明细摘要 JSON")
+    private String toolCalls;
+
     @ApiModelProperty(value = "Success", dataType = "Boolean", notes = "整体是否成功")
     private Boolean success;
 

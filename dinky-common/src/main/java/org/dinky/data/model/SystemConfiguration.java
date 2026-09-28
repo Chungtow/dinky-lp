@@ -392,6 +392,54 @@ public class SystemConfiguration {
             .defaultValue(true)
             .note(Status.SYS_LLM_SETTINGS_STREAM_NOTE);
 
+    // ==================== AI / LLM：阶段 1b 只读工具（Agent Loop） ====================
+
+    /**
+     * 工具调用总开关。
+     *
+     * <p>关闭时{@code AiToolLoop} 不被启用，行为与阶段 1a 完全一致——这是上线后出现意料之外行为时
+     * 的第一条退路。
+     */
+    private final Configuration<Boolean> llmToolCallEnable = key(Status.SYS_LLM_SETTINGS_TOOLCALLENABLE)
+            .booleanType()
+            .defaultValue(true)
+            .note(Status.SYS_LLM_SETTINGS_TOOLCALLENABLE_NOTE);
+
+    /**
+     * 是否开放触碰业务数据行的 sample_rows 工具。
+     *
+     * <p>默认关闭：元数据红线要求「业务数据入 LLM 必须显式授权」。关闭时该工具<b>不会出现在
+     * 下发给模型的 tools 里</b>，而不是下发后再拒绝。
+     */
+    private final Configuration<Boolean> llmToolSampleRowsEnable = key(Status.SYS_LLM_SETTINGS_TOOLSAMPLEROWSENABLE)
+            .booleanType()
+            .defaultValue(false)
+            .note(Status.SYS_LLM_SETTINGS_TOOLSAMPLEROWSENABLE_NOTE);
+
+    /** 一次对话最多进行多少轮工具调用（一轮 = 一次完整 LLM 请求） */
+    private final Configuration<Integer> llmToolCallMaxRounds = key(Status.SYS_LLM_SETTINGS_TOOLCALLMAXROUNDS)
+            .intType()
+            .defaultValue(3)
+            .note(Status.SYS_LLM_SETTINGS_TOOLCALLMAXROUNDS_NOTE);
+
+    /** 单个工具的执行超时（秒）：元数据查询卡住时不能拖垮整个对话 */
+    private final Configuration<Integer> llmToolTimeoutSeconds = key(Status.SYS_LLM_SETTINGS_TOOLTIMEOUTSECONDS)
+            .intType()
+            .defaultValue(10)
+            .note(Status.SYS_LLM_SETTINGS_TOOLTIMEOUTSECONDS_NOTE);
+
+    /**
+     * 工具轮是否保留 thinking。
+     *
+     * <p>默认关闭：2026-09-28 探针实测 thinking 默认开启时吃掉约 75% 生成预算
+     * （completion 147 vs 38 tokens，延迟 1.34s vs 1.02s），而工具决策轮的输出只是一个结构化 JSON。
+     * 若实测发现工具命中率下降，改回 true 即可，无需改代码。
+     */
+    private final Configuration<Boolean> llmToolThinkingEnabled = key(Status.SYS_LLM_SETTINGS_TOOLTHINKINGENABLED)
+            .booleanType()
+            .defaultValue(false)
+            .note(Status.SYS_LLM_SETTINGS_TOOLTHINKINGENABLED_NOTE);
+
     private final Configuration<Boolean> metricsSysEnable = key(Status.SYS_METRICS_SETTINGS_SYS_ENABLE)
             .booleanType()
             .defaultValue(false)
@@ -672,6 +720,41 @@ public class SystemConfiguration {
 
     public boolean isLlmStream() {
         return Asserts.isNull(llmStream.getValue()) ? llmStream.getDefaultValue() : llmStream.getValue();
+    }
+
+    /** @return 是否允许模型调用只读工具（关闭后行为与阶段 1a 一致） */
+    public boolean isLlmToolCallEnable() {
+        return Asserts.isNull(llmToolCallEnable.getValue())
+                ? llmToolCallEnable.getDefaultValue()
+                : llmToolCallEnable.getValue();
+    }
+
+    /** @return 是否开放触碰业务数据行的 sample_rows 工具 */
+    public boolean isLlmToolSampleRowsEnable() {
+        return Asserts.isNull(llmToolSampleRowsEnable.getValue())
+                ? llmToolSampleRowsEnable.getDefaultValue()
+                : llmToolSampleRowsEnable.getValue();
+    }
+
+    /** @return 一次对话最多进行多少轮工具调用 */
+    public int getLlmToolCallMaxRounds() {
+        return Asserts.isNull(llmToolCallMaxRounds.getValue())
+                ? llmToolCallMaxRounds.getDefaultValue()
+                : llmToolCallMaxRounds.getValue();
+    }
+
+    /** @return 单个工具的执行超时（秒） */
+    public int getLlmToolTimeoutSeconds() {
+        return Asserts.isNull(llmToolTimeoutSeconds.getValue())
+                ? llmToolTimeoutSeconds.getDefaultValue()
+                : llmToolTimeoutSeconds.getValue();
+    }
+
+    /** @return 工具轮是否保留 thinking（默认关闭，详见字段注释） */
+    public boolean isLlmToolThinkingEnabled() {
+        return Asserts.isNull(llmToolThinkingEnabled.getValue())
+                ? llmToolThinkingEnabled.getDefaultValue()
+                : llmToolThinkingEnabled.getValue();
     }
 
     public int GetJobIdWaitValue() {
