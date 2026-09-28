@@ -43,8 +43,9 @@ import { activeTab, createNewPanel } from '@/pages/DataStudio/DockLayoutFunction
 import * as Algorithm from './Algorithm';
 import { PanelData } from 'rc-dock/lib/DockData';
 import { useAsyncEffect } from 'ahooks';
+import type { editor } from 'monaco-editor';
 import { useTheme } from '@/hooks/useThemeValue';
-import { DataStudioContext } from '@/pages/DataStudio/DataStudioContext';
+import { DataStudioContext, EditorRegistry } from '@/pages/DataStudio/DataStudioContext';
 import './css/index.less';
 import { getTenantByLocalStorage } from '@/utils/function';
 import FooterContainer from '@/pages/DataStudio/FooterContainer';
@@ -507,8 +508,40 @@ const DataStudio: React.FC = (props: any) => {
       list
     });
   };
+  // 阶段 1a：编辑器实例登记表——AI Chat 需读取「用户在编辑区选中的片段」（1.0.4）
+  const editorsRef = useRef<Map<string, editor.IStandaloneCodeEditor>>(new Map());
+  const editorRegistry = useMemo<EditorRegistry>(
+    () => ({
+      register: (taskId: string, instance: editor.IStandaloneCodeEditor) => {
+        editorsRef.current.set(String(taskId), instance);
+      },
+      unregister: (taskId: string) => {
+        editorsRef.current.delete(String(taskId));
+      },
+      getSelection: (taskId?: string) => {
+        if (!taskId) {
+          return '';
+        }
+        const instance = editorsRef.current.get(String(taskId));
+        if (!instance) {
+          return '';
+        }
+        try {
+          const selection = instance.getSelection();
+          if (!selection || selection.isEmpty()) {
+            return '';
+          }
+          return instance.getModel()?.getValueInRange(selection) ?? '';
+        } catch (e) {
+          // 编辑器已卸载 / 已 dispose：静默返回空串，不阻断提问主流程
+          return '';
+        }
+      }
+    }),
+    []
+  );
   return (
-    <DataStudioContext.Provider value={{ theme: theme }}>
+    <DataStudioContext.Provider value={{ theme: theme, editorRegistry }}>
       <ConfigProvider
         theme={{
           token: {

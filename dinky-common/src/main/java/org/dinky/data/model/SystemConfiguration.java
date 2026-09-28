@@ -339,6 +339,29 @@ public class SystemConfiguration {
             .defaultValue(20)
             .note(Status.SYS_LLM_SETTINGS_SCHEMARECALLTOPN_NOTE);
 
+    /**
+     * 阶段 1a 上下文预算（字符数）：schema 区块总上限。
+     *
+     * <p>原为硬编码常量。现代模型 context window 普遍 128K~1M，24000 属保守值；
+     * 调大需结合「准确率 / p95 延迟 / 成本」实测（见阶段 1 计划 §3.4.5），故改为可配置。
+     */
+    private final Configuration<Integer> llmSchemaMaxChars = key(Status.SYS_LLM_SETTINGS_SCHEMAMAXCHARS)
+            .intType()
+            .defaultValue(24000)
+            .note(Status.SYS_LLM_SETTINGS_SCHEMAMAXCHARS_NOTE);
+
+    /** 阶段 1a 上下文预算（字符数）：逐表累加字段详情的预算上限 */
+    private final Configuration<Integer> llmColumnBudgetChars = key(Status.SYS_LLM_SETTINGS_COLUMNBUDGETCHARS)
+            .intType()
+            .defaultValue(20000)
+            .note(Status.SYS_LLM_SETTINGS_COLUMNBUDGETCHARS_NOTE);
+
+    /** 阶段 1a 上下文预算（字符数）：编辑区代码块上限 */
+    private final Configuration<Integer> llmEditorSqlMaxChars = key(Status.SYS_LLM_SETTINGS_EDITORSQLMAXCHARS)
+            .intType()
+            .defaultValue(6000)
+            .note(Status.SYS_LLM_SETTINGS_EDITORSQLMAXCHARS_NOTE);
+
     /** 单用户每分钟请求上限（0 表示不限） */
     private final Configuration<Integer> llmRateLimitPerMinute = key(Status.SYS_LLM_SETTINGS_RATELIMITPERMINUTE)
             .intType()
@@ -602,6 +625,27 @@ public class SystemConfiguration {
         return Asserts.isNull(llmSchemaRecallTopN.getValue())
                 ? llmSchemaRecallTopN.getDefaultValue()
                 : llmSchemaRecallTopN.getValue();
+    }
+
+    /** @return schema 上下文区块的字符总上限（阶段 1a 起可配置） */
+    public int getLlmSchemaMaxChars() {
+        return Asserts.isNull(llmSchemaMaxChars.getValue())
+                ? llmSchemaMaxChars.getDefaultValue()
+                : llmSchemaMaxChars.getValue();
+    }
+
+    /** @return 逐表累加字段详情的字符预算上限（阶段 1a 起可配置） */
+    public int getLlmColumnBudgetChars() {
+        return Asserts.isNull(llmColumnBudgetChars.getValue())
+                ? llmColumnBudgetChars.getDefaultValue()
+                : llmColumnBudgetChars.getValue();
+    }
+
+    /** @return 编辑区代码块的字符上限（阶段 1a 起可配置） */
+    public int getLlmEditorSqlMaxChars() {
+        return Asserts.isNull(llmEditorSqlMaxChars.getValue())
+                ? llmEditorSqlMaxChars.getDefaultValue()
+                : llmEditorSqlMaxChars.getValue();
     }
 
     public int getLlmRateLimitPerMinute() {

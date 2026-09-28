@@ -50,6 +50,19 @@ export type AiChatConfig = {
   hasApiKey?: boolean;
 };
 
+/**
+ * {@code @} 引用项（与后端 {@code AiChatMention} 一一对应）。
+ *
+ * <p>type 预留 knowledge：后续「语料包」能力可直接复用本结构，前端无需改协议。
+ */
+export type AiChatMentionItem = {
+  type: 'table' | 'job' | 'selection' | 'knowledge';
+  schemaName?: string;
+  name: string;
+  /** 片段正文（selection / job 携带），仅编辑器文本，不含业务数据行 */
+  content?: string;
+};
+
 /** 对话请求体：只携带元数据定位信息，绝不携带业务数据 */
 export type AiChatRequestBody = {
   action?: 'TEXT_TO_SQL' | 'EXPLAIN';
@@ -61,6 +74,16 @@ export type AiChatRequestBody = {
   tableName?: string;
   dialect?: string;
   sql?: string;
+  /** 当前作业 id（阶段 1.0 已在使用，此前类型漏声明） */
+  taskId?: number;
+  /** 编辑区选中片段：非空时后端优先采用它，而非 sql 全文（阶段 1a：1.0.4） */
+  selectedSql?: string;
+  /** 上下文范围档位（阶段 1a：1.1） */
+  contextScope?: 'current' | 'all' | 'custom';
+  /** custom 档位下勾选的表名 */
+  customTables?: string[];
+  /** {@code @} 显式引用项：最高优先级，后端不做预算裁剪 */
+  mentions?: AiChatMentionItem[];
 };
 
 export const getAiChatConfig = async (): Promise<AiChatConfig> => {

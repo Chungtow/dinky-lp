@@ -645,6 +645,20 @@ export default {
   'datastudio.aiChat.verify.failed': 'Execution failed',
   'datastudio.aiChat.verify.rejected': 'Verification skipped',
   'datastudio.aiChat.modelTip': 'Current model, configurable in System Config - AI Settings',
+  // Stage 1a: context scope
+  'datastudio.aiChat.scopeTip': 'Context scope: which tables are sent to the model',
+  'datastudio.aiChat.scopeCurrent': 'Current',
+  'datastudio.aiChat.scopeAll': 'All',
+  'datastudio.aiChat.scopeCustom': 'Custom',
+  'datastudio.aiChat.customTables': 'Pick tables for this question',
+  // Stage 1a: @ mention
+  'datastudio.aiChat.mention.groupTable': 'Table',
+  'datastudio.aiChat.mention.groupJob': 'Job',
+  'datastudio.aiChat.mention.groupSelection': 'Selection',
+  'datastudio.aiChat.mention.selectionName': 'Selected snippet in editor',
+  'datastudio.aiChat.mention.recent': 'Recent',
+  'datastudio.aiChat.mention.noMatch': 'No match',
+  'datastudio.aiChat.mention.noDataSource': 'No datasource bound; only jobs or selection can be referenced',
 
   'pages.datastudio.label.history.title': 'Job:【{name}】Execution History',
   'pages.datastudio.label.history.noData': 'Please click the job to view the job execution history',

@@ -448,6 +448,13 @@ public enum Status {
     SYS_LLM_SETTINGS_AUDITENABLE_NOTE(245, "sys.llm.settings.auditEnable.note"),
     SYS_LLM_SETTINGS_STREAM(246, "sys.llm.settings.stream"),
     SYS_LLM_SETTINGS_STREAM_NOTE(247, "sys.llm.settings.stream.note"),
+    /** 阶段 1a：上下文预算参数化（原硬编码常量，改为可配置，便于按模型窗口与实测效果调档） */
+    SYS_LLM_SETTINGS_SCHEMAMAXCHARS(248, "sys.llm.settings.schemaMaxChars"),
+    SYS_LLM_SETTINGS_SCHEMAMAXCHARS_NOTE(249, "sys.llm.settings.schemaMaxChars.note"),
+    SYS_LLM_SETTINGS_COLUMNBUDGETCHARS(250, "sys.llm.settings.columnBudgetChars"),
+    SYS_LLM_SETTINGS_COLUMNBUDGETCHARS_NOTE(251, "sys.llm.settings.columnBudgetChars.note"),
+    SYS_LLM_SETTINGS_EDITORSQLMAXCHARS(252, "sys.llm.settings.editorSqlMaxChars"),
+    SYS_LLM_SETTINGS_EDITORSQLMAXCHARS_NOTE(253, "sys.llm.settings.editorSqlMaxChars.note"),
     SYS_METRICS_SETTINGS_SYS_ENABLE(148, "sys.metrics.settings.sys.enable"),
     SYS_METRICS_SETTINGS_SYS_ENABLE_NOTE(149, "sys.metrics.settings.sys.enable.note"),
     SYS_METRICS_SETTINGS_SYS_GATHERTIMING(150, "sys.metrics.settings.sys.gatherTiming"),

@@ -20,7 +20,7 @@
 import { CenterTab, DataStudioState } from '@/pages/DataStudio/model';
 import { Button, Col, Divider, Flex, Row, Skeleton, TabsProps } from 'antd';
 import '../index.less';
-import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
+import React, { memo, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { registerEditorKeyBindingAndAction } from '@/utils/function';
 import { Monaco } from '@monaco-editor/react';
 import { Panel, PanelGroup } from 'react-resizable-panels';
@@ -80,6 +80,7 @@ import {
 } from '@/pages/DataStudio/service';
 import { l } from '@/utils/intl';
 import { editor } from 'monaco-editor';
+import { DataStudioContext } from '@/pages/DataStudio/DataStudioContext';
 import { DataStudioActionType } from '@/pages/DataStudio/data.d';
 import {
   getDataByParams,
@@ -143,6 +144,8 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
   const { params, title, id } = props.tabData as CenterTab;
   const containerRef = useRef<HTMLDivElement>(null);
   const editorInstance = useRef<editor.IStandaloneCodeEditor>(null);
+  // 阶段 1a：全局编辑器注册表（AI Chat 读取选中片段用）
+  const { editorRegistry } = useContext(DataStudioContext);
   const [codeEditorWidth, setCodeEditorWidth] = useState(0);
 
   const [selectRightToolbar, setSelectRightToolbar] = useState<string | undefined>(undefined);
@@ -324,6 +327,8 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
     editorInstance.current = editor;
     // @ts-ignore
     editor['id'] = currentState.taskId;
+    // 阶段 1a：登记到全局编辑器注册表，供 AI Chat 读取编辑区选中片段（1.0.4）
+    editorRegistry?.register(String(currentState.taskId), editor);
     registerEditorKeyBindingAndAction(editor);
   };
 
@@ -355,6 +360,11 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
     }
     return [currentState.type, currentState.clusterConfigurationId];
   };
+  /** 阶段 1a：组件卸载时注销编辑器实例，避免 AI Chat 读到已 dispose 的 monaco 实例 */
+  useEffect(() => {
+    const taskId = String(currentState?.taskId);
+    return () => editorRegistry?.unregister(taskId);
+  }, [currentState?.taskId]);
   /**
    * AI Chat：把生成的 SQL 插入到当前编辑器的光标处。
    * 仅对当前激活的 tab 生效；处理完成后立即清空 action，避免被其它 tab 重复消费。
