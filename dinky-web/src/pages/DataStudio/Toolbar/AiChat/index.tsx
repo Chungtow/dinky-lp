@@ -200,6 +200,10 @@ const AiChat = (props: AiChatProps) => {
   const handleInputChange = (e: any) => {
     const value: string = e.target.value ?? '';
     setInputValue(value);
+    // 同步清理：输入框中已删掉 @name 的引用，对应 chips 一并移除（UAT 反馈 2026-09-28）
+    setMentions((prev) =>
+      prev.length > 0 ? prev.filter((m) => value.includes(`@${m.name}`)) : prev
+    );
     if (composingRef.current) {
       return;
     }
@@ -775,6 +779,7 @@ const AiChat = (props: AiChatProps) => {
             {mentions.map((item) => (
               <Tag
                 key={`${item.type}-${item.name}`}
+                color={'blue'}
                 closable
                 onClose={() =>
                   setMentions((prev) =>
