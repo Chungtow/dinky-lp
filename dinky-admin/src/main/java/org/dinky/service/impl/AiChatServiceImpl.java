@@ -25,6 +25,7 @@ import org.dinky.ai.PromptStore;
 import org.dinky.ai.SqlVerifier;
 import org.dinky.ai.TableSelector;
 import org.dinky.ai.TokenUsage;
+import org.dinky.data.dto.AiChatMention;
 import org.dinky.data.dto.AiChatMessage;
 import org.dinky.data.dto.AiChatRequest;
 import org.dinky.data.model.AiChatLog;
@@ -81,12 +82,20 @@ public class AiChatServiceImpl implements AiChatService {
     private static final int MAX_TABLE_LIST = 300;
     /** 每张表最多包含的列数量 */
     private static final int MAX_COLUMNS_PER_TABLE = 40;
-    /** 字段详情的字符预算：逐表累加到此为止（小于 MAX_SCHEMA_CHARS，给表清单留余量） */
+    /**
+     * 以下三项<strong>已于阶段 1a 迁移为可配置项</strong>（`sys.llm.settings.*`，见
+     * {@link SystemConfiguration#getLlmColumnBudgetChars()}），此处的常量仅保留原默认值作为文档说明，
+     * 代码中不再引用：
+     * <ul>
+     *   <li>{@code COLUMN_BUDGET_CHARS = 20000}：字段详情的字符预算（小于 schemaMaxChars，给表清单留余量）</li>
+     *   <li>{@code MAX_SCHEMA_CHARS = 24000}：schema 区块总上限（兜底，避免 token 爆炸）</li>
+     *   <li>{@code MAX_EDITOR_SQL_CHARS = 6000}：编辑区内容上限</li>
+     * </ul>
+     * 调大前请先跑评测集（见阶段 1 计划 §3.4.5）：预算并非越大越好，需权衡准确率、p95 延迟与成本。
+     */
+    @SuppressWarnings("unused")
     private static final int COLUMN_BUDGET_CHARS = 20000;
-    /** schema 上下文的最大字符数，超出即截断（兜底，避免 token 爆炸） */
-    private static final int MAX_SCHEMA_CHARS = 24000;
-    /** 注入上下文的编辑区内容字符上限 */
-    private static final int MAX_EDITOR_SQL_CHARS = 6000;
+
     /** 注入上下文的作业报错原文字符上限 */
     private static final int MAX_JOB_ERROR_CHARS = 1500;
     /** 最多携带的历史对话轮次（一问一答算一轮，此处按消息条数算） */
@@ -435,14 +444,96 @@ public class AiChatServiceImpl implements AiChatService {
      * @return 含标题的完整区块；编辑区为空时返回空串
      */
     private String buildEditorContext(AiChatRequest request) {
+        int maxChars = SystemConfiguration.getInstances().getLlmEditorSqlMaxChars();
+        // 阶段 1a（1.0.4）：选中片段优先——用户选中某段 SQL 提问，意图就是问这一段。
+        // 此时再下发全文既浪费预算，又会把无关 SQL 混进上下文干扰模型（业界一致做法）。
+        String selected = StrUtil.trimToNull(request.getSelectedSql());
+        if (selected != null) {
+            if (selected.length() > maxChars) {
+                selected = selected.substring(0, maxChars) + "\n... (选中片段过长，已截断)";
+            }
+            return "## 用户在编辑器中选中的片段（本次提问针对该片段）\n" + "```sql\n" + selected + "\n```\n\n";
+        }
         String sql = StrUtil.trimToNull(request.getSql());
         if (sql == null) {
             return "";
         }
-        if (sql.length() > MAX_EDITOR_SQL_CHARS) {
-            sql = sql.substring(0, MAX_EDITOR_SQL_CHARS) + "\n... (编辑区内容过长，已截断)";
+        if (sql.length() > maxChars) {
+            sql = sql.substring(0, maxChars) + "\n... (编辑区内容过长，已截断)";
         }
         return "## 当前编辑区内容（用户正在 Dinky 数据开发编辑器中编写的代码）\n" + "```sql\n" + sql + "\n```\n\n";
+    }
+
+    /**
+     * 构建「用户 {@code @} 显式引用」区块（阶段 1a：1.4）。
+     *
+     * <p>显式引用是<b>最高优先级</b>上下文：先于表清单注入，且<b>不参与</b>后续字段预算的裁剪判定。
+     * 依据：中文问题配英文表名时自动召回基本失效（2026-09-26 UAT 实测），用户手动指定是唯一可靠兜底。
+     */
+    private String buildMentionContext(AiChatRequest request, Integer databaseId, String schemaName) {
+        List<AiChatMention> mentions = request.getMentions();
+        if (CollUtil.isEmpty(mentions)) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("## 用户显式指定的上下文（@ 引用，优先级最高）\n");
+        for (AiChatMention mention : mentions) {
+            if (mention == null) {
+                continue;
+            }
+            if ("table".equalsIgnoreCase(mention.getType())) {
+                String tableSchema = StrUtil.isNotBlank(mention.getSchemaName()) ? mention.getSchemaName() : schemaName;
+                sb.append("- 表 ")
+                        .append(tableSchema)
+                        .append(".")
+                        .append(StrUtil.nullToEmpty(mention.getName()))
+                        .append("\n");
+                appendTableDetail(sb, databaseId, tableSchema, mention.getName());
+            } else if (StrUtil.isNotBlank(mention.getContent())) {
+                // selection / job：片段正文（仅编辑器文本，不含业务数据行）
+                String content = mention.getContent().trim();
+                int maxChars = SystemConfiguration.getInstances().getLlmEditorSqlMaxChars();
+                if (content.length() > maxChars) {
+                    content = content.substring(0, maxChars) + "\n... (片段过长，已截断)";
+                }
+                sb.append("- ")
+                        .append(StrUtil.nullToEmpty(mention.getName()))
+                        .append("\n```sql\n")
+                        .append(content)
+                        .append("\n```\n");
+            }
+        }
+        sb.append("\n");
+        return sb.toString();
+    }
+
+    /**
+     * 按用户选择的档位过滤表范围（阶段 1a：1.1 Context 三档）。
+     *
+     * <p>档位缺少对应选择（custom 未勾选表 / current 未选中表）时<b>退化为 all 并照实输出</b>，
+     * 避免「什么都没给」的静默失败——这比给得不准更糟。
+     */
+    private List<Table> applyContextScope(List<Table> tables, AiChatRequest request) {
+        if (CollUtil.isEmpty(tables)) {
+            return tables;
+        }
+        String scope =
+                StrUtil.blankToDefault(request.getContextScope(), "all").trim().toLowerCase();
+        if (!"custom".equals(scope)) {
+            // current 由上游 tableName 分支处理；此处保持全量（未选中表时退化为 all）
+            return tables;
+        }
+        List<String> picked = request.getCustomTables();
+        if (CollUtil.isEmpty(picked)) {
+            return tables;
+        }
+        List<Table> filtered = new ArrayList<>();
+        for (Table table : tables) {
+            if (table != null && picked.contains(table.getName())) {
+                filtered.add(table);
+            }
+        }
+        return filtered;
     }
 
     /**
@@ -498,17 +589,25 @@ public class AiChatServiceImpl implements AiChatService {
         }
         Integer databaseId = request.getDatabaseId();
         String schemaName = StrUtil.nullToEmpty(request.getSchemaName());
+        SystemConfiguration config = SystemConfiguration.getInstances();
+        // 阶段 1a：上下文预算改为可配置（原硬编码 24000 / 20000），可按模型窗口与
+        // 「准确率 / p95 延迟 / 成本」实测结果调档（见阶段 1 计划 §3.4.5）
+        int schemaMaxChars = config.getLlmSchemaMaxChars();
+        int columnBudgetChars = config.getLlmColumnBudgetChars();
         StringBuilder sb = new StringBuilder();
+
+        // 阶段 1a（1.4）：@ 显式引用优先级最高，先于表清单注入
+        sb.append(buildMentionContext(request, databaseId, schemaName));
 
         if (StrUtil.isNotBlank(request.getTableName())) {
             appendTableDetail(sb, databaseId, schemaName, request.getTableName());
         } else {
             try {
-                List<Table> tables = dataBaseService.getTables(databaseId, schemaName);
+                // 阶段 1a（1.1）：按用户选择的档位过滤表范围
+                List<Table> tables = applyContextScope(dataBaseService.getTables(databaseId, schemaName), request);
                 if (CollUtil.isEmpty(tables)) {
                     return "(schema 下未获取到表信息)";
                 }
-                SystemConfiguration config = SystemConfiguration.getInstances();
                 int threshold = config.getLlmSchemaTableDetailThreshold();
                 // 阶段 1.5（预算自适应）：小库直接按原顺序全给；仅大库才先按与问题的相关度排序，
                 // 再由下方字符预算决定到底给出多少张表的字段。
@@ -543,10 +642,11 @@ public class AiChatServiceImpl implements AiChatService {
                     StringBuilder piece = new StringBuilder();
                     appendTableDetail(
                             piece, databaseId, schemaName, ordered.get(i).getName());
-                    if (sb.length() + piece.length() > COLUMN_BUDGET_CHARS) {
+                    if (sb.length() + piece.length() > columnBudgetChars) {
+                        // 阶段 1a（1.5）：裁剪必须「明示」，且给出可执行的补救动作（@ 指定）
                         sb.append("  ... (上下文预算已用尽，剩余 ")
                                 .append(limit - detailGiven)
-                                .append(" 张表只给出了表名。如需其中某张表的字段，用户可在面板顶部的表下拉中选中该表后重试。)\n");
+                                .append(" 张表只给出了表名。如需其中某张表的字段，可在输入框用 @表名 显式指定。)\n");
                         break;
                     }
                     sb.append(piece);
@@ -559,8 +659,8 @@ public class AiChatServiceImpl implements AiChatService {
         }
 
         String result = sb.toString();
-        if (result.length() > MAX_SCHEMA_CHARS) {
-            result = result.substring(0, MAX_SCHEMA_CHARS) + "\n... (schema 过长，已截断)";
+        if (result.length() > schemaMaxChars) {
+            result = result.substring(0, schemaMaxChars) + "\n... (schema 过长，已截断)";
         }
         return result;
     }

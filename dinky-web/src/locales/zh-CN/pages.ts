@@ -580,6 +580,20 @@ export default {
   'datastudio.aiChat.verify.failed': '执行失败',
   'datastudio.aiChat.verify.rejected': '已跳过执行校验',
   'datastudio.aiChat.modelTip': '当前使用的模型，可在 系统配置 → AI 设置 中修改',
+  // 阶段 1a：Context 三档
+  'datastudio.aiChat.scopeTip': '上下文范围：决定本次把哪些表的结构交给模型',
+  'datastudio.aiChat.scopeCurrent': '当前表',
+  'datastudio.aiChat.scopeAll': '全库',
+  'datastudio.aiChat.scopeCustom': '自选',
+  'datastudio.aiChat.customTables': '勾选本次要引用的表',
+  // 阶段 1a：@ 引用
+  'datastudio.aiChat.mention.groupTable': '表',
+  'datastudio.aiChat.mention.groupJob': '作业',
+  'datastudio.aiChat.mention.groupSelection': '选中片段',
+  'datastudio.aiChat.mention.selectionName': '当前编辑器选中的片段',
+  'datastudio.aiChat.mention.recent': '最近用过',
+  'datastudio.aiChat.mention.noMatch': '无匹配项',
+  'datastudio.aiChat.mention.noDataSource': '未绑定数据源，只能引用作业或选中片段',
 
   'pages.datastudio.print.table.inputTableName': '请选择表名',
   'pages.devops.jobinfo.localenv': '本地环境',

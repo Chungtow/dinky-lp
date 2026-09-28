@@ -80,6 +80,34 @@ public class AiChatRequest {
     private Integer taskId;
 
     /**
+     * 用户在编辑器中<b>选中</b>的片段（阶段 1a：1.0.4）。
+     *
+     * <p>非空时优先级高于 {@link #sql} 全文：用户选中某段 SQL 提问，意图就是问这一段，
+     * 此时再下发全文既浪费预算又干扰模型（业界一致做法）。
+     */
+    @ApiModelProperty(value = "编辑器选中片段")
+    private String selectedSql;
+
+    /**
+     * 上下文范围档位（阶段 1a：1.1）：{@code current}（仅当前选中表）/ {@code all}（当前数据源全库，
+     * 默认，兼容既有行为）/ {@code custom}（仅 {@link #customTables} 勾选的表）。
+     */
+    @ApiModelProperty(value = "上下文范围：current / all / custom", example = "all")
+    private String contextScope;
+
+    /** {@code contextScope=custom} 时用户勾选的表名列表 */
+    @ApiModelProperty(value = "custom 档位下勾选的表名")
+    private List<String> customTables;
+
+    /**
+     * 用户通过 {@code @} 显式引用的上下文项（阶段 1a：1.4）。
+     *
+     * <p>这些项享有<b>最高优先级且不被预算裁剪</b>。
+     */
+    @ApiModelProperty(value = "@ 显式引用项")
+    private List<AiChatMention> mentions;
+
+    /**
      * 服务端填充的当前用户 id（限流 / 配额 / 审计用）。
      *
      * <p><b>不接受前端传入</b>：Controller 会用 Sa-Token 的登录 id 覆盖，防止伪造绕过限流。
