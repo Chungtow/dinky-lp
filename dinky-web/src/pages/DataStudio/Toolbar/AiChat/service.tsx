@@ -18,6 +18,7 @@
  */
 
 import { getData } from '@/services/api';
+import { queryDataByParams } from '@/services/BusinessCrud';
 import { API_CONSTANTS } from '@/services/endpoints';
 
 export type AiChatRole = 'user' | 'assistant';
@@ -73,9 +74,16 @@ export type AiChatConfig = {
  * <p>type 预留 knowledge：后续「语料包」能力可直接复用本结构，前端无需改协议。
  */
 export type AiChatMentionItem = {
-  type: 'table' | 'job' | 'selection' | 'knowledge';
+  type: 'table' | 'job' | 'selection' | 'knowledge' | 'column';
   schemaName?: string;
   name: string;
+  /**
+   * 字段名（type=column 时有效）。
+   *
+   * <p>column 类型下 name 存的是<b>表名</b>而非字段名：输入框里写 {@code @表名.字段}，
+   * 而「删掉 @ 文本时同步移除 chip」的判定（value.includes('@' + name)）依然成立。
+   */
+  columnName?: string;
   /** 片段正文（selection / job 携带），仅编辑器文本，不含业务数据行 */
   content?: string;
 };
@@ -101,6 +109,24 @@ export type AiChatRequestBody = {
   customTables?: string[];
   /** {@code @} 显式引用项：最高优先级，后端不做预算裁剪 */
   mentions?: AiChatMentionItem[];
+};
+
+/**
+ * 拉取指定表的字段（阶段 2 前置：字段级 {@code @表.} 引用）。
+ *
+ * <p>复用注册中心现成接口 {@code /api/database/listColumns}——<b>不新增后端接口</b>.
+ */
+export const listTableColumns = async (
+  databaseId: number,
+  schemaName: string,
+  tableName: string
+): Promise<any[]> => {
+  const res = await queryDataByParams(API_CONSTANTS.DATASOURCE_GET_COLUMNS_BY_TABLE, {
+    id: databaseId,
+    schemaName,
+    tableName
+  });
+  return (res?.data ?? res ?? []) as any[];
 };
 
 export const getAiChatConfig = async (): Promise<AiChatConfig> => {

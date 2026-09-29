@@ -56,6 +56,15 @@ public class AiChatMention {
     private String name;
 
     /**
+     * 字段名（type=column 时有效，阶段 2 前置：字段级 {@code @表.字段} 引用）。
+     *
+     * <p>此时 {@code name} 仍为<b>表名</b>：前端输入框里写的是 {@code @表名.字段}，
+     * 而「删掉 @ 文本时同步移除 chip」的判定按 {@code @表名} 匹配，name 存表名可让该判定继续成立。
+     */
+    @ApiModelProperty(value = "字段名（type=column）", example = "deviceid")
+    private String columnName;
+
+    /**
      * 片段正文（type=selection / job 时由前端携带）。
      *
      * <p>仅编辑器内的 SQL 文本，<b>不含业务数据行</b>。

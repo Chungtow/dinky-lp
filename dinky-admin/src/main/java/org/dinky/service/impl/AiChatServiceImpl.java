@@ -623,6 +623,19 @@ public class AiChatServiceImpl implements AiChatService {
                         .append(StrUtil.nullToEmpty(mention.getName()))
                         .append("\n");
                 appendTableDetail(sb, databaseId, tableSchema, mention.getName());
+            } else if ("column".equalsIgnoreCase(mention.getType())) {
+                // 阶段 2 前置：字段级引用——只给该字段的类型/注释，不给整表，省预算
+                String tableSchema = StrUtil.isNotBlank(mention.getSchemaName()) ? mention.getSchemaName() : schemaName;
+                String table = StrUtil.nullToEmpty(mention.getName());
+                String column = StrUtil.nullToEmpty(mention.getColumnName());
+                sb.append("- 字段 ")
+                        .append(tableSchema)
+                        .append(".")
+                        .append(table)
+                        .append(".")
+                        .append(column)
+                        .append("\n");
+                appendColumnDetail(sb, databaseId, tableSchema, table, column);
             } else if (StrUtil.isNotBlank(mention.getContent())) {
                 // selection / job：片段正文（仅编辑器文本，不含业务数据行）
                 String content = mention.getContent().trim();
@@ -807,6 +820,58 @@ public class AiChatServiceImpl implements AiChatService {
      *
      * @return true 表示成功写入；false 表示获取列失败
      */
+    /**
+     * 把单表的<b>指定字段</b>详情写入 {@code target}（阶段 2 前置：字段级 {@code @} 引用）。
+     *
+     * <p>字段查不到时<b>退化为整表</b>并照实说明——沿用 {@link #applyContextScope} 的既有原则：
+     * 「什么都没给」的静默失败，比给得不准更糟。
+     */
+    private void appendColumnDetail(
+            StringBuilder target, Integer databaseId, String schemaName, String tableName, String columnName) {
+        if (StrUtil.isBlank(columnName) || StrUtil.isBlank(tableName)) {
+            return;
+        }
+        try {
+            List<Column> columns = dataBaseService.listColumns(databaseId, schemaName, tableName);
+            Column hit = null;
+            if (CollUtil.isNotEmpty(columns)) {
+                for (Column column : columns) {
+                    if (column != null && columnName.equalsIgnoreCase(column.getName())) {
+                        hit = column;
+                        break;
+                    }
+                }
+            }
+            if (hit == null) {
+                target.append("  (未找到字段 ").append(columnName).append("，改为给出整表结构)\n");
+                appendTableDetail(target, databaseId, schemaName, tableName);
+                return;
+            }
+            target.append("  Column: ")
+                    .append(tableName)
+                    .append(".")
+                    .append(hit.getName())
+                    .append(" ")
+                    .append(StrUtil.nullToEmpty(hit.getType()));
+            if (hit.isKeyFlag()) {
+                target.append(" [PK]");
+            }
+            if (StrUtil.isNotBlank(hit.getComment())) {
+                target.append(" -- ").append(hit.getComment());
+            }
+            target.append("\n");
+        } catch (Exception e) {
+            // 脱敏：原始异常可能含 JDBC URL / 内网地址，绝不能写进 prompt
+            log.warn(
+                    "Append column detail failed, databaseId: {}, table: {}, column: {}",
+                    databaseId,
+                    tableName,
+                    columnName,
+                    e);
+            target.append("  (读取字段信息失败)\n");
+        }
+    }
+
     private boolean appendTableDetail(StringBuilder target, Integer databaseId, String schemaName, String tableName) {
         StringBuilder sb = new StringBuilder();
         try {

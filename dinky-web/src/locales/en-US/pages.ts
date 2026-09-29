@@ -627,6 +627,7 @@ export default {
   'datastudio.aiChat.run': 'Run',
   'datastudio.aiChat.copySuccess': 'Copied to clipboard',
   'datastudio.aiChat.schema': 'Schema (optional)',
+  'datastudio.aiChat.datasource': 'Datasource',
   'datastudio.aiChat.table': 'Table (optional)',
   'datastudio.aiChat.placeholder': 'Describe what you want to query, eg: count orders by province',
   'datastudio.aiChat.inputPlaceholder': 'Enter to send, Shift + Enter for a new line',
@@ -653,6 +654,7 @@ export default {
   'datastudio.aiChat.customTables': 'Pick tables for this question',
   // Stage 1a: @ mention
   'datastudio.aiChat.mention.groupTable': 'Table',
+  'datastudio.aiChat.mention.groupColumn': 'Columns',
   'datastudio.aiChat.mention.groupJob': 'Job',
   'datastudio.aiChat.mention.groupSelection': 'Selection',
   'datastudio.aiChat.mention.selectionName': 'Selected snippet in editor',

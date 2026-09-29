@@ -20,7 +20,10 @@
 import { isSql } from '@/pages/DataStudio/utils';
 import { DataStudioActionType } from '@/pages/DataStudio/data.d';
 import { mapDispatchToProps } from '@/pages/DataStudio/DvaFunction';
-import { showDataSourceTable } from '@/pages/DataStudio/Toolbar/DataSource/service';
+import {
+  getDataSourceList,
+  showDataSourceTable
+} from '@/pages/DataStudio/Toolbar/DataSource/service';
 import ToolProcess from './components/ToolProcess';
 import {
   AiChatConfig,
@@ -29,7 +32,8 @@ import {
   AiChatToolStep,
   AiChatVerify,
   aiChatStream,
-  getAiChatConfig
+  getAiChatConfig,
+  listTableColumns
 } from './service';
 import { DataStudioContext } from '@/pages/DataStudio/DataStudioContext';
 import { l } from '@/utils/intl';
@@ -85,7 +89,16 @@ const AiChat = (props: AiChatProps) => {
   const currentTab = tabs?.find((tab) => tab.id === activeTab);
   const tabParams = currentTab?.params ?? {};
   const dialect: string = tabParams?.dialect ?? '';
-  const databaseId: number | undefined = tabParams?.databaseId ?? undefined;
+  const tabDatabaseId: number | undefined = tabParams?.databaseId ?? undefined;
+  /**
+   * 阶段 2 前置（1.2 多数据源切换）：面板可覆盖作业自带的数据源，默认跟随当前作业。
+   *
+   * <p>置为 undefined 即回落到作业数据源——下拉的「清空」因此等价于「跟随当前作业」，
+   * 而不是「没有数据源」。
+   */
+  const [datasourceId, setDatasourceId] = useState<number | undefined>();
+  const databaseId: number | undefined = datasourceId ?? tabDatabaseId;
+  const [datasourceList, setDatasourceList] = useState<any[]>([]);
   const currentSql: string = tabParams?.statement ?? '';
   const metaDataAvailable = Boolean(databaseId) && isSql(dialect?.toLowerCase());
 
@@ -95,12 +108,24 @@ const AiChat = (props: AiChatProps) => {
       .catch(() => setConfig({}));
   }, []);
 
+  // 数据源清单：复用注册中心已有的「启用中数据源」接口，不新增后端接口
+  useEffect(() => {
+    getDataSourceList()
+      .then((res: any) => setDatasourceList(res?.data ?? res ?? []))
+      .catch(() => setDatasourceList([]));
+  }, []);
+
   useEffect(() => {
     if (!metaDataAvailable || !databaseId) {
       setSchemas([]);
       return;
     }
     showDataSourceTable(databaseId).then((res) => setSchemas(res ?? []));
+    // 切换数据源后旧的 schema / table 选择已失效，必须清空，否则会把不存在于新数据源的
+    // 定位信息下发给后端（表现为「表找不到」而非「选错了数据源」）
+    setSchemaName(undefined);
+    setTableName(undefined);
+    setCustomTables([]);
   }, [databaseId, metaDataAvailable]);
 
   const tableOptions = useMemo(() => {
@@ -115,6 +140,14 @@ const AiChat = (props: AiChatProps) => {
   const [mentionOpen, setMentionOpen] = useState<boolean>(false);
   const [mentionQuery, setMentionQuery] = useState<string>('');
   const [mentionIndex, setMentionIndex] = useState<number>(0);
+  /**
+   * 阶段 2 前置（字段级 {@code @表.字段}）：二级候选。
+   *
+   * <p>按需加载（输入 {@code @表名.} 才请求）+ 按「数据源|schema|表」缓存，
+   * 避免每敲一个字符都打一次元数据接口。
+   */
+  const [columnOptions, setColumnOptions] = useState<AiChatMentionItem[]>([]);
+  const columnCacheRef = useRef<Map<string, AiChatMentionItem[]>>(new Map());
   const [recentMentions, setRecentMentions] = useState<string[]>(() => {
     try {
       return JSON.parse(localStorage.getItem(RECENT_MENTION_KEY) ?? '[]');
@@ -135,6 +168,48 @@ const AiChat = (props: AiChatProps) => {
    * <p>阶段 1a 内置 table / job / selection 三个 provider；后续「语料包」（阶段 1 计划 §3.4）
    * 可作为新 provider 接入，浮层与协议均无需改动。
    */
+  /** 解析 {@code @表名.字段前缀}：命中则进入字段二级候选模式 */
+  const columnQuery = useMemo(() => {
+    const m = /^([A-Za-z0-9_]+)\.([A-Za-z0-9_]*)$/.exec(mentionQuery.trim());
+    return m ? { table: m[1], keyword: m[2] ?? '' } : null;
+  }, [mentionQuery]);
+
+  useEffect(() => {
+    if (!columnQuery || !databaseId || !schemaName) {
+      setColumnOptions([]);
+      return;
+    }
+    const cacheKey = `${databaseId}|${schemaName}|${columnQuery.table}`;
+    const cached = columnCacheRef.current.get(cacheKey);
+    if (cached) {
+      setColumnOptions(cached);
+      return;
+    }
+    let cancelled = false;
+    listTableColumns(databaseId, schemaName, columnQuery.table)
+      .then((cols: any[]) => {
+        const list = (cols ?? []).map((col: any) => ({
+          type: 'column' as const,
+          name: columnQuery.table,
+          columnName: col?.name,
+          schemaName,
+          group: l('datastudio.aiChat.mention.groupColumn')
+        }));
+        columnCacheRef.current.set(cacheKey, list);
+        if (!cancelled) {
+          setColumnOptions(list);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setColumnOptions([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [columnQuery, databaseId, schemaName]);
+
   const mentionCandidates = useMemo(() => {
     const list: (AiChatMentionItem & { group: string })[] = [];
     // provider 1：当前 schema 下的表
@@ -173,6 +248,10 @@ const AiChat = (props: AiChatProps) => {
         group: l('datastudio.aiChat.mention.groupSelection')
       });
     }
+    // provider 4（阶段 2 前置）：字段级引用——输入 @表名. 时改为给出该表的字段候选
+    if (columnQuery) {
+      return columnOptions;
+    }
     return list;
     // mentionOpen 作为依赖：每次打开浮层都重新读取最新的选中片段
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -182,7 +261,11 @@ const AiChat = (props: AiChatProps) => {
   const filteredMentions = useMemo(() => {
     const q = mentionQuery.trim().toLowerCase();
     const matched = q
-      ? mentionCandidates.filter((c) => c.name?.toLowerCase().includes(q))
+      ? mentionCandidates.filter((c) =>
+          c.type === 'column'
+            ? `${c.name}.${c.columnName}`.toLowerCase().includes(q)
+            : c.name?.toLowerCase().includes(q)
+        )
       : mentionCandidates;
     return [...matched]
       .sort((a, b) => {
@@ -204,7 +287,13 @@ const AiChat = (props: AiChatProps) => {
     setInputValue(value);
     // 同步清理：输入框中已删掉 @name 的引用，对应 chips 一并移除（UAT 反馈 2026-09-28）
     setMentions((prev) =>
-      prev.length > 0 ? prev.filter((m) => value.includes(`@${m.name}`)) : prev
+      prev.length > 0
+        ? prev.filter((m) => {
+            // 字段引用的 token 是 @表名.字段名，只比对表名会误删同名表的其它字段引用
+            const token = m.type === 'column' ? `@${m.name}.${m.columnName}` : `@${m.name}`;
+            return value.includes(token);
+          })
+        : prev
     );
     if (composingRef.current) {
       return;
@@ -222,9 +311,16 @@ const AiChat = (props: AiChatProps) => {
 
   /** 选中候选：把 {@code @query} 替换为 {@code @name}，并记录为已引用 */
   const pickMention = (item: AiChatMentionItem) => {
-    setInputValue(inputValue.replace(/@[^\s@]*$/, `@${item.name} `));
+    const token =
+      item.type === 'column' ? `@${item.name}.${item.columnName}` : `@${item.name}`;
+    setInputValue(inputValue.replace(/@[^\s@]*$/, `${token} `));
     setMentions((prev) =>
-      prev.some((m) => m.type === item.type && m.name === item.name) ? prev : [...prev, item]
+      prev.some(
+        (m) =>
+          m.type === item.type && m.name === item.name && m.columnName === item.columnName
+      )
+        ? prev
+        : [...prev, item]
     );
     setMentionOpen(false);
     setMentionQuery('');
@@ -595,6 +691,25 @@ const AiChat = (props: AiChatProps) => {
             message={l('datastudio.aiChat.bindGuide')}
           />
         )}
+        {/*
+          阶段 2 前置（1.2 多数据源切换）：始终显示，不受 metaDataAvailable 约束——
+          本功能最大的价值恰恰是「作业未绑定数据源时也能指定一个」，放到分支内就自废武功。
+          清空（allowClear）回落到作业数据源，因为 databaseId = datasourceId ?? tabDatabaseId。
+        */}
+        <Select
+          allowClear
+          showSearch
+          size={'small'}
+          style={{ minWidth: 170 }}
+          placeholder={l('datastudio.aiChat.datasource')}
+          value={databaseId}
+          onChange={(value) => setDatasourceId(value)}
+          optionFilterProp={'label'}
+          options={(datasourceList ?? []).map((item: any) => ({
+            label: item.name,
+            value: item.id
+          }))}
+        />
         {metaDataAvailable && (
           <Space size={4} wrap>
             <Select
@@ -760,7 +875,7 @@ const AiChat = (props: AiChatProps) => {
             ) : (
               filteredMentions.map((item, index) => (
                 <div
-                  key={`${item.type}-${item.name}-${index}`}
+                  key={`${item.type}-${item.name}-${item.columnName ?? ''}-${index}`}
                   // 用 onMouseDown 而非 onClick：避免先触发输入框 blur 导致浮层关闭
                   onMouseDown={(e) => {
                     e.preventDefault();
@@ -776,7 +891,9 @@ const AiChat = (props: AiChatProps) => {
                     background: index === mentionIndex ? 'rgba(22,119,255,0.10)' : 'transparent'
                   }}
                 >
-                  <span style={{ fontSize: 12 }}>{item.name}</span>
+                  <span style={{ fontSize: 12 }}>
+                    {item.type === 'column' ? `${item.name}.${item.columnName}` : item.name}
+                  </span>
                   <span style={{ fontSize: 11, color: 'rgba(0,0,0,0.45)', flexShrink: 0 }}>
                     {recentMentions.includes(item.name)
                       ? l('datastudio.aiChat.mention.recent')
@@ -814,16 +931,23 @@ const AiChat = (props: AiChatProps) => {
           <Space size={4} wrap>
             {mentions.map((item) => (
               <Tag
-                key={`${item.type}-${item.name}`}
+                key={`${item.type}-${item.name}-${item.columnName ?? ''}`}
                 color={'blue'}
                 closable
                 onClose={() =>
                   setMentions((prev) =>
-                    prev.filter((m) => !(m.type === item.type && m.name === item.name))
+                    prev.filter(
+                      (m) =>
+                        !(
+                          m.type === item.type &&
+                          m.name === item.name &&
+                          m.columnName === item.columnName
+                        )
+                    )
                   )
                 }
               >
-                {item.name}
+                {item.type === 'column' ? `${item.name}.${item.columnName}` : item.name}
               </Tag>
             ))}
           </Space>

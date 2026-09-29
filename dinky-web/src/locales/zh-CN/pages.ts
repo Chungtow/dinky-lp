@@ -562,6 +562,7 @@ export default {
   'datastudio.aiChat.run': '执行',
   'datastudio.aiChat.copySuccess': '已复制到剪贴板',
   'datastudio.aiChat.schema': '选择 schema（可选）',
+  'datastudio.aiChat.datasource': '数据源',
   'datastudio.aiChat.table': '选择表（可选）',
   'datastudio.aiChat.placeholder': '用一句话描述你要查的数据，例如：统计每个省份的订单数',
   'datastudio.aiChat.inputPlaceholder': 'Enter 发送，Shift + Enter 换行',
@@ -588,6 +589,7 @@ export default {
   'datastudio.aiChat.customTables': '勾选本次要引用的表',
   // 阶段 1a：@ 引用
   'datastudio.aiChat.mention.groupTable': '表',
+  'datastudio.aiChat.mention.groupColumn': '字段',
   'datastudio.aiChat.mention.groupJob': '作业',
   'datastudio.aiChat.mention.groupSelection': '选中片段',
   'datastudio.aiChat.mention.selectionName': '当前编辑器选中的片段',
