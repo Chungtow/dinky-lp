@@ -190,6 +190,7 @@ export enum API_CONSTANTS {
   /** --------------------------------------------  ai chat  ------------------------------------------------------- */
   AI_CHAT_CHAT = '/api/aiChat/chat',
   AI_CHAT_CONFIG = '/api/aiChat/config',
+  AI_CHAT_WRITE_AUDIT = '/api/aiChat/write-audit',
 
   // ------------------------------------ system log ------------------------------------
   SYSTEM_ROOT_LOG = '/api/system/getRootLog',

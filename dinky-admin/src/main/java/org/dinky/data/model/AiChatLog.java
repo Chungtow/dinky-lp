@@ -102,6 +102,22 @@ public class AiChatLog implements Serializable {
     @ApiModelProperty(value = "Success", dataType = "Boolean", notes = "整体是否成功")
     private Boolean success;
 
+    /** 阶段 2：被 AI 整块改写的作业 id */
+    @ApiModelProperty(value = "Write Task Id", dataType = "Long", notes = "被 AI 改写的作业 id")
+    private Long writeTaskId;
+
+    /** 阶段 2：改写前内容 hash（不存正文，避免业务代码撑大审计表） */
+    @ApiModelProperty(value = "Write Before Hash", dataType = "String", notes = "改写前内容 hash")
+    private String writeBeforeHash;
+
+    /** 阶段 2：改写后内容 hash */
+    @ApiModelProperty(value = "Write After Hash", dataType = "String", notes = "改写后内容 hash")
+    private String writeAfterHash;
+
+    /** 阶段 2：内容字符数变化（正数为增加、负数为删减） */
+    @ApiModelProperty(value = "Write Chars", dataType = "Integer", notes = "改写字符数变化")
+    private Integer writeChars;
+
     @ApiModelProperty(value = "Create Time", dataType = "LocalDateTime")
     private LocalDateTime createTime;
 }

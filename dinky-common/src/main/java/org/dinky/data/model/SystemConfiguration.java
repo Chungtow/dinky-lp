@@ -440,6 +440,17 @@ public class SystemConfiguration {
             .defaultValue(false)
             .note(Status.SYS_LLM_SETTINGS_TOOLTHINKINGENABLED_NOTE);
 
+    /**
+     * Craft 模式开关（阶段 2：Ask / Craft 双模式）。
+     *
+     * <p><b>默认关闭</b>：Craft 允许 AI 整块改写编辑器内容，属于「放权」能力，
+     * 必须由管理员显式开启（对齐 §8.0 决策风格：可选增强，显式授权）。
+     */
+    private final Configuration<Boolean> llmCraftModeEnable = key(Status.SYS_LLM_SETTINGS_CRAFTMODEENABLE)
+            .booleanType()
+            .defaultValue(false)
+            .note(Status.SYS_LLM_SETTINGS_CRAFTMODEENABLE_NOTE);
+
     private final Configuration<Boolean> metricsSysEnable = key(Status.SYS_METRICS_SETTINGS_SYS_ENABLE)
             .booleanType()
             .defaultValue(false)
@@ -727,6 +738,15 @@ public class SystemConfiguration {
         return Asserts.isNull(llmToolCallEnable.getValue())
                 ? llmToolCallEnable.getDefaultValue()
                 : llmToolCallEnable.getValue();
+    }
+
+    /**
+     * @return 是否开启 Craft 模式（阶段 2）：开启后 AI 可整块改写编辑器内容，默认关闭。
+     */
+    public boolean isLlmCraftModeEnable() {
+        return Asserts.isNull(llmCraftModeEnable.getValue())
+                ? llmCraftModeEnable.getDefaultValue()
+                : llmCraftModeEnable.getValue();
     }
 
     /** @return 是否开放触碰业务数据行的 sample_rows 工具 */

@@ -466,6 +466,8 @@ public enum Status {
     SYS_LLM_SETTINGS_TOOLTIMEOUTSECONDS_NOTE(261, "sys.llm.settings.toolTimeoutSeconds.note"),
     SYS_LLM_SETTINGS_TOOLTHINKINGENABLED(262, "sys.llm.settings.toolThinkingEnabled"),
     SYS_LLM_SETTINGS_TOOLTHINKINGENABLED_NOTE(263, "sys.llm.settings.toolThinkingEnabled.note"),
+    SYS_LLM_SETTINGS_CRAFTMODEENABLE(264, "sys.llm.settings.craftModeEnable"),
+    SYS_LLM_SETTINGS_CRAFTMODEENABLE_NOTE(265, "sys.llm.settings.craftModeEnable.note"),
     SYS_METRICS_SETTINGS_SYS_ENABLE(148, "sys.metrics.settings.sys.enable"),
     SYS_METRICS_SETTINGS_SYS_ENABLE_NOTE(149, "sys.metrics.settings.sys.enable.note"),
     SYS_METRICS_SETTINGS_SYS_GATHERTIMING(150, "sys.metrics.settings.sys.gatherTiming"),

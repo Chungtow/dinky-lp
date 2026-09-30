@@ -25,6 +25,7 @@ import {
   showDataSourceTable
 } from '@/pages/DataStudio/Toolbar/DataSource/service';
 import ToolProcess from './components/ToolProcess';
+import CraftDiff from './components/CraftDiff';
 import {
   AiChatConfig,
   AiChatMentionItem,
@@ -33,7 +34,8 @@ import {
   AiChatVerify,
   aiChatStream,
   getAiChatConfig,
-  listTableColumns
+  listTableColumns,
+  reportCraftWrite
 } from './service';
 import { DataStudioContext } from '@/pages/DataStudio/DataStudioContext';
 import { l } from '@/utils/intl';
@@ -41,6 +43,7 @@ import {
   CopyOutlined,
   PlayCircleOutlined,
   RobotOutlined,
+  RollbackOutlined,
   SendOutlined,
   StopOutlined
 } from '@ant-design/icons';
@@ -137,6 +140,22 @@ const AiChat = (props: AiChatProps) => {
   const [contextScope, setContextScope] = useState<'current' | 'all' | 'custom'>('all');
   const [customTables, setCustomTables] = useState<string[]>([]);
   const [mentions, setMentions] = useState<AiChatMentionItem[]>([]);
+  /**
+   * 阶段 2：对话模式。Craft 需管理员开启（{@code config.craftModeEnable}）才可选，
+   * 未开启时恒为 ask——与后端「未开启即回落 ask」的双重校验形成闭环。
+   */
+  const [mode, setMode] = useState<'ask' | 'craft'>('ask');
+  /** 阶段 2：Craft 待拍板的改动；非空即展示 diff 预览 */
+  const [craftDiff, setCraftDiff] = useState<{ original: string; modified: string } | null>(null);
+  /**
+   * 阶段 2：AI 改动前的快照（tab → 原文）。
+   *
+   * <p>不能只依赖 monaco 的 undo 栈——tab 卸载 / 组件 dispose 后就失效了，
+   * 因此「撤销」按钮必须走这条独立的快照通道（计划 §3.3 第 3 点）。
+   */
+  const craftBeforeRef = useRef<Record<string, string>>({});
+  /** 哪些 tab 当前处于「AI 已改动、可撤销」状态 */
+  const [craftApplied, setCraftApplied] = useState<Record<string, boolean>>({});
   const [mentionOpen, setMentionOpen] = useState<boolean>(false);
   const [mentionQuery, setMentionQuery] = useState<string>('');
   const [mentionIndex, setMentionIndex] = useState<number>(0);
@@ -438,6 +457,8 @@ const AiChat = (props: AiChatProps) => {
 
     const controller = new AbortController();
     abortRef.current = controller;
+    /** 阶段 2：累积本轮流式正文，Craft 结束后据此抽取完整代码块 */
+    let streamed = '';
 
     try {
       await aiChatStream(
@@ -462,13 +483,16 @@ const AiChat = (props: AiChatProps) => {
           customTables:
             contextScope === 'custom' && customTables.length > 0 ? customTables : undefined,
           // 阶段 1a（1.4）：@ 显式引用，后端最高优先级且不裁剪
-          mentions: mentions.length > 0 ? mentions : undefined
+          mentions: mentions.length > 0 ? mentions : undefined,
+          // 阶段 2：Craft 改写模式。后端仍会独立校验配置开关，未开启一律回落 ask
+          mode
         },
         ({ content, reasoning, sql, status, execResult, toolCall, toolResult }) => {
           if (reasoning) {
             appendReasoning(reasoning);
           }
           if (content) {
+            streamed += content;
             appendToLastAssistant(content);
           }
           if (sql) {
@@ -493,6 +517,19 @@ const AiChat = (props: AiChatProps) => {
         },
         controller.signal
       );
+
+      // 阶段 2（Craft）：流结束后抽取 AI 产出的完整内容，出 diff 预览交给用户拍板
+      if (mode === 'craft') {
+        const modified = extractFirstCodeBlock(streamed);
+        if (modified) {
+          setCraftDiff({
+            original: editorRegistry?.getContent(tabParams?.taskId) ?? '',
+            modified
+          });
+        } else {
+          message.warning(l('datastudio.aiChat.craft.noCodeBlock'));
+        }
+      }
     } catch (e: any) {
       if (e?.name !== 'AbortError') {
         message.error(e?.message ?? String(e));
@@ -505,6 +542,69 @@ const AiChat = (props: AiChatProps) => {
   const handleStop = () => {
     abortRef.current?.abort();
     setLoading(false);
+  };
+
+  /**
+   * 抽取助手回复中的第一个代码块内容。
+   *
+   * <p>Craft 的 prompt 要求模型输出「有且仅有一个」完整代码块，因此取第一个即可；
+   * 取不到时返回 undefined —— 调用方提示并<b>跳过改写</b>，绝不拿正文去替换编辑器内容。
+   */
+  const extractFirstCodeBlock = (text: string): string | undefined => {
+    const m = /```[a-zA-Z0-9]*\s*\n([\s\S]*?)```/.exec(text ?? '');
+    return m ? m[1] : undefined;
+  };
+
+  /** 阶段 2（Craft）：采纳——整块替换编辑器内容，并留改动前快照供撤销 */
+  const handleCraftAccept = () => {
+    const taskId = tabParams?.taskId;
+    if (!craftDiff || taskId === undefined) {
+      setCraftDiff(null);
+      return;
+    }
+    const key = String(taskId);
+    // 连续多轮 Craft 时保留最初的原文，撤销一次回到最初的模样
+    if (craftBeforeRef.current[key] === undefined) {
+      craftBeforeRef.current[key] = craftDiff.original;
+    }
+    const ok = editorRegistry?.applyFullContent(taskId, craftDiff.modified) ?? false;
+    if (ok) {
+      setCraftApplied((prev) => ({ ...prev, [key]: true }));
+      message.success(l('datastudio.aiChat.craft.applied'));
+      // 阶段 2（T2-5）：落写入审计——谁、哪个作业、改动前后 hash 与字符数变化
+      reportCraftWrite({
+        taskId,
+        sessionId: sessionIdRef.current,
+        before: craftDiff.original,
+        after: craftDiff.modified
+      });
+    } else {
+      message.warning(l('datastudio.aiChat.craft.applyFailed'));
+    }
+    setCraftDiff(null);
+  };
+
+  /** 阶段 2（Craft）：拒绝——丢弃本次改动，编辑器内容完全不变 */
+  const handleCraftReject = () => setCraftDiff(null);
+
+  /** 阶段 2（Craft）：撤销——回退到 AI 改动前的内容 */
+  const handleCraftUndo = () => {
+    const taskId = tabParams?.taskId;
+    if (taskId === undefined) {
+      return;
+    }
+    const key = String(taskId);
+    const before = craftBeforeRef.current[key];
+    if (before !== undefined) {
+      editorRegistry?.applyFullContent(taskId, before);
+      delete craftBeforeRef.current[key];
+      message.success(l('datastudio.aiChat.craft.undoDone'));
+    }
+    setCraftApplied((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
   };
 
   const handleInsertSql = (sql: string) => {
@@ -963,6 +1063,26 @@ const AiChat = (props: AiChatProps) => {
             {config?.model || l('datastudio.aiChat.unconfigured')}
           </Tag>
         </Tooltip>
+        {/* 阶段 2：Ask / Craft 切换——仅管理员开启 Craft 时渲染（不展示无功能的控件） */}
+        {config?.craftModeEnable && (
+          <Tooltip title={l('datastudio.aiChat.modeTip')}>
+            <Segmented
+              value={mode}
+              onChange={(v) => setMode(v as 'ask' | 'craft')}
+              options={[
+                { label: 'Ask', value: 'ask' },
+                { label: 'Craft', value: 'craft' }
+              ]}
+            />
+          </Tooltip>
+        )}
+        {craftApplied[String(tabParams?.taskId ?? '')] && (
+          <Tooltip title={l('datastudio.aiChat.craft.undo')}>
+            <Button icon={<RollbackOutlined />} onClick={handleCraftUndo}>
+              {l('datastudio.aiChat.craft.undo')}
+            </Button>
+          </Tooltip>
+        )}
         <Tooltip title={l('datastudio.aiChat.explainTip')}>
           <Button
             icon={<PlayCircleOutlined />}
@@ -987,6 +1107,15 @@ const AiChat = (props: AiChatProps) => {
           </Button>
         )}
       </Space>
+      {/* 阶段 2（Craft）：改动预览——未点采纳时编辑器内容绝不变动 */}
+      <CraftDiff
+        open={!!craftDiff}
+        original={craftDiff?.original ?? ''}
+        modified={craftDiff?.modified ?? ''}
+        language={dialect || 'flinksql'}
+        onAccept={handleCraftAccept}
+        onReject={handleCraftReject}
+      />
     </div>
   );
 };

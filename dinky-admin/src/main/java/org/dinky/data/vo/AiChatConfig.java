@@ -51,4 +51,13 @@ public class AiChatConfig {
 
     @ApiModelProperty(value = "是否已配置 API Key")
     private Boolean hasApiKey;
+
+    /**
+     * 是否开启 Craft 模式（阶段 2）。
+     *
+     * <p>默认 false：开启后 AI 可整块改写编辑器内容。前端据此决定是否渲染模式切换控件——
+     * 未开启时不展示无功能的控件。
+     */
+    @ApiModelProperty(value = "是否开启 Craft 模式（AI 可整块改写编辑器内容）")
+    private Boolean craftModeEnable;
 }

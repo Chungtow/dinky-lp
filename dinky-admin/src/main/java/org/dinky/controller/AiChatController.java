@@ -20,6 +20,7 @@
 package org.dinky.controller;
 
 import org.dinky.data.dto.AiChatRequest;
+import org.dinky.data.dto.AiChatWriteAuditRequest;
 import org.dinky.data.result.Result;
 import org.dinky.data.vo.AiChatConfig;
 import org.dinky.service.AiChatService;
@@ -84,5 +85,28 @@ public class AiChatController {
     @ApiOperation("Query AI Chat Config")
     public Result<AiChatConfig> getConfig() {
         return Result.succeed(aiChatService.getConfig());
+    }
+
+    /**
+     * 记录 Craft 写入审计（阶段 2：T2-5）。
+     *
+     * <p><b>只记录，不写作业</b>：写入动作已在前端完成，这里补的是"谁在什么时候让 AI 改了哪个作业"，
+     * 是放开写能力后唯一的事后追溯手段。userId 由服务端覆盖，不接受前端传入。
+     *
+     * @param request {@link AiChatWriteAuditRequest}
+     * @return {@link Result}
+     */
+    @PostMapping("/write-audit")
+    @ApiOperation("Record AI Craft Write Audit")
+    public Result<Void> writeAudit(@RequestBody AiChatWriteAuditRequest request) {
+        if (request != null) {
+            try {
+                request.setUserId(StpUtil.getLoginIdAsInt());
+            } catch (Exception e) {
+                log.warn("Resolve current user for AI craft audit failed: {}", e.getMessage());
+            }
+        }
+        aiChatService.recordCraftWrite(request);
+        return Result.succeed();
     }
 }
