@@ -54,6 +54,24 @@ export type EditorRegistry = {
    * @return 是否写入成功；编辑器未注册 / 已 dispose / content 为空时返回 false
    */
   applyFullContent: (taskId?: string, content?: string) => boolean;
+
+  /**
+   * 以<b>选中范围</b>为界替换内容（阶段 2b：局部改写采纳）。
+   *
+   * <p>与 {@link applyFullContent}（整块全文）区分：本方法只替换用户当前选中的片段，
+   * 选区之外一个字符都不动；无选中 / 编辑器未注册时返回 false。
+   * 同样走 {@code executeEdits} 以保留 monaco undo 栈（采纳后仍可 Ctrl+Z）。
+   */
+  applyToSelection: (taskId?: string, text?: string) => boolean;
+
+  /**
+   * 订阅指定作业编辑器的<b>选区变化</b>（阶段 2b：选区浮层入口需响应式显示）。
+   *
+   * @param taskId 作业 id
+   * @param listener 选区文本变化回调（无选中时回传空串）
+   * @return 取消订阅函数
+   */
+  onSelectionChange: (taskId: string | undefined, listener: (text: string) => void) => () => void;
 };
 
 export type DataStudioContextType = {

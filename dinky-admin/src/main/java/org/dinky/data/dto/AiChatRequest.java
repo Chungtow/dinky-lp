@@ -37,8 +37,15 @@ import lombok.Data;
 @ApiModel(value = "AiChatRequest", description = "AI Chat Request")
 public class AiChatRequest {
 
-    /** 动作：TEXT_TO_SQL（自然语言生成 SQL） / EXPLAIN（解释 SQL） */
-    @ApiModelProperty(value = "动作：TEXT_TO_SQL / EXPLAIN", example = "TEXT_TO_SQL")
+    /**
+     * 动作：TEXT_TO_SQL（自然语言生成 SQL） / EXPLAIN（解释 SQL） /
+     * FIX_SQL（阶段 2b：基于最近执行报错修复用户选中的 SQL） /
+     * REWRITE_SQL（阶段 2b：综合优化改写用户选中的 SQL）。
+     *
+     * <p>FIX_SQL / REWRITE_SQL 均为<b>单轮显式改写</b>：只产出 SQL 文本、<b>绝不执行</b>，
+     * 供前端做 diff 对照后由用户确认替换选中片段（不进入自动校验/修复闭环）。
+     */
+    @ApiModelProperty(value = "动作：TEXT_TO_SQL / EXPLAIN / FIX_SQL / REWRITE_SQL", example = "TEXT_TO_SQL")
     private String action = "TEXT_TO_SQL";
 
     @ApiModelProperty(value = "本轮用户输入")

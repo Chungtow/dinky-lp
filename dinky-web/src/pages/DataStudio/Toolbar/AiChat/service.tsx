@@ -92,7 +92,12 @@ export type AiChatMentionItem = {
 
 /** 对话请求体：只携带元数据定位信息，绝不携带业务数据 */
 export type AiChatRequestBody = {
-  action?: 'TEXT_TO_SQL' | 'EXPLAIN';
+  /**
+   * 动作（阶段 2b 新增 FIX_SQL / REWRITE_SQL）：
+   * TEXT_TO_SQL（取数）/ EXPLAIN（解释）/ FIX_SQL（基于最近报错修复选中 SQL）/
+   * REWRITE_SQL（综合优化改写选中 SQL）。后两者单轮产出、**不执行**。
+   */
+  action?: 'TEXT_TO_SQL' | 'EXPLAIN' | 'FIX_SQL' | 'REWRITE_SQL';
   message?: string;
   history?: { role: string; content: string }[];
   sessionId?: string;

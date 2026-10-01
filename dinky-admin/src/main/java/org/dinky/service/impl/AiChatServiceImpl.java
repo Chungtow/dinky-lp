@@ -84,6 +84,10 @@ public class AiChatServiceImpl implements AiChatService {
 
     private static final String ACTION_TEXT_TO_SQL = "TEXT_TO_SQL";
     private static final String ACTION_EXPLAIN = "EXPLAIN";
+    /** 阶段 2b 局部改写：基于最近执行报错修复「用户选中的 SQL」 */
+    private static final String ACTION_FIX_SQL = "FIX_SQL";
+    /** 阶段 2b 局部改写：综合优化改写「用户选中的 SQL」 */
+    private static final String ACTION_REWRITE_SQL = "REWRITE_SQL";
     /** 阶段 2 双模式：Craft（可改写编辑器内容）；Ask 为默认，不单独定义常量 */
     private static final String MODE_CRAFT = "craft";
     /** 阶段 2 审计动作：AI 整块改写编辑器内容 */
@@ -230,9 +234,23 @@ public class AiChatServiceImpl implements AiChatService {
                 return;
             }
 
-            boolean isExplain = ACTION_EXPLAIN.equals(StrUtil.blankToDefault(request.getAction(), ACTION_TEXT_TO_SQL)
+            String action = StrUtil.blankToDefault(request.getAction(), ACTION_TEXT_TO_SQL)
                     .trim()
-                    .toUpperCase());
+                    .toUpperCase();
+            boolean isExplain = ACTION_EXPLAIN.equals(action);
+            // 阶段 2b：局部改写（Fix / Rewrite）——单轮显式改写，只产出 SQL，不执行
+            boolean isFix = ACTION_FIX_SQL.equals(action);
+            boolean isRewrite = ACTION_REWRITE_SQL.equals(action);
+
+            // 阶段 2b（Fix）：无最近执行报错时明确提示并终止，避免模型凭空"幻觉修复"（计划 P6）
+            if (isFix && StrUtil.isBlank(resolveLatestJobError(request))) {
+                sendFrame(emitter, "error", "未取到当前作业最近一次执行报错；可改用「改写」，或先在编辑器中执行一次产生报错后再修复。");
+                audit.setSuccess(false);
+                audit.setExecStatus("rejected");
+                emitter.complete();
+                return;
+            }
+
             String schemaContext =
                     StrUtil.isNotEmpty(prebuiltSchemaContext) ? prebuiltSchemaContext : buildSchemaContext(request);
             List<AiChatMessage> messages = buildMessages(request, schemaContext);
@@ -251,8 +269,20 @@ public class AiChatServiceImpl implements AiChatService {
             String execStatus = "none";
             String execError = null;
 
+            // 阶段 2b：局部改写（Fix / Rewrite）只产出待确认的 SQL 文本，绝不执行——
+            // 提取出来经 sql 帧下发给前端做 diff 对照，用户确认后由前端替换选中片段。
+            if (isFix || isRewrite) {
+                String rewritten = sqlVerifier.extractSql(answer.toString());
+                if (StrUtil.isNotBlank(rewritten)) {
+                    finalSql = rewritten;
+                    sendFrame(emitter, "sql", rewritten);
+                }
+                execStatus = "rewritten";
+            }
+
             // 正确性闭环：生成 → 执行校验 → 报错回传 → 自动修复（最多 maxRetry 次）
-            if (!isExplain && config.isLlmSqlVerifyEnable()) {
+            // （阶段 2b：Fix / Rewrite 不进该闭环，避免自动执行用户的 SQL）
+            if (!isExplain && !isFix && !isRewrite && config.isLlmSqlVerifyEnable()) {
                 int maxRetry = Math.max(config.getLlmSqlVerifyMaxRetry(), 0);
                 String sql = sqlVerifier.extractSql(answer.toString());
                 if (StrUtil.isNotBlank(sql)) {
@@ -568,25 +598,44 @@ public class AiChatServiceImpl implements AiChatService {
                 .trim()
                 .toUpperCase();
         boolean isExplain = ACTION_EXPLAIN.equals(action);
+        // 阶段 2b：局部改写（Fix / Rewrite）——目标是「用户选中的片段」，单轮产出、不执行
+        boolean isFix = ACTION_FIX_SQL.equals(action);
+        boolean isRewrite = ACTION_REWRITE_SQL.equals(action);
         // 首轮才携带 schema 上下文，后续轮次由会话历史承载上下文（省 token、降延迟）
         boolean firstTurn = StrUtil.isBlank(request.getSessionId());
+
+        // 局部改写的目标 SQL：优先「选中片段」，回退全文
+        String rewriteTarget = StrUtil.blankToDefault(request.getSelectedSql(), request.getSql());
 
         Map<String, String> params = new HashMap<>(4);
         params.put(PromptStore.PLACEHOLDER_SCHEMA, firstTurn ? schemaContext : "(schema 已在首轮提供，请沿用)");
         params.put(PromptStore.PLACEHOLDER_DIALECT, StrUtil.blankToDefault(request.getDialect(), "SQL"));
-        params.put(PromptStore.PLACEHOLDER_SQL, StrUtil.nullToEmpty(request.getSql()));
+        params.put(
+                PromptStore.PLACEHOLDER_SQL,
+                StrUtil.nullToEmpty((isFix || isRewrite) ? rewriteTarget : request.getSql()));
+        // Fix 需要数据源返回的真实报错原文
+        params.put(PromptStore.PLACEHOLDER_ERROR, isFix ? resolveLatestJobError(request) : "");
         // 阶段 1.0「作业上下文绑定」：编辑区内容（EXPLAIN 时 SQL 已在用户消息中给出，无需重复注入）
-        // + 当前作业最近一次执行报错（排障场景）
-        params.put(PromptStore.PLACEHOLDER_EDITOR_SQL, isExplain ? "" : buildEditorContext(request));
-        params.put(PromptStore.PLACEHOLDER_JOB_CONTEXT, buildJobContext(request));
+        // + 当前作业最近一次执行报错（排障场景）；局部改写已有专门模板，无需再注入编辑区全文
+        params.put(
+                PromptStore.PLACEHOLDER_EDITOR_SQL,
+                (isExplain || isFix || isRewrite) ? "" : buildEditorContext(request));
+        params.put(PromptStore.PLACEHOLDER_JOB_CONTEXT, (isFix || isRewrite) ? "" : buildJobContext(request));
 
         // 阶段 2：Craft 仅当「管理员已开启 + 本轮显式请求」时生效，否则一律回落 Ask
-        boolean isCraft = !isExplain && isCraftMode(request);
-        String systemPrompt = isExplain
-                ? PromptStore.render(PromptStore.EXPLAIN, params)
-                : isCraft
-                        ? PromptStore.render(PromptStore.CRAFT, params)
-                        : PromptStore.render(PromptStore.TEXT_TO_SQL, params);
+        boolean isCraft = !isExplain && !isFix && !isRewrite && isCraftMode(request);
+        String systemPrompt;
+        if (isExplain) {
+            systemPrompt = PromptStore.render(PromptStore.EXPLAIN, params);
+        } else if (isFix) {
+            systemPrompt = PromptStore.render(PromptStore.SQL_FIX, params);
+        } else if (isRewrite) {
+            systemPrompt = PromptStore.render(PromptStore.SQL_REWRITE, params);
+        } else if (isCraft) {
+            systemPrompt = PromptStore.render(PromptStore.CRAFT, params);
+        } else {
+            systemPrompt = PromptStore.render(PromptStore.TEXT_TO_SQL, params);
+        }
 
         List<AiChatMessage> messages = new ArrayList<>();
         messages.add(AiChatMessage.of("system", systemPrompt));
@@ -778,6 +827,35 @@ public class AiChatServiceImpl implements AiChatService {
             return sb.toString();
         } catch (Exception e) {
             log.warn("Build job context failed, taskId: {}", taskId, e);
+            return "";
+        }
+    }
+
+    /**
+     * 取当前作业「最近一次执行报错」的<b>纯报错原文</b>（阶段 2b：Fix SQL 用）。
+     *
+     * <p>与 {@link #buildJobContext} 的区别：后者输出含状态/步骤的整块文本（用于"为什么跑挂了"排障问答），
+     * 这里只需喂给 {@link PromptStore#SQL_FIX} 模板的报错原文本身。
+     *
+     * @return 报错原文（已截断）；无报错或取数失败时返回空串
+     */
+    private String resolveLatestJobError(AiChatRequest request) {
+        Integer taskId = request.getTaskId();
+        if (taskId == null) {
+            return "";
+        }
+        try {
+            JobInstance jobInstance = jobInstanceService.getJobInstanceByTaskId(taskId);
+            if (jobInstance == null || StrUtil.isBlank(jobInstance.getError())) {
+                return "";
+            }
+            String error = jobInstance.getError().trim();
+            if (error.length() > MAX_JOB_ERROR_CHARS) {
+                error = error.substring(0, MAX_JOB_ERROR_CHARS) + "\n... (报错过长，已截断)";
+            }
+            return error;
+        } catch (Exception e) {
+            log.warn("Resolve latest job error failed, taskId: {}", taskId, e);
             return "";
         }
     }
