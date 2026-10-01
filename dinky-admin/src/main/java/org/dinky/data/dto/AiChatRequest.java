@@ -96,6 +96,16 @@ public class AiChatRequest {
     private String selectedSql;
 
     /**
+     * 前端暂存的「最近一次执行报错」原文（阶段 2b：Fix SQL）。
+     *
+     * <p>编辑器内执行 SQL（尤其 MySQL 等直连数据源）的报错既不落 {@code dinky_history}
+     * 也不落 {@code dinky_job_instance}，只能由前端在请求失败时捕获并随请求下发；
+     * 仅在 {@code action=FIX_SQL} 时使用，是报错来源的<b>最高优先级</b>。
+     */
+    @ApiModelProperty(value = "前端暂存的最近一次执行报错（Fix SQL 用）")
+    private String executionError;
+
+    /**
      * 上下文范围档位（阶段 1a：1.1）：{@code current}（仅当前选中表）/ {@code all}（当前数据源全库，
      * 默认，兼容既有行为）/ {@code custom}（仅 {@link #customTables} 勾选的表）。
      */

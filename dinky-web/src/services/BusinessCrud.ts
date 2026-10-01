@@ -232,6 +232,31 @@ export const handleDownloadOption = async (url: string, title: string, param: an
   }
 };
 
+/**
+ * 执行类请求的「最近一次错误」暂存（阶段 2b：AI Chat Fix SQL 用）。
+ *
+ * <p>编辑器内执行 SQL 的报错（尤其是 MySQL 等直连数据源）既不入 dinky_history 也不入
+ * JobInstance，只在前端 toast 一闪而过；这里按 taskId 暂存，供 AI Chat 的「修复选中 SQL」
+ * 自动带上，避免让用户手工粘贴报错。
+ */
+const execErrorMessage = new Map<string, string>();
+
+/** 记录某作业最近一次执行报错（按 taskId） */
+export const recordExecError = (taskId: number | string | undefined, msg?: string) => {
+  if (taskId === undefined || taskId === null || !msg) {
+    return;
+  }
+  execErrorMessage.set(String(taskId), msg);
+};
+
+/** 取某作业最近一次执行报错；无记录返回空串 */
+export const getExecError = (taskId: number | string | undefined): string => {
+  if (taskId === undefined || taskId === null) {
+    return '';
+  }
+  return execErrorMessage.get(String(taskId)) ?? '';
+};
+
 export const handleGetOption = async (url: string, title: string, param: any) => {
   await LoadingMessageAsync(l('app.request.running') + title);
   try {
@@ -241,6 +266,11 @@ export const handleGetOption = async (url: string, title: string, param: any) =>
       return result;
     }
     WarningMessage(result.msg);
+    // 阶段 2b：按 param.id 暂存报错，供 AI Chat「修复选中 SQL」自动带上
+    // （编辑器内执行 SQL 的报错不落后端库，只能在前端捕获）
+    if (param && param.id !== undefined) {
+      recordExecError(param.id, result.msg);
+    }
     return undefined;
   } catch (error) {
     return undefined;

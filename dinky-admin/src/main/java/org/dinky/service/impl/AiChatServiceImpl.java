@@ -843,15 +843,16 @@ public class AiChatServiceImpl implements AiChatService {
      * @return 报错原文（已截断）；无报错或取数失败时返回空串
      */
     private String resolveLatestJobError(AiChatRequest request) {
+        // ① 最高优先：前端捕获并随请求下发的执行报错
+        //    （编辑器内执行 SQL 的报错不落后端库，尤其 MySQL 等直连数据源）
+        String error = StrUtil.trimToEmpty(request.getExecutionError());
         Integer taskId = request.getTaskId();
-        if (taskId == null) {
-            return "";
+        // ② 后端历史：dinky_history.error（Flink 作业执行失败）
+        if (StrUtil.isBlank(error) && taskId != null) {
+            error = latestHistoryError(taskId);
         }
-        // ① 优先取「最近一次执行的报错」：编辑器内执行 SQL 的报错落在 dinky_history.error
-        //    （JobInstance 仅在流作业拿到 JID 后才创建，编辑器内执行报错不产生 JobInstance）
-        String error = latestHistoryError(taskId);
-        // ② 兜底：已部署作业的运行时报错落在 JobInstance.error
-        if (StrUtil.isBlank(error)) {
+        // ③ 兜底：JobInstance.error（已部署作业的运行时报错）
+        if (StrUtil.isBlank(error) && taskId != null) {
             error = jobInstanceError(taskId);
         }
         if (StrUtil.isBlank(error)) {

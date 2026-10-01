@@ -42,6 +42,7 @@ import {
   reportCraftWrite
 } from './service';
 import { DataStudioContext } from '@/pages/DataStudio/DataStudioContext';
+import { getExecError } from '@/services/BusinessCrud';
 import { l } from '@/utils/intl';
 import {
   CopyOutlined,
@@ -627,7 +628,9 @@ const AiChat = (props: AiChatProps) => {
           dialect,
           sql: currentSql,
           taskId: tabParams?.taskId,
-          selectedSql: selected
+          selectedSql: selected,
+          // 阶段 2b：把前端暂存的「最近一次执行报错」带上（编辑器执行报错不落后端库）
+          executionError: getExecError(tabParams?.taskId) || undefined
         },
         ({ sql }) => {
           if (sql) {
