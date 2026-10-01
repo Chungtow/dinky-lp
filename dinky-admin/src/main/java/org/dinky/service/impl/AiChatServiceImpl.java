@@ -41,11 +41,13 @@ import org.dinky.data.model.ForeignKey;
 import org.dinky.data.model.SystemConfiguration;
 import org.dinky.data.model.Table;
 import org.dinky.data.model.TableRelations;
+import org.dinky.data.model.job.History;
 import org.dinky.data.model.job.JobInstance;
 import org.dinky.data.vo.AiChatConfig;
 import org.dinky.service.AiChatLogService;
 import org.dinky.service.AiChatService;
 import org.dinky.service.DataBaseService;
+import org.dinky.service.HistoryService;
 import org.dinky.service.JobInstanceService;
 import org.dinky.sse.SseEmitterUTF8;
 
@@ -128,6 +130,7 @@ public class AiChatServiceImpl implements AiChatService {
     private final AiChatRateLimiter rateLimiter;
     private final AiChatLogService aiChatLogService;
     private final JobInstanceService jobInstanceService;
+    private final HistoryService historyService;
     private final AiToolLoop toolLoop;
 
     private final ExecutorService chatExecutor = Executors.newCachedThreadPool();
@@ -844,18 +847,41 @@ public class AiChatServiceImpl implements AiChatService {
         if (taskId == null) {
             return "";
         }
+        // ① 优先取「最近一次执行的报错」：编辑器内执行 SQL 的报错落在 dinky_history.error
+        //    （JobInstance 仅在流作业拿到 JID 后才创建，编辑器内执行报错不产生 JobInstance）
+        String error = latestHistoryError(taskId);
+        // ② 兜底：已部署作业的运行时报错落在 JobInstance.error
+        if (StrUtil.isBlank(error)) {
+            error = jobInstanceError(taskId);
+        }
+        if (StrUtil.isBlank(error)) {
+            return "";
+        }
+        error = error.trim();
+        if (error.length() > MAX_JOB_ERROR_CHARS) {
+            error = error.substring(0, MAX_JOB_ERROR_CHARS) + "\n... (报错过长，已截断)";
+        }
+        return error;
+    }
+
+    /** 取最近一条执行历史（dinky_history）的报错原文；无记录 / 无报错时返回空串 */
+    private String latestHistoryError(Integer taskId) {
+        try {
+            History history = historyService.getLatestHistoryById(taskId);
+            return history == null ? "" : history.getError();
+        } catch (Exception e) {
+            log.warn("Resolve latest history error failed, taskId: {}", taskId, e);
+            return "";
+        }
+    }
+
+    /** 取已部署作业（JobInstance）的运行时报错原文；无记录 / 无报错时返回空串 */
+    private String jobInstanceError(Integer taskId) {
         try {
             JobInstance jobInstance = jobInstanceService.getJobInstanceByTaskId(taskId);
-            if (jobInstance == null || StrUtil.isBlank(jobInstance.getError())) {
-                return "";
-            }
-            String error = jobInstance.getError().trim();
-            if (error.length() > MAX_JOB_ERROR_CHARS) {
-                error = error.substring(0, MAX_JOB_ERROR_CHARS) + "\n... (报错过长，已截断)";
-            }
-            return error;
+            return jobInstance == null ? "" : jobInstance.getError();
         } catch (Exception e) {
-            log.warn("Resolve latest job error failed, taskId: {}", taskId, e);
+            log.warn("Resolve job instance error failed, taskId: {}", taskId, e);
             return "";
         }
     }
