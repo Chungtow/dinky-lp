@@ -25,7 +25,10 @@ import {
   showDataSourceTable
 } from '@/pages/DataStudio/Toolbar/DataSource/service';
 import ToolProcess from './components/ToolProcess';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import CraftDiff from './components/CraftDiff';
+import './index.less';
 import {
   AiChatConfig,
   AiChatMentionItem,
@@ -354,6 +357,41 @@ const AiChat = (props: AiChatProps) => {
 
   /** 浮层打开时接管方向键 / 回车 / Tab / Esc */
   const handleInputKeyDown = (e: any) => {
+    // 体验优化（2026-10-01 UAT）：Backspace 在 @token 上时整块删除（@ 连同 表名[.字段]），
+    // 而不是逐字符删——把引用当作一个「原子」。TextArea 是纯文本控件无法局部高亮，
+    // 先用整块删除对齐原子引用体验；局部高亮需换 Mentions/contentEditable，另行评估。
+    if (e.key === 'Backspace' && !composingRef.current) {
+      const el = e.target as HTMLTextAreaElement;
+      const start: number = el.selectionStart ?? 0;
+      const end: number = el.selectionEnd ?? 0;
+      // 光标贴着 token（选中态除外）：向前找 @token 头，向后吸收残余，保证整块删除
+      if (start === end && start > 0) {
+        const head = /@[A-Za-z0-9_.]+$/.exec(inputValue.slice(0, start));
+        // 孤零零一个 @ 保持默认逐字符删除
+        if (head && head[0].length > 1) {
+          const tail = /^[A-Za-z0-9_.]*/.exec(inputValue.slice(end))?.[0] ?? '';
+          const cut = start - head[0].length;
+          const nextValue =
+            inputValue.slice(0, cut) + inputValue.slice(end + tail.length);
+          e.preventDefault();
+          setInputValue(nextValue);
+          // 与 onChange 的同步清理保持一致：token 没了，对应 chips 一并移除
+          setMentions((prev) =>
+            prev.filter((m) => {
+              const token =
+                m.type === 'column' ? `@${m.name}.${m.columnName}` : `@${m.name}`;
+              return nextValue.includes(token);
+            })
+          );
+          setMentionOpen(false);
+          setMentionQuery('');
+          requestAnimationFrame(() => {
+            el.selectionStart = el.selectionEnd = cut;
+          });
+          return;
+        }
+      }
+    }
     if (!mentionOpen || filteredMentions.length === 0) {
       return;
     }
@@ -721,8 +759,10 @@ const AiChat = (props: AiChatProps) => {
     while ((match = CODE_BLOCK_REGEX.exec(content)) !== null) {
       if (match.index > lastIndex) {
         nodes.push(
-          <div key={`text-${lastIndex}`} style={{ whiteSpace: 'pre-wrap' }}>
-            {content.slice(lastIndex, match.index)}
+          <div key={`text-${lastIndex}`} className={'ai-chat-md'}>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {content.slice(lastIndex, match.index)}
+            </ReactMarkdown>
           </div>
         );
       }
@@ -758,8 +798,8 @@ const AiChat = (props: AiChatProps) => {
     }
     if (lastIndex < content.length) {
       nodes.push(
-        <div key={`text-${lastIndex}`} style={{ whiteSpace: 'pre-wrap' }}>
-          {content.slice(lastIndex)}
+        <div key={`text-${lastIndex}`} className={'ai-chat-md'}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{content.slice(lastIndex)}</ReactMarkdown>
         </div>
       );
     }
@@ -1053,7 +1093,7 @@ const AiChat = (props: AiChatProps) => {
           </Space>
         </div>
       )}
-      <Space style={{ marginTop: 8 }}>
+      <Space wrap style={{ marginTop: 8, rowGap: 6 }}>
         <Tooltip title={l('datastudio.aiChat.modelTip')}>
           <Tag
             icon={<RobotOutlined />}
