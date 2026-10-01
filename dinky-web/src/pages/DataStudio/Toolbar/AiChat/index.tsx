@@ -160,6 +160,15 @@ const AiChat = (props: AiChatProps) => {
   const craftBeforeRef = useRef<Record<string, string>>({});
   /** 哪些 tab 当前处于「AI 已改动、可撤销」状态 */
   const [craftApplied, setCraftApplied] = useState<Record<string, boolean>>({});
+  /** 阶段 2b（局部改写）：编辑区当前选中片段（驱动「修复/改写」操作条显隐） */
+  const [selectedText, setSelectedText] = useState<string>('');
+  /** 阶段 2b：Fix / Rewrite 待拍板的改写结果；非空即展示 diff 预览 */
+  const [p2bDiff, setP2bDiff] = useState<{
+    action: 'FIX_SQL' | 'REWRITE_SQL';
+    original: string;
+    modified: string;
+  } | null>(null);
+  const [p2bLoading, setP2bLoading] = useState<boolean>(false);
   const [mentionOpen, setMentionOpen] = useState<boolean>(false);
   const [mentionQuery, setMentionQuery] = useState<string>('');
   const [mentionIndex, setMentionIndex] = useState<number>(0);
@@ -1064,6 +1073,54 @@ const AiChat = (props: AiChatProps) => {
         )}
       </div>
 
+      {/* 阶段 2b（局部改写）：编辑区有非空选中时，输入框上方浮出「修复/改写」操作条 */}
+      {selectedText.trim() && (
+        <div
+          style={{
+            marginBottom: 4,
+            padding: '4px 8px',
+            background: 'rgba(22,119,255,0.06)',
+            border: '1px solid rgba(22,119,255,0.25)',
+            borderRadius: 4,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8
+          }}
+        >
+          <span
+            style={{
+              fontSize: 12,
+              color: 'rgba(0,0,0,0.65)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap'
+            }}
+            title={selectedText}
+          >
+            {l('datastudio.aiChat.p2b.selectionPrefix')} {selectedText.length}{' '}
+            {l('datastudio.aiChat.p2b.chars')}
+          </span>
+          <Space size={4} style={{ flexShrink: 0 }}>
+            <Button
+              size={'small'}
+              type={'primary'}
+              ghost
+              loading={p2bLoading}
+              onClick={() => handleFixRewrite('FIX_SQL')}
+            >
+              {l('datastudio.aiChat.p2b.fix')}
+            </Button>
+            <Button
+              size={'small'}
+              loading={p2bLoading}
+              onClick={() => handleFixRewrite('REWRITE_SQL')}
+            >
+              {l('datastudio.aiChat.p2b.rewrite')}
+            </Button>
+          </Space>
+        </div>
+      )}
       {/* 阶段 1a（1.4）：@ 引用浮层——固定贴输入框上方，不追随光标（省去坐标计算，更稳） */}
       <div style={{ position: 'relative' }}>
         {mentionOpen && (
