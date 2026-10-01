@@ -18,6 +18,7 @@
  */
 
 import { getData } from '@/services/api';
+import { queryDataByParams } from '@/services/BusinessCrud';
 import { API_CONSTANTS } from '@/services/endpoints';
 
 export type AiChatRole = 'user' | 'assistant';
@@ -65,6 +66,8 @@ export type AiChatConfig = {
   model?: string;
   baseUrl?: string;
   hasApiKey?: boolean;
+  /** Craft 模式是否开启（管理员配置）；未开启时前端不渲染模式切换控件 */
+  craftModeEnable?: boolean;
 };
 
 /**
@@ -73,9 +76,16 @@ export type AiChatConfig = {
  * <p>type 预留 knowledge：后续「语料包」能力可直接复用本结构，前端无需改协议。
  */
 export type AiChatMentionItem = {
-  type: 'table' | 'job' | 'selection' | 'knowledge';
+  type: 'table' | 'job' | 'selection' | 'knowledge' | 'column';
   schemaName?: string;
   name: string;
+  /**
+   * 字段名（type=column 时有效）。
+   *
+   * <p>column 类型下 name 存的是<b>表名</b>而非字段名：输入框里写 {@code @表名.字段}，
+   * 而「删掉 @ 文本时同步移除 chip」的判定（value.includes('@' + name)）依然成立。
+   */
+  columnName?: string;
   /** 片段正文（selection / job 携带），仅编辑器文本，不含业务数据行 */
   content?: string;
 };
@@ -101,6 +111,72 @@ export type AiChatRequestBody = {
   customTables?: string[];
   /** {@code @} 显式引用项：最高优先级，后端不做预算裁剪 */
   mentions?: AiChatMentionItem[];
+  /**
+   * 对话模式（阶段 2）：{@code ask}（默认，只回答不触碰编辑器）/ {@code craft}（可整块改写编辑器）。
+   *
+   * <p>Craft 需管理员开启 {@code llm.craftModeEnable} 后才下发；未开启时后端一律按 ask 处理——
+   * 即「未授权即无能力」，安全性不依赖前端是否隐藏控件。
+   */
+  mode?: 'ask' | 'craft';
+};
+
+/**
+ * 拉取指定表的字段（阶段 2 前置：字段级 {@code @表.} 引用）。
+ *
+ * <p>复用注册中心现成接口 {@code /api/database/listColumns}——<b>不新增后端接口</b>.
+ */
+export const listTableColumns = async (
+  databaseId: number,
+  schemaName: string,
+  tableName: string
+): Promise<any[]> => {
+  const res = await queryDataByParams(API_CONSTANTS.DATASOURCE_GET_COLUMNS_BY_TABLE, {
+    id: databaseId,
+    schemaName,
+    tableName
+  });
+  return (res?.data ?? res ?? []) as any[];
+};
+
+/**
+ * 简单字符串 hash（djb2）。
+ *
+ * <p><b>仅用于审计比对</b>（判断改动前后是否为同一内容），不用于任何安全场景。
+ */
+export const hashText = (text: string): string => {
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) {
+    h = ((h << 5) + h + text.charCodeAt(i)) | 0;
+  }
+  return (h >>> 0).toString(16);
+};
+
+/**
+ * 上报 Craft 写入审计（阶段 2 T2-5）。
+ *
+ * <p>只上报 hash 与字符数变化，<b>不上传代码正文</b>：既避免审计表膨胀，
+ * 也避免作业代码进入后端存储造成额外泄露面。
+ *
+ * <p>审计是<b>旁路</b>：上报失败静默吞掉，绝不影响用户已经完成的改写。
+ */
+export const reportCraftWrite = async (params: {
+  taskId?: number;
+  sessionId?: string;
+  before: string;
+  after: string;
+}): Promise<void> => {
+  try {
+    await queryDataByParams(API_CONSTANTS.AI_CHAT_WRITE_AUDIT, {
+      taskId: params.taskId,
+      sessionId: params.sessionId,
+      mode: 'craft',
+      beforeHash: hashText(params.before),
+      afterHash: hashText(params.after),
+      chars: params.after.length - params.before.length
+    });
+  } catch (e) {
+    // 旁路失败：不打扰用户，审计缺失可接受，写能力不可用不可接受
+  }
 };
 
 export const getAiChatConfig = async (): Promise<AiChatConfig> => {

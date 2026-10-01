@@ -536,6 +536,46 @@ const DataStudio: React.FC = (props: any) => {
           // 编辑器已卸载 / 已 dispose：静默返回空串，不阻断提问主流程
           return '';
         }
+      },
+      // 阶段 2（Craft）：读取编辑器全文，作为 diff 的「原文」基准
+      getContent: (taskId?: string) => {
+        if (!taskId) {
+          return '';
+        }
+        const instance = editorsRef.current.get(String(taskId));
+        if (!instance) {
+          return '';
+        }
+        try {
+          return instance.getModel()?.getValue() ?? '';
+        } catch (e) {
+          // 编辑器已卸载 / 已 dispose：静默返回空串
+          return '';
+        }
+      },
+      // 阶段 2（Craft）：整块替换编辑器内容。
+      // 必须用 executeEdits（保留 monaco undo 栈，用户仍可 Ctrl+Z），禁用 setValue。
+      applyFullContent: (taskId?: string, content?: string) => {
+        if (!taskId || content === undefined || content === null) {
+          return false;
+        }
+        const instance = editorsRef.current.get(String(taskId));
+        if (!instance) {
+          return false;
+        }
+        try {
+          const model = instance.getModel();
+          if (!model) {
+            return false;
+          }
+          instance.executeEdits('ai-craft', [
+            { range: model.getFullModelRange(), text: content }
+          ]);
+          instance.pushUndoStop();
+          return true;
+        } catch (e) {
+          return false;
+        }
       }
     }),
     []

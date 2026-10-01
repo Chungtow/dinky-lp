@@ -20,6 +20,7 @@
 package org.dinky.service;
 
 import org.dinky.data.dto.AiChatRequest;
+import org.dinky.data.dto.AiChatWriteAuditRequest;
 import org.dinky.data.vo.AiChatConfig;
 
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -47,4 +48,11 @@ public interface AiChatService {
      * @return {@link AiChatConfig}
      */
     AiChatConfig getConfig();
+
+    /**
+     * 记录 Craft 写入审计（阶段 2）：谁、哪个作业、改动前后 hash 与字符数变化。
+     *
+     * @param request 写入审计请求（只含 hash，不含代码正文）
+     */
+    void recordCraftWrite(AiChatWriteAuditRequest request);
 }

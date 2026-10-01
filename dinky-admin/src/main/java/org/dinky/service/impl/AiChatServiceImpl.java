@@ -33,6 +33,7 @@ import org.dinky.ai.TokenUsage;
 import org.dinky.data.dto.AiChatMention;
 import org.dinky.data.dto.AiChatMessage;
 import org.dinky.data.dto.AiChatRequest;
+import org.dinky.data.dto.AiChatWriteAuditRequest;
 import org.dinky.data.model.AiChatLog;
 import org.dinky.data.model.Column;
 import org.dinky.data.model.DataBase;
@@ -83,6 +84,10 @@ public class AiChatServiceImpl implements AiChatService {
 
     private static final String ACTION_TEXT_TO_SQL = "TEXT_TO_SQL";
     private static final String ACTION_EXPLAIN = "EXPLAIN";
+    /** 阶段 2 双模式：Craft（可改写编辑器内容）；Ask 为默认，不单独定义常量 */
+    private static final String MODE_CRAFT = "craft";
+    /** 阶段 2 审计动作：AI 整块改写编辑器内容 */
+    private static final String ACTION_CRAFT_WRITE = "CRAFT_WRITE";
 
     /** 表清单最多列出的表名数量（表名很短，尽量全列，否则模型看不到目标表） */
     private static final int MAX_TABLE_LIST = 300;
@@ -173,6 +178,7 @@ public class AiChatServiceImpl implements AiChatService {
                 .model(config.getLlmModel())
                 .baseUrl(config.getLlmBaseUrl())
                 .hasApiKey(StrUtil.isNotBlank(config.getLlmApiKey()))
+                .craftModeEnable(config.isLlmCraftModeEnable())
                 .build();
     }
 
@@ -462,6 +468,42 @@ public class AiChatServiceImpl implements AiChatService {
         return null;
     }
 
+    /**
+     * 记录 Craft 写入审计（阶段 2 T2-5）。
+     *
+     * <p>只落 hash 与字符数变化，<b>不落代码正文</b>；审计总开关关闭时不记录。
+     * 整段为旁路逻辑——审计失败绝不影响用户已经完成的改写。
+     */
+    @Override
+    public void recordCraftWrite(AiChatWriteAuditRequest request) {
+        try {
+            if (request == null || !SystemConfiguration.getInstances().isLlmAuditEnable()) {
+                return;
+            }
+            AiChatLog audit = new AiChatLog();
+            audit.setUserId(request.getUserId());
+            audit.setSessionId(request.getSessionId());
+            audit.setAction(ACTION_CRAFT_WRITE);
+            audit.setSqlText(StrUtil.format(
+                    "Craft 整块改写作业 #{}：字符变化 {}（before={} / after={}）",
+                    request.getTaskId(),
+                    request.getChars(),
+                    request.getBeforeHash(),
+                    request.getAfterHash()));
+            if (request.getTaskId() != null) {
+                audit.setWriteTaskId(request.getTaskId().longValue());
+            }
+            audit.setWriteBeforeHash(request.getBeforeHash());
+            audit.setWriteAfterHash(request.getAfterHash());
+            audit.setWriteChars(request.getChars());
+            audit.setSuccess(true);
+            audit.setCreateTime(LocalDateTime.now());
+            aiChatLogService.record(audit);
+        } catch (Exception e) {
+            log.warn("Record AI craft write audit failed: {}", e.getMessage());
+        }
+    }
+
     /** 写审计日志（旁路：失败不影响对话） */
     private void recordAudit(AiChatLog audit, TokenUsage usage, long start) {
         try {
@@ -538,9 +580,13 @@ public class AiChatServiceImpl implements AiChatService {
         params.put(PromptStore.PLACEHOLDER_EDITOR_SQL, isExplain ? "" : buildEditorContext(request));
         params.put(PromptStore.PLACEHOLDER_JOB_CONTEXT, buildJobContext(request));
 
+        // 阶段 2：Craft 仅当「管理员已开启 + 本轮显式请求」时生效，否则一律回落 Ask
+        boolean isCraft = !isExplain && isCraftMode(request);
         String systemPrompt = isExplain
                 ? PromptStore.render(PromptStore.EXPLAIN, params)
-                : PromptStore.render(PromptStore.TEXT_TO_SQL, params);
+                : isCraft
+                        ? PromptStore.render(PromptStore.CRAFT, params)
+                        : PromptStore.render(PromptStore.TEXT_TO_SQL, params);
 
         List<AiChatMessage> messages = new ArrayList<>();
         messages.add(AiChatMessage.of("system", systemPrompt));
@@ -567,6 +613,20 @@ public class AiChatServiceImpl implements AiChatService {
         }
         messages.add(AiChatMessage.of("user", userContent.toString()));
         return messages;
+    }
+
+    /**
+     * 判定本轮是否为 Craft 模式（阶段 2：Ask / Craft 双模式）。
+     *
+     * <p><b>双重条件，缺一不可</b>：① 管理员已开启 {@code llm.craftModeEnable}（默认 false）；
+     * ② 本轮请求显式携带 {@code mode=craft}。只满足其一都回落 Ask——
+     * <b>安全性不依赖前端是否隐藏控件</b>：即使前端被绕过，未开启配置的请求也进不了 Craft 分支。
+     */
+    private boolean isCraftMode(AiChatRequest request) {
+        if (!SystemConfiguration.getInstances().isLlmCraftModeEnable()) {
+            return false;
+        }
+        return MODE_CRAFT.equalsIgnoreCase(StrUtil.trimToEmpty(request.getMode()));
     }
 
     /**
@@ -623,6 +683,19 @@ public class AiChatServiceImpl implements AiChatService {
                         .append(StrUtil.nullToEmpty(mention.getName()))
                         .append("\n");
                 appendTableDetail(sb, databaseId, tableSchema, mention.getName());
+            } else if ("column".equalsIgnoreCase(mention.getType())) {
+                // 阶段 2 前置：字段级引用——只给该字段的类型/注释，不给整表，省预算
+                String tableSchema = StrUtil.isNotBlank(mention.getSchemaName()) ? mention.getSchemaName() : schemaName;
+                String table = StrUtil.nullToEmpty(mention.getName());
+                String column = StrUtil.nullToEmpty(mention.getColumnName());
+                sb.append("- 字段 ")
+                        .append(tableSchema)
+                        .append(".")
+                        .append(table)
+                        .append(".")
+                        .append(column)
+                        .append("\n");
+                appendColumnDetail(sb, databaseId, tableSchema, table, column);
             } else if (StrUtil.isNotBlank(mention.getContent())) {
                 // selection / job：片段正文（仅编辑器文本，不含业务数据行）
                 String content = mention.getContent().trim();
@@ -807,6 +880,58 @@ public class AiChatServiceImpl implements AiChatService {
      *
      * @return true 表示成功写入；false 表示获取列失败
      */
+    /**
+     * 把单表的<b>指定字段</b>详情写入 {@code target}（阶段 2 前置：字段级 {@code @} 引用）。
+     *
+     * <p>字段查不到时<b>退化为整表</b>并照实说明——沿用 {@link #applyContextScope} 的既有原则：
+     * 「什么都没给」的静默失败，比给得不准更糟。
+     */
+    private void appendColumnDetail(
+            StringBuilder target, Integer databaseId, String schemaName, String tableName, String columnName) {
+        if (StrUtil.isBlank(columnName) || StrUtil.isBlank(tableName)) {
+            return;
+        }
+        try {
+            List<Column> columns = dataBaseService.listColumns(databaseId, schemaName, tableName);
+            Column hit = null;
+            if (CollUtil.isNotEmpty(columns)) {
+                for (Column column : columns) {
+                    if (column != null && columnName.equalsIgnoreCase(column.getName())) {
+                        hit = column;
+                        break;
+                    }
+                }
+            }
+            if (hit == null) {
+                target.append("  (未找到字段 ").append(columnName).append("，改为给出整表结构)\n");
+                appendTableDetail(target, databaseId, schemaName, tableName);
+                return;
+            }
+            target.append("  Column: ")
+                    .append(tableName)
+                    .append(".")
+                    .append(hit.getName())
+                    .append(" ")
+                    .append(StrUtil.nullToEmpty(hit.getType()));
+            if (hit.isKeyFlag()) {
+                target.append(" [PK]");
+            }
+            if (StrUtil.isNotBlank(hit.getComment())) {
+                target.append(" -- ").append(hit.getComment());
+            }
+            target.append("\n");
+        } catch (Exception e) {
+            // 脱敏：原始异常可能含 JDBC URL / 内网地址，绝不能写进 prompt
+            log.warn(
+                    "Append column detail failed, databaseId: {}, table: {}, column: {}",
+                    databaseId,
+                    tableName,
+                    columnName,
+                    e);
+            target.append("  (读取字段信息失败)\n");
+        }
+    }
+
     private boolean appendTableDetail(StringBuilder target, Integer databaseId, String schemaName, String tableName) {
         StringBuilder sb = new StringBuilder();
         try {

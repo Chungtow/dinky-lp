@@ -34,6 +34,26 @@ export type EditorRegistry = {
   unregister: (taskId: string) => void;
   /** 取指定作业编辑器中的选中文本；无选中 / 编辑器已卸载时返回空串 */
   getSelection: (taskId?: string) => string;
+
+  /**
+   * 取指定作业编辑器的<b>全文</b>（阶段 2：Craft 模式需以编辑器当前内容作为 diff 基准）。
+   *
+   * <p>与 {@link getSelection} 的区别：本方法返回整个 model 的内容，而非选中片段。
+   */
+  getContent: (taskId?: string) => string;
+
+  /**
+   * 以<b>整块替换</b>的方式把内容写入编辑器（阶段 2：Craft 采纳后落地）。
+   *
+   * <p><b>必须走 {@code executeEdits} 而非 {@code setValue}</b>：后者会重置 monaco 的 undo 栈，
+   * 导致用户 Ctrl+Z 无法撤销 AI 的改动（阶段 2 设计要求「写入必须保留 undo 栈」）。
+   *
+   * <p>写入后由 monaco 的 {@code onDidChangeModelContent} 驱动 CodeEdit 的 onChange，
+   * 进而更新 dva {@code tabs[].params.statement}，因此本方法<b>不</b>手动改任何状态。
+   *
+   * @return 是否写入成功；编辑器未注册 / 已 dispose / content 为空时返回 false
+   */
+  applyFullContent: (taskId?: string, content?: string) => boolean;
 };
 
 export type DataStudioContextType = {

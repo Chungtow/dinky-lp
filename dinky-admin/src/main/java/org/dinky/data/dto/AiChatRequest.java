@@ -108,6 +108,18 @@ public class AiChatRequest {
     private List<AiChatMention> mentions;
 
     /**
+     * 对话模式（阶段 2）：{@code ask}（默认，只回答不触碰编辑器）/ {@code craft}（可整块改写编辑器内容）。
+     *
+     * <p>后端据此分流 system prompt：Craft 要求模型输出<b>完整目标内容</b>而非片段，
+     * 并把 mode 写入审计。
+     *
+     * <p><b>安全边界</b>：Craft 需管理员开启 {@code llm.craftModeEnable}；未开启时后端强制回落为
+     * {@code ask}，不信任前端传入值——避免"仅靠隐藏控件"来保证安全。
+     */
+    @ApiModelProperty(value = "对话模式：ask / craft", example = "ask")
+    private String mode;
+
+    /**
      * 服务端填充的当前用户 id（限流 / 配额 / 审计用）。
      *
      * <p><b>不接受前端传入</b>：Controller 会用 Sa-Token 的登录 id 覆盖，防止伪造绕过限流。
