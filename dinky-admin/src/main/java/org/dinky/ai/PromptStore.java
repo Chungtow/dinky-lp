@@ -136,6 +136,63 @@ public final class PromptStore {
             + PLACEHOLDER_DIALECT
             + "。\n";
 
+    /**
+     * 修复「<b>用户选中的 SQL</b>」（阶段 2b：局部改写 Fix SQL）。
+     *
+     * <p>与 {@link #SQL_REPAIR} 的区别：后者的主语是"你（模型）上一步生成的 SQL"，用于生成流内的
+     * 自动重试；本模板的主语是"用户在编辑器中主动选中的 SQL"，由用户显式触发、单轮产出、经 diff 确认后
+     * 才替换回编辑器。两者占位符机制一致。
+     */
+    public static final String SQL_FIX = "用户在编辑器中选中的 SQL 执行失败了，请修复它。\n"
+            + "\n"
+            + "## 执行失败的 SQL（用户选中片段）\n"
+            + "```sql\n"
+            + PLACEHOLDER_SQL
+            + "\n```\n"
+            + "\n"
+            + "## 数据源返回的真实错误（原文）\n"
+            + PLACEHOLDER_ERROR
+            + "\n"
+            + "\n"
+            + "## 可用的数据库元数据（只有元数据，不含任何数据行）\n"
+            + PLACEHOLDER_SCHEMA
+            + "\n"
+            + "\n"
+            + "## 修复要求\n"
+            + "1. 只修导致报错的地方，保持用户的取数意图不变；\n"
+            + "2. 只能使用元数据中出现过的表名与字段名，禁止编造；\n"
+            + "3. 若错误提示表/字段不存在，请改用元数据中真实存在的名称；\n"
+            + "4. 只输出一个 ```sql 代码块，里面是完整可执行的 SQL，不要任何解释文字；\n"
+            + "5. 方言："
+            + PLACEHOLDER_DIALECT
+            + "。\n";
+
+    /**
+     * 综合优化改写「<b>用户选中的 SQL</b>」（阶段 2b：局部改写 Rewrite SQL）。
+     *
+     * <p>不基于报错，只做"综合优化"（决策 3：默认综合优化，暂不做性能/可读性/方言分档）。
+     * 与 Fix 一样单轮产出、经 diff 确认后替换选中片段，<b>不自动执行</b>。
+     */
+    public static final String SQL_REWRITE = "你是资深数据工程师，请对用户在编辑器中选中的一段 SQL 做【综合优化改写】。\n"
+            + "\n"
+            + "## 待改写的 SQL（用户选中片段）\n"
+            + "```sql\n"
+            + PLACEHOLDER_SQL
+            + "\n```\n"
+            + "\n"
+            + "## 可用的数据库元数据（只有元数据，不含任何数据行）\n"
+            + PLACEHOLDER_SCHEMA
+            + PLACEHOLDER_JOB_CONTEXT
+            + "## 改写要求\n"
+            + "1. 综合优化：在不改变业务口径的前提下提升可读性与执行效率"
+            + "（如补显式列名、避免 SELECT *、合理 JOIN/过滤、补齐必要别名）；\n"
+            + "2. 只能使用元数据中出现过的表名与字段名，禁止编造；\n"
+            + "3. 保持原有业务逻辑与结果集语义不变，不得删减任何过滤/关联条件；\n"
+            + "4. 只输出一个 ```sql 代码块，里面是完整可执行的 SQL，不要任何解释文字；\n"
+            + "5. 方言："
+            + PLACEHOLDER_DIALECT
+            + "。\n";
+
     /** 解释 SQL */
     public static final String EXPLAIN = "You are a senior data engineer. Explain the given SQL in Chinese.\n"
             + "\n"

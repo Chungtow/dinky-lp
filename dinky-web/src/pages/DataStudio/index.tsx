@@ -510,13 +510,35 @@ const DataStudio: React.FC = (props: any) => {
   };
   // 阶段 1a：编辑器实例登记表——AI Chat 需读取「用户在编辑区选中的片段」（1.0.4）
   const editorsRef = useRef<Map<string, editor.IStandaloneCodeEditor>>(new Map());
+  // 阶段 2b：选区变化监听者（AI Chat 的「修复/改写」浮层据此响应式显示）
+  const selectionListenersRef = useRef<Map<string, Set<(text: string) => void>>>(new Map());
   const editorRegistry = useMemo<EditorRegistry>(
     () => ({
       register: (taskId: string, instance: editor.IStandaloneCodeEditor) => {
-        editorsRef.current.set(String(taskId), instance);
+        const key = String(taskId);
+        editorsRef.current.set(key, instance);
+        // 阶段 2b：把 monaco 选区变化广播给订阅者（用于「修复/改写」浮层的显隐）
+        instance.onDidChangeCursorSelection(() => {
+          const listeners = selectionListenersRef.current.get(key);
+          if (!listeners || listeners.size === 0) {
+            return;
+          }
+          let text = '';
+          try {
+            const selection = instance.getSelection();
+            if (selection && !selection.isEmpty()) {
+              text = instance.getModel()?.getValueInRange(selection) ?? '';
+            }
+          } catch (e) {
+            text = '';
+          }
+          listeners.forEach((cb) => cb(text));
+        });
       },
       unregister: (taskId: string) => {
-        editorsRef.current.delete(String(taskId));
+        const key = String(taskId);
+        editorsRef.current.delete(key);
+        selectionListenersRef.current.delete(key);
       },
       getSelection: (taskId?: string) => {
         if (!taskId) {
@@ -576,6 +598,49 @@ const DataStudio: React.FC = (props: any) => {
         } catch (e) {
           return false;
         }
+      },
+      // 阶段 2b（局部改写）：只替换「选中片段」，选区之外不动；无选中则返回 false
+      applyToSelection: (taskId?: string, text?: string) => {
+        if (!taskId || text === undefined || text === null) {
+          return false;
+        }
+        const instance = editorsRef.current.get(String(taskId));
+        if (!instance) {
+          return false;
+        }
+        try {
+          const model = instance.getModel();
+          const selection = instance.getSelection();
+          if (!model || !selection || selection.isEmpty()) {
+            return false;
+          }
+          instance.executeEdits('ai-chat-p2b', [{ range: selection, text }]);
+          instance.pushUndoStop();
+          instance.focus();
+          return true;
+        } catch (e) {
+          return false;
+        }
+      },
+      // 阶段 2b：订阅指定作业的选区变化
+      onSelectionChange: (taskId?: string, listener?: (text: string) => void) => {
+        if (!taskId || !listener) {
+          return () => {};
+        }
+        const key = String(taskId);
+        const listeners =
+          selectionListenersRef.current.get(key) ?? new Set<(text: string) => void>();
+        listeners.add(listener);
+        selectionListenersRef.current.set(key, listeners);
+        return () => {
+          const set = selectionListenersRef.current.get(key);
+          if (set) {
+            set.delete(listener);
+            if (set.size === 0) {
+              selectionListenersRef.current.delete(key);
+            }
+          }
+        };
       }
     }),
     []

@@ -28,6 +28,7 @@ import ToolProcess from './components/ToolProcess';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import CraftDiff from './components/CraftDiff';
+import SqlDiff from './components/SqlDiff';
 import './index.less';
 import {
   AiChatConfig,
@@ -41,6 +42,7 @@ import {
   reportCraftWrite
 } from './service';
 import { DataStudioContext } from '@/pages/DataStudio/DataStudioContext';
+import { getExecError, getLatestExecError } from '@/services/BusinessCrud';
 import { l } from '@/utils/intl';
 import {
   CopyOutlined,
@@ -159,6 +161,15 @@ const AiChat = (props: AiChatProps) => {
   const craftBeforeRef = useRef<Record<string, string>>({});
   /** 哪些 tab 当前处于「AI 已改动、可撤销」状态 */
   const [craftApplied, setCraftApplied] = useState<Record<string, boolean>>({});
+  /** 阶段 2b（局部改写）：编辑区当前选中片段（驱动「修复/改写」操作条显隐） */
+  const [selectedText, setSelectedText] = useState<string>('');
+  /** 阶段 2b：Fix / Rewrite 待拍板的改写结果；非空即展示 diff 预览 */
+  const [p2bDiff, setP2bDiff] = useState<{
+    action: 'FIX_SQL' | 'REWRITE_SQL';
+    original: string;
+    modified: string;
+  } | null>(null);
+  const [p2bLoading, setP2bLoading] = useState<boolean>(false);
   const [mentionOpen, setMentionOpen] = useState<boolean>(false);
   const [mentionQuery, setMentionQuery] = useState<string>('');
   const [mentionIndex, setMentionIndex] = useState<number>(0);
@@ -183,6 +194,16 @@ const AiChat = (props: AiChatProps) => {
 
   /** 读取当前作业编辑区的选中片段（无选中时返回空串） */
   const readSelectedSql = () => editorRegistry?.getSelection(tabParams?.taskId) ?? '';
+
+  // 阶段 2b：订阅当前作业编辑区的选区变化，驱动「修复/改写」操作条的显隐
+  useEffect(() => {
+    const taskId = tabParams?.taskId;
+    if (!taskId || !editorRegistry) {
+      setSelectedText('');
+      return;
+    }
+    return editorRegistry.onSelectionChange(taskId, (text) => setSelectedText(text));
+  }, [editorRegistry, tabParams?.taskId]);
 
   /**
    * {@code @} 候选来源：<b>可插拔 provider 注册表</b>。
@@ -475,7 +496,8 @@ const AiChat = (props: AiChatProps) => {
     if (action === 'TEXT_TO_SQL' && !text) {
       return;
     }
-    if (action === 'EXPLAIN' && !currentSql?.trim()) {
+    // 解释：有选中片段时解释选中片段，否则解释全文（阶段 2b 体验优化）
+    if (action === 'EXPLAIN' && !(readSelectedSql().trim() || currentSql?.trim())) {
       message.warning(l('datastudio.aiChat.noSqlToExplain'));
       return;
     }
@@ -580,6 +602,75 @@ const AiChat = (props: AiChatProps) => {
   const handleStop = () => {
     abortRef.current?.abort();
     setLoading(false);
+  };
+
+  /**
+   * 阶段 2b：对编辑区选中片段发起 Fix（基于最近执行报错）/ Rewrite（综合优化）。
+   *
+   * <p>单轮、只产出 SQL、<b>不执行</b>；结果经 diff 预览由用户确认后，仅替换选中片段。
+   */
+  const handleFixRewrite = async (action: 'FIX_SQL' | 'REWRITE_SQL') => {
+    const selected = readSelectedSql().trim();
+    if (!selected) {
+      message.warning(l('datastudio.aiChat.p2b.noSelection'));
+      return;
+    }
+    setP2bLoading(true);
+    let rewriteSql = '';
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      await aiChatStream(
+        {
+          action,
+          message: action === 'FIX_SQL' ? '请修复这段 SQL' : '请对这段 SQL 做综合优化改写',
+          databaseId: metaDataAvailable ? databaseId : undefined,
+          schemaName,
+          dialect,
+          sql: currentSql,
+          taskId: tabParams?.taskId,
+          selectedSql: selected,
+          // 阶段 2b：把前端暂存的「最近一次执行报错」带上（编辑器执行报错不落后端库）；
+          // 按 taskId 取不到时回退到全局最近一条，避免因 tab/taskId 不匹配而漏带
+          executionError: getExecError(tabParams?.taskId) || getLatestExecError() || undefined
+        },
+        ({ sql }) => {
+          if (sql) {
+            rewriteSql = sql;
+          }
+        },
+        (errorMessage) => message.error(errorMessage),
+        controller.signal
+      );
+      if (rewriteSql.trim()) {
+        setP2bDiff({ action, original: selected, modified: rewriteSql });
+      } else {
+        message.warning(l('datastudio.aiChat.p2b.noCodeBlock'));
+      }
+    } catch (e: any) {
+      if (e?.name !== 'AbortError') {
+        message.error(e?.message ?? String(e));
+      }
+    } finally {
+      setP2bLoading(false);
+    }
+  };
+
+  /** 阶段 2b：采纳——仅替换编辑器中选中的片段（选区外不动，保留 undo 栈） */
+  const handleP2bAccept = () => {
+    const taskId = tabParams?.taskId;
+    if (!p2bDiff || taskId === undefined) {
+      setP2bDiff(null);
+      return;
+    }
+    const ok = editorRegistry?.applyToSelection(taskId, p2bDiff.modified) ?? false;
+    if (ok) {
+      message.success(l('datastudio.aiChat.p2b.applied'));
+      setSelectedText('');
+    } else {
+      message.warning(l('datastudio.aiChat.p2b.applyFailed'));
+    }
+    setP2bDiff(null);
   };
 
   /**
@@ -987,6 +1078,54 @@ const AiChat = (props: AiChatProps) => {
         )}
       </div>
 
+      {/* 阶段 2b（局部改写）：编辑区有非空选中时，输入框上方浮出「修复/改写」操作条 */}
+      {selectedText.trim() && (
+        <div
+          style={{
+            marginBottom: 4,
+            padding: '4px 8px',
+            background: 'rgba(22,119,255,0.06)',
+            border: '1px solid rgba(22,119,255,0.25)',
+            borderRadius: 4,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8
+          }}
+        >
+          <span
+            style={{
+              fontSize: 12,
+              color: 'rgba(0,0,0,0.65)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap'
+            }}
+            title={selectedText}
+          >
+            {l('datastudio.aiChat.p2b.selectionPrefix')} {selectedText.length}{' '}
+            {l('datastudio.aiChat.p2b.chars')}
+          </span>
+          <Space size={4} style={{ flexShrink: 0 }}>
+            <Button
+              size={'small'}
+              type={'primary'}
+              ghost
+              loading={p2bLoading}
+              onClick={() => handleFixRewrite('FIX_SQL')}
+            >
+              {l('datastudio.aiChat.p2b.fix')}
+            </Button>
+            <Button
+              size={'small'}
+              loading={p2bLoading}
+              onClick={() => handleFixRewrite('REWRITE_SQL')}
+            >
+              {l('datastudio.aiChat.p2b.rewrite')}
+            </Button>
+          </Space>
+        </div>
+      )}
       {/* 阶段 1a（1.4）：@ 引用浮层——固定贴输入框上方，不追随光标（省去坐标计算，更稳） */}
       <div style={{ position: 'relative' }}>
         {mentionOpen && (
@@ -1155,6 +1294,15 @@ const AiChat = (props: AiChatProps) => {
         language={dialect || 'flinksql'}
         onAccept={handleCraftAccept}
         onReject={handleCraftReject}
+      />
+      {/* 阶段 2b（局部改写）：选中片段 vs AI 稿，采纳后仅替换选中片段 */}
+      <SqlDiff
+        open={!!p2bDiff}
+        original={p2bDiff?.original ?? ''}
+        modified={p2bDiff?.modified ?? ''}
+        language={dialect || 'flinksql'}
+        onAccept={handleP2bAccept}
+        onReject={() => setP2bDiff(null)}
       />
     </div>
   );

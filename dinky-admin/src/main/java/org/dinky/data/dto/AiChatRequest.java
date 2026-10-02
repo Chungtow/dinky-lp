@@ -37,8 +37,15 @@ import lombok.Data;
 @ApiModel(value = "AiChatRequest", description = "AI Chat Request")
 public class AiChatRequest {
 
-    /** 动作：TEXT_TO_SQL（自然语言生成 SQL） / EXPLAIN（解释 SQL） */
-    @ApiModelProperty(value = "动作：TEXT_TO_SQL / EXPLAIN", example = "TEXT_TO_SQL")
+    /**
+     * 动作：TEXT_TO_SQL（自然语言生成 SQL） / EXPLAIN（解释 SQL） /
+     * FIX_SQL（阶段 2b：基于最近执行报错修复用户选中的 SQL） /
+     * REWRITE_SQL（阶段 2b：综合优化改写用户选中的 SQL）。
+     *
+     * <p>FIX_SQL / REWRITE_SQL 均为<b>单轮显式改写</b>：只产出 SQL 文本、<b>绝不执行</b>，
+     * 供前端做 diff 对照后由用户确认替换选中片段（不进入自动校验/修复闭环）。
+     */
+    @ApiModelProperty(value = "动作：TEXT_TO_SQL / EXPLAIN / FIX_SQL / REWRITE_SQL", example = "TEXT_TO_SQL")
     private String action = "TEXT_TO_SQL";
 
     @ApiModelProperty(value = "本轮用户输入")
@@ -87,6 +94,16 @@ public class AiChatRequest {
      */
     @ApiModelProperty(value = "编辑器选中片段")
     private String selectedSql;
+
+    /**
+     * 前端暂存的「最近一次执行报错」原文（阶段 2b：Fix SQL）。
+     *
+     * <p>编辑器内执行 SQL（尤其 MySQL 等直连数据源）的报错既不落 {@code dinky_history}
+     * 也不落 {@code dinky_job_instance}，只能由前端在请求失败时捕获并随请求下发；
+     * 仅在 {@code action=FIX_SQL} 时使用，是报错来源的<b>最高优先级</b>。
+     */
+    @ApiModelProperty(value = "前端暂存的最近一次执行报错（Fix SQL 用）")
+    private String executionError;
 
     /**
      * 上下文范围档位（阶段 1a：1.1）：{@code current}（仅当前选中表）/ {@code all}（当前数据源全库，
