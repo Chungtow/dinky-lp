@@ -191,6 +191,8 @@ export enum API_CONSTANTS {
   AI_CHAT_CHAT = '/api/aiChat/chat',
   AI_CHAT_CONFIG = '/api/aiChat/config',
   AI_CHAT_WRITE_AUDIT = '/api/aiChat/write-audit',
+  AI_CHAT_CONFIRM = '/api/aiChat/confirm',
+  AI_CHAT_CANCEL = '/api/aiChat/cancel',
 
   // ------------------------------------ system log ------------------------------------
   SYSTEM_ROOT_LOG = '/api/system/getRootLog',

@@ -58,6 +58,16 @@ public interface AiTool {
     }
 
     /**
+     * 本工具的执行超时（秒）。返回 {@code <= 0} 表示沿用全局配置（{@code llm.toolTimeoutSeconds}）。
+     *
+     * <p>阶段 2c-0：允许工具<b>按自身特性定制超时</b>——执行类（写）工具通常需要比只读查询更长的
+     * 超时，不应与只读工具共用同一个值。
+     */
+    default int timeoutSeconds() {
+        return 0;
+    }
+
+    /**
      * 执行工具。
      *
      * @param args 模型给出的参数 JSON

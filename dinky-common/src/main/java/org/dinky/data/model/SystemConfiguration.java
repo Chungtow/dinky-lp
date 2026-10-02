@@ -429,6 +429,18 @@ public class SystemConfiguration {
             .note(Status.SYS_LLM_SETTINGS_TOOLTIMEOUTSECONDS_NOTE);
 
     /**
+     * 执行类（写）工具的超时（秒），供 2c-1 的写工具经 {@code AiTool#timeoutSeconds} 读取。
+     *
+     * <p>阶段 2c-0 引入：写语句（DML/DDL）通常比只读查询慢，不应与只读工具共用
+     * {@code llmToolTimeoutSeconds}。默认取 60（比只读的 10s 更宽松），仍受语句级执行超时与取消机制约束。
+     */
+    private final Configuration<Integer> llmToolWriteTimeoutSeconds =
+            key(Status.SYS_LLM_SETTINGS_TOOLWRITETIMEOUTSECONDS)
+                    .intType()
+                    .defaultValue(60)
+                    .note(Status.SYS_LLM_SETTINGS_TOOLWRITETIMEOUTSECONDS_NOTE);
+
+    /**
      * 工具轮是否保留 thinking。
      *
      * <p>默认关闭：2026-09-28 探针实测 thinking 默认开启时吃掉约 75% 生成预算
@@ -768,6 +780,13 @@ public class SystemConfiguration {
         return Asserts.isNull(llmToolTimeoutSeconds.getValue())
                 ? llmToolTimeoutSeconds.getDefaultValue()
                 : llmToolTimeoutSeconds.getValue();
+    }
+
+    /** @return 执行类（写）工具的超时（秒） */
+    public int getLlmToolWriteTimeoutSeconds() {
+        return Asserts.isNull(llmToolWriteTimeoutSeconds.getValue())
+                ? llmToolWriteTimeoutSeconds.getDefaultValue()
+                : llmToolWriteTimeoutSeconds.getValue();
     }
 
     /** @return 工具轮是否保留 thinking（默认关闭，详见字段注释） */

@@ -20,6 +20,7 @@
 package org.dinky.service.impl;
 
 import org.dinky.ai.AiChatRateLimiter;
+import org.dinky.ai.AiChatRunRegistry;
 import org.dinky.ai.AiToolCall;
 import org.dinky.ai.AiToolContext;
 import org.dinky.ai.AiToolLoop;
@@ -30,6 +31,7 @@ import org.dinky.ai.PromptStore;
 import org.dinky.ai.SqlVerifier;
 import org.dinky.ai.TableSelector;
 import org.dinky.ai.TokenUsage;
+import org.dinky.data.dto.AiChatConfirmRequest;
 import org.dinky.data.dto.AiChatMention;
 import org.dinky.data.dto.AiChatMessage;
 import org.dinky.data.dto.AiChatRequest;
@@ -56,8 +58,10 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.BooleanSupplier;
 
 import javax.annotation.PreDestroy;
 
@@ -123,11 +127,14 @@ public class AiChatServiceImpl implements AiChatService {
     private static final int MAX_TOOL_AUDIT_CHARS = 2000;
     /** 工具参数在一帧里展示的字符上限 */
     private static final int MAX_TOOL_ARGS_CHARS = 60;
+    /** 阶段 2c-0：写语句二次确认的等待超时（秒），超时按「拒绝」处理 */
+    private static final int WRITE_CONFIRM_TIMEOUT_SECONDS = 300;
 
     private final DataBaseService dataBaseService;
     private final LlmClient llmClient;
     private final SqlVerifier sqlVerifier;
     private final AiChatRateLimiter rateLimiter;
+    private final AiChatRunRegistry runRegistry;
     private final AiChatLogService aiChatLogService;
     private final JobInstanceService jobInstanceService;
     private final HistoryService historyService;
@@ -194,6 +201,8 @@ public class AiChatServiceImpl implements AiChatService {
         long start = System.currentTimeMillis();
         TokenUsage totalUsage = new TokenUsage();
         AiChatLog audit = new AiChatLog();
+        // 阶段 2c-0：运行 id（承载二次确认与服务端中断），finally 中清理
+        String runId = null;
         try {
             SystemConfiguration config = SystemConfiguration.getInstances();
             if (!config.isLlmEnable()) {
@@ -208,6 +217,10 @@ public class AiChatServiceImpl implements AiChatService {
             }
 
             Integer userId = request.getUserId();
+            // 阶段 2c-0：建立运行上下文并下发 runId（前端凭它做二次确认 / 服务端中断）
+            runId = UUID.randomUUID().toString();
+            final AiChatRunRegistry.RunContext run = runRegistry.create(runId, userId);
+            sendJsonFrame(emitter, "runId", new JSONObject().set("runId", runId));
             audit.setUserId(userId);
             audit.setSessionId(request.getSessionId());
             audit.setAction(StrUtil.blankToDefault(request.getAction(), ACTION_TEXT_TO_SQL));
@@ -261,8 +274,16 @@ public class AiChatServiceImpl implements AiChatService {
             StringBuilder answer = new StringBuilder();
             AiToolRunResult toolRun = null;
             if (config.isLlmToolCallEnable()) {
-                toolRun = runToolLoop(request, messages, emitter, answer, dataBase, config);
+                toolRun = runToolLoop(
+                        request, messages, emitter, answer, dataBase, config, () -> runRegistry.isCancelled(run));
                 mergeUsage(totalUsage, toolRun.getUsage());
+                // 阶段 2c-0：用户已请求中断——停止后续校验 / 修复，直接收尾
+                if (runRegistry.isCancelled(run)) {
+                    audit.setExecStatus("cancelled");
+                    sendFrame(emitter, "status", "cancelled");
+                    emitter.complete();
+                    return;
+                }
             } else {
                 mergeUsage(totalUsage, generate(messages, emitter, answer));
             }
@@ -290,7 +311,45 @@ public class AiChatServiceImpl implements AiChatService {
                 String sql = sqlVerifier.extractSql(answer.toString());
                 if (StrUtil.isNotBlank(sql)) {
                     sendFrame(emitter, "sql", sql);
-                    for (int attempt = 0; attempt <= maxRetry; attempt++) {
+                    SqlVerifier.SqlType sqlType = sqlVerifier.classify(sql);
+                    // 阶段 2c-0：自动校验闭环**只执行只读语句**（SELECT / METADATA / UNKNOWN）；
+                    // 写语句（DML / DDL）绝不在此自动执行——须经二次确认后由执行工具触发（2c-1 接入），
+                    // 避免"管理员开关一开就默默写库"。
+                    boolean allowAutoExec = sqlType == SqlVerifier.SqlType.SELECT
+                            || sqlType == SqlVerifier.SqlType.METADATA
+                            || sqlType == SqlVerifier.SqlType.UNKNOWN;
+                    if (!allowAutoExec) {
+                        // 阶段 2c-0：写语句（DML/DDL）经「二次确认」闸门（§8.0 决策 2 中间档）。
+                        // ① 管理员未开放该类语句 → 直接拒绝，不进入确认；
+                        // ② 已开放 → 下发确认请求并挂起等待；确认才执行写通道，拒绝/超时一律不执行。
+                        String writeReject = sqlVerifier.rejectReason(sqlType);
+                        if (writeReject != null) {
+                            execStatus = "rejected";
+                            execError = writeReject;
+                            sendFrame(emitter, "status", "rejected");
+                            log.info("Write SQL rejected by policy, type={}, reason={}", sqlType, writeReject);
+                        } else {
+                            finalSql = sql;
+                            boolean approved = requestWriteConfirmation(emitter, runId, run, sql, sqlType);
+                            if (approved) {
+                                sendFrame(emitter, "status", "verifying");
+                                SqlVerifier.VerifyResult writeResult = sqlVerifier.verify(dataBase, sql);
+                                sendExecResult(emitter, writeResult);
+                                execStatus = writeResult.isSuccess() ? "executed" : "failed";
+                                execError = writeResult.getError();
+                                sendFrame(emitter, "status", execStatus);
+                            } else {
+                                execStatus = "rejected";
+                                execError = "用户未确认执行该写语句";
+                                sendFrame(emitter, "status", "rejected");
+                                // 把「用户已拒绝」回灌给模型，让它改用只读方案或收尾，避免反复重试写操作
+                                messages.add(AiChatMessage.of(
+                                        "user",
+                                        "用户拒绝执行上一条写语句（" + sqlType.name() + "）。请勿再次生成写语句；如需该操作，请改为只读方案或提示用户手动执行。"));
+                            }
+                        }
+                    }
+                    for (int attempt = 0; allowAutoExec && attempt <= maxRetry; attempt++) {
                         sendFrame(emitter, "status", "verifying");
                         SqlVerifier.VerifyResult verifyResult = sqlVerifier.verify(dataBase, sql);
                         sendExecResult(emitter, verifyResult);
@@ -347,6 +406,8 @@ public class AiChatServiceImpl implements AiChatService {
             emitter.completeWithError(e);
         } finally {
             recordAudit(audit, totalUsage, start);
+            // 阶段 2c-0：清理运行上下文（确认 / 取消的凭据随之失效）
+            runRegistry.remove(runId);
         }
     }
 
@@ -378,7 +439,8 @@ public class AiChatServiceImpl implements AiChatService {
             SseEmitter emitter,
             StringBuilder answer,
             DataBase dataBase,
-            SystemConfiguration config) {
+            SystemConfiguration config,
+            BooleanSupplier cancelled) {
         AiToolContext context = AiToolContext.create(
                 dataBase,
                 StrUtil.nullToEmpty(request.getSchemaName()),
@@ -431,7 +493,8 @@ public class AiChatServiceImpl implements AiChatService {
                                 "heartbeat",
                                 new JSONObject().set("round", round).set("maxRounds", maxRounds));
                     }
-                });
+                },
+                cancelled);
     }
 
     /**
@@ -593,6 +656,50 @@ public class AiChatServiceImpl implements AiChatService {
         } catch (Exception e) {
             log.warn("Send SSE message failed: {}", e.getMessage());
         }
+    }
+
+    /**
+     * 写语句执行前的二次确认（阶段 2c-0）：下发确认请求帧并<b>挂起等待</b>用户拍板。
+     *
+     * <p>前端收到 {@code confirmRequest} 帧后弹出确认框，经 {@code /api/aiChat/confirm} 投递结果；
+     * 后端在此阻塞等待，超时按拒绝处理。<b>未确认一律不执行。</b>
+     *
+     * @return true = 用户确认执行；false = 拒绝或超时
+     */
+    private boolean requestWriteConfirmation(
+            SseEmitter emitter,
+            String runId,
+            AiChatRunRegistry.RunContext run,
+            String sql,
+            SqlVerifier.SqlType sqlType) {
+        JSONObject payload = new JSONObject();
+        payload.set("runId", runId);
+        payload.set("sql", sql);
+        payload.set("sqlType", sqlType == null ? "UNKNOWN" : sqlType.name());
+        payload.set("timeoutSeconds", WRITE_CONFIRM_TIMEOUT_SECONDS);
+        sendJsonFrame(emitter, "confirmRequest", payload);
+        Boolean approved = run.awaitConfirm(WRITE_CONFIRM_TIMEOUT_SECONDS);
+        if (approved == null) {
+            log.info("Write confirmation timed out, runId={}, type={}", runId, sqlType);
+        }
+        return Boolean.TRUE.equals(approved);
+    }
+
+    @Override
+    public boolean confirmRun(AiChatConfirmRequest request) {
+        if (request == null || StrUtil.isBlank(request.getRunId())) {
+            return false;
+        }
+        boolean approved = Boolean.TRUE.equals(request.getApprove());
+        return runRegistry.submitConfirm(request.getRunId(), request.getUserId(), approved);
+    }
+
+    @Override
+    public boolean cancelRun(AiChatConfirmRequest request) {
+        if (request == null || StrUtil.isBlank(request.getRunId())) {
+            return false;
+        }
+        return runRegistry.cancel(request.getRunId(), request.getUserId());
     }
 
     /** 组装发送给大模型的消息：system（首轮含 schema）+ 历史 + 本轮 user */

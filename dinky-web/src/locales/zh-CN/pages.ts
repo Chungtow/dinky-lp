@@ -581,6 +581,13 @@ export default {
   'datastudio.aiChat.p2b.reject': '拒绝',
   'datastudio.aiChat.p2b.applied': '已替换选中片段',
   'datastudio.aiChat.p2b.applyFailed': '编辑器未就绪，替换未生效',
+  'datastudio.aiChat.writeConfirm.title': 'AI 请求执行写语句（需你确认）',
+  'datastudio.aiChat.writeConfirm.reject': '拒绝执行',
+  'datastudio.aiChat.writeConfirm.accept': '确认执行',
+  'datastudio.aiChat.writeConfirm.dmlTip':
+    '该语句会【修改数据】（DML）。确认后将直接在数据源上执行，请先核对语句与目标数据源。',
+  'datastudio.aiChat.writeConfirm.ddlTip':
+    '该操作会【修改表结构】（DDL），风险较高且通常不可回滚，请务必确认后再执行。',
   'datastudio.aiChat.inserted': '已插入到编辑器光标处',
   'datastudio.aiChat.run': '执行',
   'datastudio.aiChat.copySuccess': '已复制到剪贴板',

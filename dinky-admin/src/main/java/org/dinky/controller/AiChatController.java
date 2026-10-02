@@ -19,6 +19,7 @@
 
 package org.dinky.controller;
 
+import org.dinky.data.dto.AiChatConfirmRequest;
 import org.dinky.data.dto.AiChatRequest;
 import org.dinky.data.dto.AiChatWriteAuditRequest;
 import org.dinky.data.result.Result;
@@ -108,5 +109,51 @@ public class AiChatController {
         }
         aiChatService.recordCraftWrite(request);
         return Result.succeed();
+    }
+
+    /**
+     * 二次确认：写语句（DML / DDL）是否执行（阶段 2c-0）。
+     *
+     * <p>AI 生成写语句时后端<b>挂起等待</b>，前端弹确认框后调用本端点投递结果；未确认不执行。
+     * userId 由服务端覆盖，且仅创建该 runId 的用户可确认。
+     *
+     * @param request {@link AiChatConfirmRequest}
+     * @return 投递是否成功
+     */
+    @PostMapping("/confirm")
+    @ApiOperation("Confirm AI Write Execution")
+    public Result<Void> confirm(@RequestBody AiChatConfirmRequest request) {
+        if (request != null) {
+            try {
+                request.setUserId(StpUtil.getLoginIdAsInt());
+            } catch (Exception e) {
+                log.warn("Resolve current user for AI confirm failed: {}", e.getMessage());
+            }
+        }
+        boolean accepted = aiChatService.confirmRun(request);
+        return accepted ? Result.succeed() : Result.failed("确认请求已失效（运行已结束或无权限）");
+    }
+
+    /**
+     * 中断本次运行（阶段 2c-0）。
+     *
+     * <p>与前端「停止」按钮配合：不再只是断开 SSE HTTP 流，而是让服务端工具循环/正在等待的
+     * 确认真正收到取消信号。
+     *
+     * @param request {@link AiChatConfirmRequest}（只用 runId）
+     * @return 取消是否被接受
+     */
+    @PostMapping("/cancel")
+    @ApiOperation("Cancel AI Chat Run")
+    public Result<Void> cancel(@RequestBody AiChatConfirmRequest request) {
+        if (request != null) {
+            try {
+                request.setUserId(StpUtil.getLoginIdAsInt());
+            } catch (Exception e) {
+                log.warn("Resolve current user for AI cancel failed: {}", e.getMessage());
+            }
+        }
+        boolean accepted = aiChatService.cancelRun(request);
+        return accepted ? Result.succeed() : Result.failed("取消失败（运行已结束或无权限）");
     }
 }
