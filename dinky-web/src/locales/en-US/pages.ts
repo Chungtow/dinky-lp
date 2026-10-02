@@ -619,7 +619,7 @@ export default {
   'datastudio.aiChat.send': 'Send',
   'datastudio.aiChat.stop': 'Stop',
   'datastudio.aiChat.explain': 'Explain SQL',
-  'datastudio.aiChat.explainTip': 'Explain the current SQL in the editor with AI',
+  'datastudio.aiChat.explainTip': 'Explain SQL with AI: explains the selected snippet if any, otherwise the whole editor content',
   'datastudio.aiChat.craft.diffTitle': 'Suggested changes by AI',
   'datastudio.aiChat.craft.diffTip': 'Left: current editor content; right: rewritten by AI. Accepting replaces the whole content, and you can still undo it with Ctrl+Z or the Undo button.',
   'datastudio.aiChat.craft.accept': 'Accept all',

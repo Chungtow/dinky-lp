@@ -607,15 +607,16 @@ public class AiChatServiceImpl implements AiChatService {
         // 首轮才携带 schema 上下文，后续轮次由会话历史承载上下文（省 token、降延迟）
         boolean firstTurn = StrUtil.isBlank(request.getSessionId());
 
-        // 局部改写的目标 SQL：优先「选中片段」，回退全文
-        String rewriteTarget = StrUtil.blankToDefault(request.getSelectedSql(), request.getSql());
+        // 「选中片段优先」的目标 SQL：EXPLAIN / Fix / Rewrite 三处共用
+        // —— 有选中则针对选中片段，无选中回退全文（阶段 2b 体验优化：解释也遵循选中优先）
+        String selectedOrFull = StrUtil.blankToDefault(request.getSelectedSql(), request.getSql());
 
         Map<String, String> params = new HashMap<>(4);
         params.put(PromptStore.PLACEHOLDER_SCHEMA, firstTurn ? schemaContext : "(schema 已在首轮提供，请沿用)");
         params.put(PromptStore.PLACEHOLDER_DIALECT, StrUtil.blankToDefault(request.getDialect(), "SQL"));
         params.put(
                 PromptStore.PLACEHOLDER_SQL,
-                StrUtil.nullToEmpty((isFix || isRewrite) ? rewriteTarget : request.getSql()));
+                StrUtil.nullToEmpty((isExplain || isFix || isRewrite) ? selectedOrFull : request.getSql()));
         // Fix 需要数据源返回的真实报错原文
         params.put(PromptStore.PLACEHOLDER_ERROR, isFix ? resolveLatestJobError(request) : "");
         // 阶段 1.0「作业上下文绑定」：编辑区内容（EXPLAIN 时 SQL 已在用户消息中给出，无需重复注入）
@@ -655,7 +656,7 @@ public class AiChatServiceImpl implements AiChatService {
         if (isExplain) {
             userContent
                     .append("请解释以下 SQL：\n```sql\n")
-                    .append(StrUtil.nullToEmpty(request.getSql()))
+                    .append(StrUtil.nullToEmpty(selectedOrFull))
                     .append("\n```");
             if (StrUtil.isNotBlank(request.getMessage())) {
                 userContent.append("\n补充要求：").append(request.getMessage());

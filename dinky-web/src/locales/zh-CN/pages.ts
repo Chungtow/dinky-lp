@@ -554,7 +554,7 @@ export default {
   'datastudio.aiChat.send': '发送',
   'datastudio.aiChat.stop': '停止',
   'datastudio.aiChat.explain': '解释当前 SQL',
-  'datastudio.aiChat.explainTip': '用 AI 解释编辑器中当前的 SQL',
+  'datastudio.aiChat.explainTip': '用 AI 解释 SQL：编辑区有选中片段时解释选中片段，否则解释全文',
   'datastudio.aiChat.craft.diffTitle': 'AI 建议的改动',
   'datastudio.aiChat.craft.diffTip': '左侧为编辑器当前内容，右侧为 AI 改写后的内容。采纳将整块替换，替换后仍可用 Ctrl+Z 或「撤销」按钮回退。',
   'datastudio.aiChat.craft.accept': '全部采纳',

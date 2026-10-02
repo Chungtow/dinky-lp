@@ -496,7 +496,8 @@ const AiChat = (props: AiChatProps) => {
     if (action === 'TEXT_TO_SQL' && !text) {
       return;
     }
-    if (action === 'EXPLAIN' && !currentSql?.trim()) {
+    // 解释：有选中片段时解释选中片段，否则解释全文（阶段 2b 体验优化）
+    if (action === 'EXPLAIN' && !(readSelectedSql().trim() || currentSql?.trim())) {
       message.warning(l('datastudio.aiChat.noSqlToExplain'));
       return;
     }
