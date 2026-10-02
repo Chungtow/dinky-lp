@@ -240,10 +240,16 @@ export const handleDownloadOption = async (url: string, title: string, param: an
  * 自动带上，避免让用户手工粘贴报错。
  */
 const execErrorMessage = new Map<string, string>();
+/** 全局最近一条执行报错（作为按 taskId 取不到时的兜底） */
+let latestExecError = '';
 
-/** 记录某作业最近一次执行报错（按 taskId） */
+/** 记录某作业最近一次执行报错（按 taskId；同时更新全局最近一条） */
 export const recordExecError = (taskId: number | string | undefined, msg?: string) => {
-  if (taskId === undefined || taskId === null || !msg) {
+  if (!msg) {
+    return;
+  }
+  latestExecError = msg;
+  if (taskId === undefined || taskId === null) {
     return;
   }
   execErrorMessage.set(String(taskId), msg);
@@ -257,6 +263,9 @@ export const getExecError = (taskId: number | string | undefined): string => {
   return execErrorMessage.get(String(taskId)) ?? '';
 };
 
+/** 取全局最近一条执行报错（不区分作业，兜底用）；无记录返回空串 */
+export const getLatestExecError = (): string => latestExecError;
+
 export const handleGetOption = async (url: string, title: string, param: any) => {
   await LoadingMessageAsync(l('app.request.running') + title);
   try {
@@ -266,13 +275,14 @@ export const handleGetOption = async (url: string, title: string, param: any) =>
       return result;
     }
     WarningMessage(result.msg);
-    // 阶段 2b：按 param.id 暂存报错，供 AI Chat「修复选中 SQL」自动带上
-    // （编辑器内执行 SQL 的报错不落后端库，只能在前端捕获）
-    if (param && param.id !== undefined) {
-      recordExecError(param.id, result.msg);
-    }
     return undefined;
-  } catch (error) {
+  } catch (error: any) {
+    // 阶段 2b：失败响应经 umi request 的 errorThrower 抛出（success=false → BizError），
+    // 会走本 catch 分支而非上面的 code 判断，因此报错必须在这里暂存。
+    const msg = error?.info?.msg || error?.message;
+    if (param && param.id !== undefined) {
+      recordExecError(param.id, msg);
+    }
     return undefined;
   }
 };
