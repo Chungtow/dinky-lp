@@ -17,6 +17,7 @@
  *
  */
 
+import { executeSql } from '@/pages/DataStudio/service';
 import { isSql } from '@/pages/DataStudio/utils';
 import { DataStudioActionType } from '@/pages/DataStudio/data.d';
 import { mapDispatchToProps } from '@/pages/DataStudio/DvaFunction';
@@ -777,17 +778,47 @@ const AiChat = (props: AiChatProps) => {
     message.success(l('datastudio.aiChat.inserted'));
   };
 
-  const handleRunSql = (sql: string) => {
-    // 执行依赖当前 Tab 已保存为作业（TASK_RUN_SUBMIT 需要 taskId），否则点击无反应
-    if (!tabParams?.taskId) {
+  /**
+   * AI 产出 SQL 的「执行」——复刻编辑器点运行的链路。
+   *
+   * <p><b>此前这里是空壳</b>：只把 SQL 插入编辑器，并不真正执行——`TASK_RUN_SUBMIT` 仅被
+   * Service 面板消费用于「切到输出 Tab」，全链路没有任何地方触发 `submitTask`，所以点了没反应。
+   * 现在与 `SqlTask#handleSubmit` 的执行段保持一致：提交 `/api/task/submitTask` 后，执行日志经
+   * WebSocket 落到「输出」面板，结果集经 `TASK_PREVIEW_RESULT` 落入「结果」面板。
+   *
+   * <p>前提与编辑器运行一致：当前 Tab 必须<b>已保存为作业</b>（`submitTask` 需要 taskId 且校验属主）。
+   */
+  const handleRunSql = async (sql: string) => {
+    const taskId = tabParams?.taskId;
+    if (!taskId) {
       message.warning(l('datastudio.aiChat.needSavedTask'));
       return;
     }
+    // 一并写入编辑器：结果不理想时，用户可直接在编辑器里复用 / 微调这条 SQL
     handleInsertSql(sql);
+    // 打开下方「输出」面板（执行日志经 WebSocket FlinkSubmit/{taskId} 推送到该面板）
     updateAction({
       actionType: DataStudioActionType.TASK_RUN_SUBMIT,
-      params: { taskId: tabParams?.taskId }
+      params: { taskId }
     });
+    try {
+      const result = await executeSql(l('pages.datastudio.editor.exec'), taskId, sql);
+      if (result?.success && isSql(dialect) && result?.data?.result?.success) {
+        updateAction({
+          actionType: DataStudioActionType.TASK_PREVIEW_RESULT,
+          params: {
+            taskId,
+            dialect,
+            columns: result.data.result.columns,
+            rowData: result.data.result.rowData
+          }
+        });
+      }
+    } catch (e: any) {
+      if (e?.name !== 'AbortError') {
+        message.error(e?.message ?? String(e));
+      }
+    }
   };
 
   /**
