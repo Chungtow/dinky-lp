@@ -45,6 +45,17 @@ public class AiToolRunResult {
     /** 是否有工具调用失败（用于前端提示与回归观察） */
     private boolean toolFailed;
 
+    /**
+     * 阶段 2c-2：本次对话是否已由工具走过「写操作」路径。
+     *
+     * <p>供 {@code doChat} 做<b>闭环收敛</b>：已走过则不再对同一回答走 SQL 校验的自动执行 / 二次确认，
+     * 避免同一条写语句被执行两次。
+     */
+    private boolean writeAttempted;
+
+    /** 阶段 2c-2：最近一次由工具尝试执行的语句原文（供审计落 `sql_text`） */
+    private String lastExecutedSql;
+
     public void appendAnswer(String text) {
         if (text != null) {
             answer = answer + text;

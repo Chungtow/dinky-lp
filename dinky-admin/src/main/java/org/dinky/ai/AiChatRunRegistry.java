@@ -76,6 +76,17 @@ public class AiChatRunRegistry {
         boolean offer(Boolean approve) {
             return confirmQueue.offer(approve);
         }
+
+        /**
+         * 清空尚未被消费的确认值（阶段 2c-2）。
+         *
+         * <p>用于实现「取消优先」：取消发生时，若队列里已有一个<b>尚未被 {@link #awaitConfirm} 取走</b>
+         * 的 TRUE（用户刚点确认、后端还没来得及消费），直接投递 FALSE 会因容量已满而失败被丢弃，
+         * 导致阻塞中的写操作消费到旧的 TRUE、**照常执行**。先清空再投递可消除该窗口。
+         */
+        void clearConfirm() {
+            confirmQueue.clear();
+        }
     }
 
     private final Map<String, RunContext> runs = new ConcurrentHashMap<>();
@@ -150,7 +161,10 @@ public class AiChatRunRegistry {
             return false;
         }
         context.cancelled = true;
-        // 若正卡在「等待确认」上，投递拒绝让其尽快退出（拒绝 = 不执行）
+        // 若正卡在「等待确认」上，投递拒绝让其尽快退出（拒绝 = 不执行）。
+        // 阶段 2c-2 修复：必须先清空可能残留的确认值——队列容量为 1，若已有一个尚未被消费的 TRUE，
+        // 直接 offer(FALSE) 会失败被丢弃，阻塞中的写操作将消费到旧值而照常执行。
+        context.clearConfirm();
         context.offer(Boolean.FALSE);
         return true;
     }

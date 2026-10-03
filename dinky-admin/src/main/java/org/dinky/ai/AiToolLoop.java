@@ -19,10 +19,13 @@
 
 package org.dinky.ai;
 
+import org.dinky.ai.tools.ExecSqlTool;
 import org.dinky.data.dto.AiChatMessage;
 import org.dinky.data.model.SystemConfiguration;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
@@ -57,9 +60,16 @@ public class AiToolLoop {
     /** 审计明细里参数与错误的字符上限 */
     private static final int LOG_TEXT_CHARS = 200;
 
+    /** 阶段 2c-2：执行类工具（exec_sql）审计参数（语句原文）的字符上限——要能还原"执行了什么" */
+    private static final int SQL_ARGS_LOG_CHARS = 2000;
+
     private static final String ROUND_LIMIT_NOTICE = "工具调用已达上限，请基于已经获取到的信息直接回答；" + "如果仍然缺少必要信息，请明确说明缺少什么，不要再尝试调用工具。";
     /** 阶段 2c-0：收到服务端中断请求时随正文下发的提示 */
     private static final String CANCELLED_NOTICE = "\n\n> 已中断本次运行。\n";
+
+    /** 阶段 2c-2：自动纠错达到上限后追加的停止提示（回灌给模型，要求收尾而非继续重试） */
+    private static final String REPAIR_EXHAUSTED_NOTICE =
+            "\n\n> 自动纠错已达上限，已停止重试。" + "请基于已有信息向用户说明失败原因与下一步建议，**不要**再次尝试执行相同的语句。\n";
 
     private final LlmClient llmClient;
     private final AiToolRegistry registry;
@@ -168,6 +178,14 @@ public class AiToolLoop {
             if (!toolResult.isSuccess()) {
                 result.setToolFailed(true);
             }
+            // 阶段 2c-2：汇总「已走过写路径」与「最近一次尝试的语句」，
+            // 供 doChat 做闭环收敛（避免同一写语句被执行两次）与审计落语句原文
+            if (toolResult.isWriteAttempted()) {
+                result.setWriteAttempted(true);
+            }
+            if (StrUtil.isNotBlank(toolResult.getSqlText())) {
+                result.setLastExecutedSql(toolResult.getSqlText());
+            }
             result.getToolCallLogs().add(toLogEntry(call, toolResult));
             if (listener != null) {
                 listener.onToolResult(call, toolResult);
@@ -177,7 +195,7 @@ public class AiToolLoop {
                     call.getName(),
                     toolResult.isSuccess()
                             ? StrUtil.nullToEmpty(toolResult.getContent())
-                            : "调用失败：" + toolResult.getErrorMessage()));
+                            : buildToolFailureText(toolResult, context)));
         }
         return false;
     }
@@ -229,11 +247,37 @@ public class AiToolLoop {
         }
     }
 
+    /**
+     * 工具失败的回灌文本（阶段 2c-2：自动纠错闭环）。
+     *
+     * <p>在「调用失败：&lt;脱敏错误&gt;」之后追加纠错指引（{@link PromptStore#TOOL_REPAIR}，含「第 N/M 次」），
+     * 引导模型改稿后再次调用工具；到达上限时改为追加停止提示，避免无脑重试。
+     */
+    private String buildToolFailureText(AiToolResult toolResult, AiToolContext context) {
+        StringBuilder sb = new StringBuilder("调用失败：");
+        sb.append(StrUtil.nullToEmpty(toolResult.getErrorMessage()));
+        if (toolResult.isRepairExhausted()) {
+            sb.append(REPAIR_EXHAUSTED_NOTICE);
+            return sb.toString();
+        }
+        if (toolResult.getAttempt() > 0) {
+            Map<String, String> params = new HashMap<>(2);
+            params.put(PromptStore.PLACEHOLDER_ATTEMPT, String.valueOf(toolResult.getAttempt()));
+            params.put(
+                    PromptStore.PLACEHOLDER_MAX_ATTEMPTS,
+                    String.valueOf(Math.max(context == null ? 0 : context.getMaxRepairAttempts(), 1)));
+            sb.append(PromptStore.render(PromptStore.TOOL_REPAIR, params));
+        }
+        return sb.toString();
+    }
+
     /** 审计明细：只记工具名 / 参数摘要 / 成败 / 耗时，不记完整返回值 */
     private JSONObject toLogEntry(AiToolCall call, AiToolResult toolResult) {
         JSONObject entry = new JSONObject();
         entry.set("tool", call.getName());
-        entry.set("args", StrUtil.sub(StrUtil.nullToEmpty(call.getArguments()), 0, LOG_TEXT_CHARS));
+        // 阶段 2c-2：执行类工具的语句原文放宽截断（审计要能还原"到底执行了什么"）
+        int argsLimit = ExecSqlTool.NAME.equals(call.getName()) ? SQL_ARGS_LOG_CHARS : LOG_TEXT_CHARS;
+        entry.set("args", StrUtil.sub(StrUtil.nullToEmpty(call.getArguments()), 0, argsLimit));
         entry.set("success", toolResult.isSuccess());
         entry.set("costMs", toolResult.getCostMs());
         // 阶段 2c-1：写类工具的风险摘要与受影响行数入审计（只读工具无此值，不记录）

@@ -62,6 +62,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
 import javax.annotation.PreDestroy;
@@ -313,9 +314,13 @@ public class AiChatServiceImpl implements AiChatService {
                 execStatus = "rewritten";
             }
 
+            // 阶段 2c-2（闭环收敛）：本轮对话若已由 exec_sql 工具走过写路径，则**不再**进入 SQL 校验闭环——
+            // 否则模型回答里若再出现 ```sql 写语句块，会对同一条语句**二次确认 / 二次执行**。
+            boolean toolHandledExecution = toolRun != null && toolRun.isWriteAttempted();
+
             // 正确性闭环：生成 → 执行校验 → 报错回传 → 自动修复（最多 maxRetry 次）
-            // （阶段 2b：Fix / Rewrite 不进该闭环，避免自动执行用户的 SQL）
-            if (!isExplain && !isFix && !isRewrite && config.isLlmSqlVerifyEnable()) {
+            // （阶段 2b：Fix / Rewrite 不进该闭环；阶段 2c-2：工具已执行过也不进）
+            if (!isExplain && !isFix && !isRewrite && !toolHandledExecution && config.isLlmSqlVerifyEnable()) {
                 int maxRetry = Math.max(config.getLlmSqlVerifyMaxRetry(), 0);
                 String sql = sqlVerifier.extractSql(answer.toString());
                 if (StrUtil.isNotBlank(sql)) {
@@ -340,8 +345,9 @@ public class AiChatServiceImpl implements AiChatService {
                         } else {
                             finalSql = sql;
                             // 阶段 2c-1：携带风险信息（语句类型 / 是否 DDL / 目标对象）；此处模型未自报影响范围
+                            // 阶段 2c-2：doChat 直连写分支（非工具路径）没有「第 N 次尝试」语义，传 0 / null
                             boolean approved = requestWriteConfirmation(
-                                    emitter, runId, run, sql, ChangeRisk.of(sqlType, sql, null));
+                                    emitter, runId, run, sql, ChangeRisk.of(sqlType, sql, null), 0, null);
                             if (approved) {
                                 sendFrame(emitter, "status", "verifying");
                                 SqlVerifier.VerifyResult writeResult = sqlVerifier.verify(dataBase, sql);
@@ -395,6 +401,11 @@ public class AiChatServiceImpl implements AiChatService {
                 }
             }
 
+            // 阶段 2c-2：工具路径（exec_sql）执行的语句原文兜底落审计——此前该路径只把语句塞进
+            // tool_calls 的 200 字参数摘要里，审计无法还原"到底执行了什么"。
+            if (StrUtil.isBlank(finalSql) && toolRun != null && StrUtil.isNotBlank(toolRun.getLastExecutedSql())) {
+                finalSql = toolRun.getLastExecutedSql();
+            }
             audit.setSqlText(finalSql);
             audit.setExecStatus(execStatus);
             audit.setExecError(StrUtil.sub(execError, 0, 2000));
@@ -464,7 +475,13 @@ public class AiChatServiceImpl implements AiChatService {
         // 阶段 2c-1：把「运行上下文 + 发确认帧通道」注入工具上下文——exec_sql 这类写类工具
         // 据此在执行前下发 confirmRequest 并挂起等待用户拍板（未注入时工具会直接拒绝写操作）
         context.setRunId(runId);
-        context.setConfirmRequester((sql, risk) -> requestWriteConfirmation(emitter, runId, run, sql, risk));
+        // 阶段 2c-2：记录最近一次工具失败原因，随确认请求下发，
+        // 使「第 N 次尝试」的确认框能同时显示上次为什么失败（用户知情后再决定是否执行）
+        AtomicReference<String> lastToolError = new AtomicReference<>();
+        context.setConfirmRequester((sql, risk) -> requestWriteConfirmation(
+                emitter, runId, run, sql, risk, context.getRepairAttempts().get(), lastToolError.get()));
+        // 阶段 2c-2：装配自动纠错上限（工具据此在失败达上限后停止重试）
+        context.setMaxRepairAttempts(Math.max(config.getLlmToolAutoRepairMaxAttempts(), 1));
         return toolLoop.run(
                 messages,
                 context,
@@ -503,6 +520,15 @@ public class AiChatServiceImpl implements AiChatService {
                         }
                         if (StrUtil.isNotBlank(result.getRiskSummary())) {
                             payload.set("riskSummary", result.getRiskSummary());
+                        }
+                        // 阶段 2c-2：自动纠错进度（第几次尝试 / 是否已停止重试），供前端结构化展示
+                        if (result.getAttempt() > 0) {
+                            payload.set("attempt", result.getAttempt());
+                            payload.set("repairExhausted", result.isRepairExhausted());
+                        }
+                        // 阶段 2c-2：留存失败原因，供随后的写操作确认框展示「上次失败：…」
+                        if (!result.isSuccess()) {
+                            lastToolError.set(StrUtil.sub(StrUtil.nullToEmpty(result.getErrorMessage()), 0, 300));
                         }
                         sendJsonFrame(emitter, "toolResult", payload);
                     }
@@ -689,7 +715,13 @@ public class AiChatServiceImpl implements AiChatService {
      * @return true = 用户确认执行；false = 拒绝或超时
      */
     private boolean requestWriteConfirmation(
-            SseEmitter emitter, String runId, AiChatRunRegistry.RunContext run, String sql, ChangeRisk risk) {
+            SseEmitter emitter,
+            String runId,
+            AiChatRunRegistry.RunContext run,
+            String sql,
+            ChangeRisk risk,
+            int attempt,
+            String previousError) {
         JSONObject payload = new JSONObject();
         payload.set("runId", runId);
         payload.set("sql", sql);
@@ -698,6 +730,13 @@ public class AiChatServiceImpl implements AiChatService {
         // 阶段 2c-1：风险信息随确认框下发（语句类型 / 是否 DDL / 目标对象 / 模型估计影响）
         if (risk != null) {
             payload.set("risk", risk.toJson());
+        }
+        // 阶段 2c-2：告知用户「第 N 次尝试 + 上次为什么失败」——自动纠错会重试，但每次真实写库仍需确认
+        if (attempt > 0) {
+            payload.set("attempt", attempt);
+        }
+        if (StrUtil.isNotBlank(previousError)) {
+            payload.set("previousError", previousError);
         }
         sendJsonFrame(emitter, "confirmRequest", payload);
         Boolean approved = run.awaitConfirm(WRITE_CONFIRM_TIMEOUT_SECONDS);

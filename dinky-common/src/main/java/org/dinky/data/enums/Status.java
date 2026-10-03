@@ -473,6 +473,9 @@ public enum Status {
     /** 阶段 2c-1：执行类工具（exec_sql）开关 */
     SYS_LLM_SETTINGS_TOOLEXECSQLENABLE(268, "sys.llm.settings.toolExecSqlEnable"),
     SYS_LLM_SETTINGS_TOOLEXECSQLENABLE_NOTE(269, "sys.llm.settings.toolExecSqlEnable.note"),
+    /** 阶段 2c-2：自动纠错最大尝试次数 */
+    SYS_LLM_SETTINGS_TOOLAUTOREPAIRMAXATTEMPTS(270, "sys.llm.settings.toolAutoRepairMaxAttempts"),
+    SYS_LLM_SETTINGS_TOOLAUTOREPAIRMAXATTEMPTS_NOTE(271, "sys.llm.settings.toolAutoRepairMaxAttempts.note"),
     SYS_METRICS_SETTINGS_SYS_ENABLE(148, "sys.metrics.settings.sys.enable"),
     SYS_METRICS_SETTINGS_SYS_ENABLE_NOTE(149, "sys.metrics.settings.sys.enable.note"),
     SYS_METRICS_SETTINGS_SYS_GATHERTIMING(150, "sys.metrics.settings.sys.gatherTiming"),

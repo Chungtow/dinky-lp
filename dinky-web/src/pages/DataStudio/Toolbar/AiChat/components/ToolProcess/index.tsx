@@ -77,7 +77,14 @@ const ToolProcess = ({ steps }: { steps?: AiChatToolStep[] }) => {
         } else if (step.status === 'failed') {
           icon = <CloseCircleOutlined style={{ color: 'rgba(255,77,79,0.85)', fontSize: 12 }} />;
           // 失败文案已在服务端脱敏（不含连接串 / 账号 / 内网地址），可直接展示
-          text = `${label}${target} · ${l('datastudio.aiChat.tool.failed')}${
+          // 阶段 2c-2：自动纠错进度——「第 N 次尝试」或「已达上限，已停止重试」
+          const repair =
+            step.attempt && step.attempt > 0
+              ? step.repairExhausted
+                ? ` · ${l('datastudio.aiChat.tool.repairExhausted')}`
+                : ` · ${l('datastudio.aiChat.tool.retryTimes')} ${step.attempt}`
+              : '';
+          text = `${label}${target} · ${l('datastudio.aiChat.tool.failed')}${repair}${
             step.error ? ` · ${step.error}` : ''
           }`;
         }

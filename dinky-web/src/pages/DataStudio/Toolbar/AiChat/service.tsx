@@ -52,6 +52,10 @@ export type AiChatToolStep = {
   affectedRows?: number;
   /** 阶段 2c-1：写类工具的风险摘要（审计用，可选展示） */
   riskSummary?: string;
+  /** 阶段 2c-2：这是第几次自动纠错尝试（0 / 无值表示不适用） */
+  attempt?: number;
+  /** 阶段 2c-2：是否已达自动纠错上限（到达后已停止重试） */
+  repairExhausted?: boolean;
 };
 
 /**
@@ -87,6 +91,10 @@ export type AiChatConfirmFrame = {
   timeoutSeconds?: number;
   /** 阶段 2c-1：变更风险信息（语句类型 / 是否 DDL / 目标对象 / AI 估计影响） */
   risk?: AiChatChangeRisk;
+  /** 阶段 2c-2：这是第几次尝试（自动纠错重试时 >1） */
+  attempt?: number;
+  /** 阶段 2c-2：上一次失败的原因（重试时展示，帮助用户判断是否还执行） */
+  previousError?: string;
 };
 
 /** 页面内的一条消息（reasoning 为模型的思考过程，仅部分模型提供） */

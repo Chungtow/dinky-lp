@@ -1399,6 +1399,24 @@ const AiChat = (props: AiChatProps) => {
         {/* 阶段 2c-1：变更风险块（语句类型 / 目标对象 / AI 估计影响）——
             「AI 估计」必须显式标注，不得渲染成精确值 */}
         <div style={{ marginBottom: 8, fontSize: 12, lineHeight: '22px' }}>
+          {/* 阶段 2c-2：自动纠错重试中——告知这是第几次尝试、上次为什么失败，
+              让用户在「每次写库仍必确认」的前提下知情决策 */}
+          {writeConfirm?.attempt && writeConfirm.attempt > 1 ? (
+            <div style={{ marginBottom: 4 }}>
+              <Typography.Text type={'warning'}>
+                {l('datastudio.aiChat.writeConfirm.retryPrefix')}
+                {writeConfirm.attempt}
+                {l('datastudio.aiChat.writeConfirm.retrySuffix')}
+              </Typography.Text>
+              {writeConfirm.previousError ? (
+                <Typography.Text type={'secondary'}>
+                  {' '}
+                  {l('datastudio.aiChat.writeConfirm.previousError')}
+                  {writeConfirm.previousError}
+                </Typography.Text>
+              ) : null}
+            </div>
+          ) : null}
           <div>
             <Typography.Text type={'secondary'}>
               {l('datastudio.aiChat.writeConfirm.risk.sqlType')}
