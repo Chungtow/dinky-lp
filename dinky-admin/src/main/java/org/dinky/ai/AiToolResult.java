@@ -58,6 +58,23 @@ public class AiToolResult {
     /** 阶段 2c-1：风险摘要（仅写类工具填写；写入审计，不回灌给模型） */
     private String riskSummary;
 
+    /**
+     * 阶段 2c-2：本次工具调用是否走过「写操作」路径（含用户拒绝 / 未确认的情形）。
+     *
+     * <p>用于<b>闭环收敛</b>：同一次对话里若工具已走过写路径，{@code doChat} 不再对同一回答执行
+     * SQL 校验自动执行 / 二次确认，避免同一条语句被写两次。
+     */
+    private boolean writeAttempted;
+
+    /** 阶段 2c-2：本次工具尝试执行的语句原文（供审计落 `sql_text`，替代此前的 200 字参数摘要） */
+    private String sqlText;
+
+    /** 阶段 2c-2：本条失败属于第几次自动纠错尝试（0 表示不适用 / 未失败） */
+    private int attempt;
+
+    /** 阶段 2c-2：是否已达自动纠错上限（到达后模型应停止重试） */
+    private boolean repairExhausted;
+
     public static AiToolResult success(String content, long costMs) {
         return AiToolResult.builder()
                 .success(true)

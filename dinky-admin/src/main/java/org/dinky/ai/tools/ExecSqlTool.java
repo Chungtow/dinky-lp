@@ -126,7 +126,7 @@ public class ExecSqlTool implements AiTool {
         // ① 语句分级：被策略禁止（多语句 / 无法识别 / DML·DDL 开关未开）→ 直接拒绝，不进入确认
         String reject = sqlVerifier.rejectReason(type);
         if (reject != null) {
-            return AiToolResult.failure(reject, System.currentTimeMillis() - start);
+            return failure(reject, sql, start, false);
         }
 
         boolean write = type == SqlVerifier.SqlType.DML || type == SqlVerifier.SqlType.DDL;
@@ -136,7 +136,14 @@ public class ExecSqlTool implements AiTool {
             AiToolContext.ConfirmRequester requester = context.getConfirmRequester();
             if (requester == null) {
                 log.warn("exec_sql write rejected: no confirm channel, runId={}", context.getRunId());
-                return AiToolResult.failure("当前会话不支持写操作二次确认，已拒绝执行", System.currentTimeMillis() - start);
+                return AiToolResult.builder()
+                        .success(false)
+                        .errorMessage("当前会话不支持写操作二次确认，已拒绝执行")
+                        .costMs(System.currentTimeMillis() - start)
+                        // 阶段 2c-2：已走过写路径（供 doChat 闭环收敛，避免同一回答被再写一次）
+                        .writeAttempted(true)
+                        .sqlText(sql)
+                        .build();
             }
             log.info(
                     "exec_sql requesting confirmation, runId={}, risk={}, reason={}",
@@ -149,6 +156,8 @@ public class ExecSqlTool implements AiTool {
                         .errorMessage("用户未确认执行该写语句，已取消；请勿重试，可改为只读方案或提示用户手动执行")
                         .costMs(System.currentTimeMillis() - start)
                         .riskSummary(risk.toSummary())
+                        .writeAttempted(true)
+                        .sqlText(sql)
                         .build();
             }
         }
@@ -157,13 +166,15 @@ public class ExecSqlTool implements AiTool {
         SqlVerifier.VerifyResult result = sqlVerifier.verify(context.getDataBase(), sql);
         long cost = System.currentTimeMillis() - start;
         if (result.isRejected()) {
-            return AiToolResult.failure(StrUtil.blankToDefault(result.getError(), "语句被安全策略拒绝"), cost);
+            return failure(StrUtil.blankToDefault(result.getError(), "语句被安全策略拒绝"), sql, start, write);
         }
         if (!result.isExecuted()) {
-            return AiToolResult.failure(StrUtil.blankToDefault(result.getError(), "语句未执行"), cost);
+            return failure(StrUtil.blankToDefault(result.getError(), "语句未执行"), sql, start, write);
         }
         if (!result.isSuccess()) {
-            return AiToolResult.failure("执行失败：" + StrUtil.blankToDefault(result.getError(), "数据源未返回具体错误"), cost);
+            // 阶段 2c-2：执行失败 → 累加自动纠错次数；达上限则明确「停止重试」
+            return repairFailure(
+                    context, risk, sql, write, cost, StrUtil.blankToDefault(result.getError(), "数据源未返回具体错误"));
         }
 
         if (write) {
@@ -176,9 +187,60 @@ public class ExecSqlTool implements AiTool {
                     .costMs(cost)
                     .affectedRows(affected < 0 ? null : affected)
                     .riskSummary(risk.toSummary() + ", affected=" + affected)
+                    .writeAttempted(true)
+                    .sqlText(sql)
                     .build();
         }
         // 只读：只回报行数，不取回数据行（业务数据不出库；要看数据请用编辑器或 sample_rows）
-        return AiToolResult.success("查询成功：返回 " + result.getRowCount() + " 行（此处仅回报行数，未取回数据行）", cost);
+        return AiToolResult.builder()
+                .success(true)
+                .content("查询成功：返回 " + result.getRowCount() + " 行（此处仅回报行数，未取回数据行）")
+                .costMs(cost)
+                .sqlText(sql)
+                .build();
+    }
+
+    /** 失败返回（未进入执行阶段，不计入自动纠错次数） */
+    private AiToolResult failure(String message, String sql, long start, boolean writeAttempted) {
+        return AiToolResult.builder()
+                .success(false)
+                .errorMessage(message)
+                .costMs(System.currentTimeMillis() - start)
+                .writeAttempted(writeAttempted)
+                .sqlText(sql)
+                .build();
+    }
+
+    /**
+     * 执行失败 → 计入自动纠错次数（阶段 2c-2）。
+     *
+     * <p>到上限时文案明确「已停止重试」，配合 {@code AiToolLoop} 追加的停止提示，避免模型无脑重试。
+     *
+     * @param context 工具上下文（提供计数与上限）
+     * @param risk 风险信息（仅写语句有）
+     * @param sql 语句原文
+     * @param write 是否写语句
+     * @param cost 耗时
+     * @param error 数据源返回的原始报错（已在 {@code SqlVerifier} 中脱敏过连接信息）
+     */
+    private AiToolResult repairFailure(
+            AiToolContext context, ChangeRisk risk, String sql, boolean write, long cost, String error) {
+        int max = Math.max(context.getMaxRepairAttempts(), 1);
+        int attempt = context.getRepairAttempts().incrementAndGet();
+        boolean exhausted = attempt >= max;
+        String message = "执行失败：" + error;
+        if (exhausted) {
+            message = "执行失败：" + error + "\n（自动纠错已达上限 " + max + " 次，已停止重试；请人工检查语句或数据源后重试）";
+        }
+        return AiToolResult.builder()
+                .success(false)
+                .errorMessage(message)
+                .costMs(cost)
+                .attempt(attempt)
+                .repairExhausted(exhausted)
+                .writeAttempted(write)
+                .sqlText(sql)
+                .riskSummary(write ? risk.toSummary() : null)
+                .build();
     }
 }

@@ -453,6 +453,18 @@ public class SystemConfiguration {
             .note(Status.SYS_LLM_SETTINGS_TOOLEXECSQLENABLE_NOTE);
 
     /**
+     * 自动纠错的最大尝试次数（阶段 2c-2）。
+     *
+     * <p>针对「执行失败 → 模型改稿 → 再执行」的自动循环：一次对话内累计失败达到该值时，
+     * 执行类工具会<b>停止重试</b>并提示人工介入，避免无脑重试（默认 3）。
+     */
+    private final Configuration<Integer> llmToolAutoRepairMaxAttempts =
+            key(Status.SYS_LLM_SETTINGS_TOOLAUTOREPAIRMAXATTEMPTS)
+                    .intType()
+                    .defaultValue(3)
+                    .note(Status.SYS_LLM_SETTINGS_TOOLAUTOREPAIRMAXATTEMPTS_NOTE);
+
+    /**
      * 工具轮是否保留 thinking。
      *
      * <p>默认关闭：2026-09-28 探针实测 thinking 默认开启时吃掉约 75% 生成预算
@@ -806,6 +818,13 @@ public class SystemConfiguration {
         return Asserts.isNull(llmToolExecSqlEnable.getValue())
                 ? llmToolExecSqlEnable.getDefaultValue()
                 : llmToolExecSqlEnable.getValue();
+    }
+
+    /** @return 自动纠错的最大尝试次数（阶段 2c-2，默认 3） */
+    public int getLlmToolAutoRepairMaxAttempts() {
+        return Asserts.isNull(llmToolAutoRepairMaxAttempts.getValue())
+                ? llmToolAutoRepairMaxAttempts.getDefaultValue()
+                : llmToolAutoRepairMaxAttempts.getValue();
     }
 
     /** @return 工具轮是否保留 thinking（默认关闭，详见字段注释） */

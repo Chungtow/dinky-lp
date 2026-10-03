@@ -44,6 +44,10 @@ public final class PromptStore {
     public static final String PLACEHOLDER_EDITOR_SQL = "{{editorSql}}";
     /** 当前作业最近一次执行情况（整体区块，含标题；无内容时后端传空串） */
     public static final String PLACEHOLDER_JOB_CONTEXT = "{{jobContext}}";
+    /** 阶段 2c-2：自动纠错已尝试次数（用于 {@link #TOOL_REPAIR}） */
+    public static final String PLACEHOLDER_ATTEMPT = "{{attempt}}";
+    /** 阶段 2c-2：自动纠错上限（用于 {@link #TOOL_REPAIR}） */
+    public static final String PLACEHOLDER_MAX_ATTEMPTS = "{{maxAttempts}}";
 
     /** 自然语言取数 / 元数据咨询 */
     public static final String TEXT_TO_SQL = "你是资深数据工程师，正在 Dinky 数据开发平台内协助用户。\n"
@@ -135,6 +139,27 @@ public final class PromptStore {
             + "5. 方言："
             + PLACEHOLDER_DIALECT
             + "。\n";
+
+    /**
+     * 工具调用失败后的<b>纠错指引</b>（阶段 2c-2：自动纠错闭环）。
+     *
+     * <p>与 {@link #SQL_REPAIR} 的区别：后者是「重新生成」用的完整 system prompt（整条替换）；
+     * 本模板是一段<b>追加在工具失败回灌内容之后</b>的短指引——工具循环里模型的 system prompt 不变，
+     * 只把「失败原文 + 该怎么做」作为工具结果回灌，引导模型改稿并再次调用工具。
+     *
+     * <p>占位符：{@link #PLACEHOLDER_ATTEMPT}（第几次尝试）/ {@link #PLACEHOLDER_MAX_ATTEMPTS}（上限）。
+     */
+    public static final String TOOL_REPAIR = "\n"
+            + "## 纠错指引（第 "
+            + PLACEHOLDER_ATTEMPT
+            + "/"
+            + PLACEHOLDER_MAX_ATTEMPTS
+            + " 次尝试）\n"
+            + "1. 依据上面的报错修正 SQL——**只改导致报错的地方**，保持原有取数意图不变；\n"
+            + "2. 只能使用元数据中真实存在的表名 / 字段名，禁止编造；\n"
+            + "3. 修正后**再次调用工具**验证；若再次失败，按报错继续修正；\n"
+            + "4. 涉及写语句（DML / DDL）时仍需用户确认，**不要试图绕过确认**；\n"
+            + "5. 若判断已无法通过修改解决（如权限不足、表确实不存在），请停止重试并直接说明原因。\n";
 
     /**
      * 修复「<b>用户选中的 SQL</b>」（阶段 2b：局部改写 Fix SQL）。

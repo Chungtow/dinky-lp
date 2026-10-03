@@ -21,6 +21,8 @@ package org.dinky.ai;
 
 import org.dinky.data.model.DataBase;
 
+import java.util.concurrent.atomic.AtomicInteger;
+
 import lombok.Getter;
 import lombok.Setter;
 
@@ -73,6 +75,17 @@ public class AiToolContext {
      * 绝不能因为"没人能确认"就自行执行。
      */
     private ConfirmRequester confirmRequester;
+
+    /**
+     * 阶段 2c-2：本次对话已发生的「自动纠错尝试」次数。
+     *
+     * <p>与 {@link #confirmRequester} 一样是<b>运行态</b>数据，由 {@code runToolLoop} 按配置装配；
+     * 作用域为一次对话（每次 {@code runToolLoop} 新建一个 context 实例），到上限后工具将拒绝继续重试。
+     */
+    private final AtomicInteger repairAttempts = new AtomicInteger(0);
+
+    /** 阶段 2c-2：自动纠错上限（默认取配置 {@code sys.llm.settings.toolAutoRepairMaxAttempts}） */
+    private int maxRepairAttempts = 3;
 
     /** 工具内请求写操作二次确认：返回 true = 用户确认执行 */
     @FunctionalInterface
