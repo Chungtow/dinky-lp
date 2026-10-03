@@ -59,6 +59,32 @@ public class AiToolContext {
     /** 单个工具返回内容的字符上限 */
     private int maxResultChars;
 
+    /** 阶段 2c-1：本次运行的 id（写类工具在「执行前二次确认」时需要） */
+    private String runId;
+
+    /**
+     * 阶段 2c-1：工具内请求「写操作二次确认」的回调。
+     *
+     * <p>由 {@code AiChatServiceImpl#runToolLoop} 在装配上下文时注入——只有那里同时持有
+     * {@link org.springframework.web.servlet.mvc.method.annotation.SseEmitter} 与运行上下文，
+     * 才能下发 {@code confirmRequest} 帧并挂起等待用户拍板。
+     *
+     * <p><b>fail-safe</b>：为 {@code null} 时（单测 / 非对话场景）写类工具必须<b>直接拒绝执行</b>，
+     * 绝不能因为"没人能确认"就自行执行。
+     */
+    private ConfirmRequester confirmRequester;
+
+    /** 工具内请求写操作二次确认：返回 true = 用户确认执行 */
+    @FunctionalInterface
+    public interface ConfirmRequester {
+        /**
+         * @param sql 待执行的写语句原文
+         * @param risk 风险信息（语句类型 / 是否 DDL / 目标对象 / 模型估计影响）
+         * @return true = 用户确认执行；false = 拒绝或超时
+         */
+        boolean request(String sql, ChangeRisk risk);
+    }
+
     public static AiToolContext create(
             DataBase dataBase,
             String schemaName,

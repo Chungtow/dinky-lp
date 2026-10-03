@@ -48,6 +48,27 @@ export type AiChatToolStep = {
   status: 'running' | 'success' | 'failed';
   costMs?: number;
   error?: string;
+  /** 阶段 2c-1：写类工具（exec_sql）回报的受影响行数（只读工具无此值） */
+  affectedRows?: number;
+  /** 阶段 2c-1：写类工具的风险摘要（审计用，可选展示） */
+  riskSummary?: string;
+};
+
+/**
+ * 变更风险信息（阶段 2c-1）。
+ *
+ * <p><b>注意</b>：{@code modelEstimate} 是 AI 自报的估计值，<b>不是</b>精确值，展示时必须标注「AI 估计」；
+ * 真实受影响行数在工具执行结果（{@code AiChatToolStep.affectedRows}）里回报。
+ */
+export type AiChatChangeRisk = {
+  /** 语句类型：DML / DDL */
+  sqlType?: string;
+  /** 是否为结构变更（DDL） */
+  ddl?: boolean;
+  /** 目标对象（表名，后端粗解析；可能为空） */
+  target?: string;
+  /** AI 自报的影响范围（估计值） */
+  modelEstimate?: string;
 };
 
 /**
@@ -64,6 +85,8 @@ export type AiChatConfirmFrame = {
   sqlType: string;
   /** 确认等待超时（秒），超时按拒绝 */
   timeoutSeconds?: number;
+  /** 阶段 2c-1：变更风险信息（语句类型 / 是否 DDL / 目标对象 / AI 估计影响） */
+  risk?: AiChatChangeRisk;
 };
 
 /** 页面内的一条消息（reasoning 为模型的思考过程，仅部分模型提供） */

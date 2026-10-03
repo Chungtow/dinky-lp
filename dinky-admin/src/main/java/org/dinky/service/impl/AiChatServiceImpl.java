@@ -26,6 +26,7 @@ import org.dinky.ai.AiToolContext;
 import org.dinky.ai.AiToolLoop;
 import org.dinky.ai.AiToolResult;
 import org.dinky.ai.AiToolRunResult;
+import org.dinky.ai.ChangeRisk;
 import org.dinky.ai.LlmClient;
 import org.dinky.ai.PromptStore;
 import org.dinky.ai.SqlVerifier;
@@ -127,8 +128,8 @@ public class AiChatServiceImpl implements AiChatService {
     private static final int MAX_TOOL_AUDIT_CHARS = 2000;
     /** 工具参数在一帧里展示的字符上限 */
     private static final int MAX_TOOL_ARGS_CHARS = 60;
-    /** 阶段 2c-0：写语句二次确认的等待超时（秒），超时按「拒绝」处理 */
-    private static final int WRITE_CONFIRM_TIMEOUT_SECONDS = 300;
+    /** 阶段 2c-0：写语句二次确认的等待超时（秒），超时按「拒绝」处理；常量统一由 {@link AiChatRunRegistry} 持有 */
+    private static final int WRITE_CONFIRM_TIMEOUT_SECONDS = AiChatRunRegistry.CONFIRM_TIMEOUT_SECONDS;
 
     private final DataBaseService dataBaseService;
     private final LlmClient llmClient;
@@ -275,7 +276,15 @@ public class AiChatServiceImpl implements AiChatService {
             AiToolRunResult toolRun = null;
             if (config.isLlmToolCallEnable()) {
                 toolRun = runToolLoop(
-                        request, messages, emitter, answer, dataBase, config, () -> runRegistry.isCancelled(run));
+                        request,
+                        messages,
+                        emitter,
+                        answer,
+                        dataBase,
+                        config,
+                        runId,
+                        run,
+                        () -> runRegistry.isCancelled(run));
                 mergeUsage(totalUsage, toolRun.getUsage());
                 // 阶段 2c-0：用户已请求中断——停止后续校验 / 修复，直接收尾
                 if (runRegistry.isCancelled(run)) {
@@ -330,7 +339,9 @@ public class AiChatServiceImpl implements AiChatService {
                             log.info("Write SQL rejected by policy, type={}, reason={}", sqlType, writeReject);
                         } else {
                             finalSql = sql;
-                            boolean approved = requestWriteConfirmation(emitter, runId, run, sql, sqlType);
+                            // 阶段 2c-1：携带风险信息（语句类型 / 是否 DDL / 目标对象）；此处模型未自报影响范围
+                            boolean approved = requestWriteConfirmation(
+                                    emitter, runId, run, sql, ChangeRisk.of(sqlType, sql, null));
                             if (approved) {
                                 sendFrame(emitter, "status", "verifying");
                                 SqlVerifier.VerifyResult writeResult = sqlVerifier.verify(dataBase, sql);
@@ -440,6 +451,8 @@ public class AiChatServiceImpl implements AiChatService {
             StringBuilder answer,
             DataBase dataBase,
             SystemConfiguration config,
+            String runId,
+            AiChatRunRegistry.RunContext run,
             BooleanSupplier cancelled) {
         AiToolContext context = AiToolContext.create(
                 dataBase,
@@ -448,6 +461,10 @@ public class AiChatServiceImpl implements AiChatService {
                 null,
                 Math.max(config.getLlmToolTimeoutSeconds(), 1),
                 MAX_TOOL_RESULT_CHARS);
+        // 阶段 2c-1：把「运行上下文 + 发确认帧通道」注入工具上下文——exec_sql 这类写类工具
+        // 据此在执行前下发 confirmRequest 并挂起等待用户拍板（未注入时工具会直接拒绝写操作）
+        context.setRunId(runId);
+        context.setConfirmRequester((sql, risk) -> requestWriteConfirmation(emitter, runId, run, sql, risk));
         return toolLoop.run(
                 messages,
                 context,
@@ -473,16 +490,21 @@ public class AiChatServiceImpl implements AiChatService {
 
                     @Override
                     public void onToolResult(AiToolCall call, AiToolResult result) {
-                        sendJsonFrame(
-                                emitter,
-                                "toolResult",
-                                new JSONObject()
-                                        .set("toolCallId", StrUtil.nullToEmpty(call.getId()))
-                                        .set("name", StrUtil.nullToEmpty(call.getName()))
-                                        // 用 status 而不是布尔 success：前端按三态渲染（进行中 / 成功 / 失败）
-                                        .set("status", result.isSuccess() ? "success" : "failed")
-                                        .set("costMs", result.getCostMs())
-                                        .set("error", StrUtil.nullToEmpty(result.getErrorMessage())));
+                        JSONObject payload = new JSONObject()
+                                .set("toolCallId", StrUtil.nullToEmpty(call.getId()))
+                                .set("name", StrUtil.nullToEmpty(call.getName()))
+                                // 用 status 而不是布尔 success：前端按三态渲染（进行中 / 成功 / 失败）
+                                .set("status", result.isSuccess() ? "success" : "failed")
+                                .set("costMs", result.getCostMs())
+                                .set("error", StrUtil.nullToEmpty(result.getErrorMessage()));
+                        // 阶段 2c-1：写类工具回报受影响行数与风险摘要（只读工具无此值，不下发）
+                        if (result.getAffectedRows() != null) {
+                            payload.set("affectedRows", result.getAffectedRows());
+                        }
+                        if (StrUtil.isNotBlank(result.getRiskSummary())) {
+                            payload.set("riskSummary", result.getRiskSummary());
+                        }
+                        sendJsonFrame(emitter, "toolResult", payload);
                     }
 
                     @Override
@@ -667,20 +689,20 @@ public class AiChatServiceImpl implements AiChatService {
      * @return true = 用户确认执行；false = 拒绝或超时
      */
     private boolean requestWriteConfirmation(
-            SseEmitter emitter,
-            String runId,
-            AiChatRunRegistry.RunContext run,
-            String sql,
-            SqlVerifier.SqlType sqlType) {
+            SseEmitter emitter, String runId, AiChatRunRegistry.RunContext run, String sql, ChangeRisk risk) {
         JSONObject payload = new JSONObject();
         payload.set("runId", runId);
         payload.set("sql", sql);
-        payload.set("sqlType", sqlType == null ? "UNKNOWN" : sqlType.name());
+        payload.set("sqlType", risk == null ? "UNKNOWN" : StrUtil.nullToEmpty(risk.getSqlType()));
         payload.set("timeoutSeconds", WRITE_CONFIRM_TIMEOUT_SECONDS);
+        // 阶段 2c-1：风险信息随确认框下发（语句类型 / 是否 DDL / 目标对象 / 模型估计影响）
+        if (risk != null) {
+            payload.set("risk", risk.toJson());
+        }
         sendJsonFrame(emitter, "confirmRequest", payload);
         Boolean approved = run.awaitConfirm(WRITE_CONFIRM_TIMEOUT_SECONDS);
         if (approved == null) {
-            log.info("Write confirmation timed out, runId={}, type={}", runId, sqlType);
+            log.info("Write confirmation timed out, runId={}, risk={}", runId, risk == null ? null : risk.toSummary());
         }
         return Boolean.TRUE.equals(approved);
     }

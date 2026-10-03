@@ -470,6 +470,9 @@ public enum Status {
     SYS_LLM_SETTINGS_CRAFTMODEENABLE_NOTE(265, "sys.llm.settings.craftModeEnable.note"),
     SYS_LLM_SETTINGS_TOOLWRITETIMEOUTSECONDS(266, "sys.llm.settings.toolWriteTimeoutSeconds"),
     SYS_LLM_SETTINGS_TOOLWRITETIMEOUTSECONDS_NOTE(267, "sys.llm.settings.toolWriteTimeoutSeconds.note"),
+    /** 阶段 2c-1：执行类工具（exec_sql）开关 */
+    SYS_LLM_SETTINGS_TOOLEXECSQLENABLE(268, "sys.llm.settings.toolExecSqlEnable"),
+    SYS_LLM_SETTINGS_TOOLEXECSQLENABLE_NOTE(269, "sys.llm.settings.toolExecSqlEnable.note"),
     SYS_METRICS_SETTINGS_SYS_ENABLE(148, "sys.metrics.settings.sys.enable"),
     SYS_METRICS_SETTINGS_SYS_ENABLE_NOTE(149, "sys.metrics.settings.sys.enable.note"),
     SYS_METRICS_SETTINGS_SYS_GATHERTIMING(150, "sys.metrics.settings.sys.gatherTiming"),

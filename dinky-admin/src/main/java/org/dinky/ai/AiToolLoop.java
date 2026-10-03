@@ -236,6 +236,13 @@ public class AiToolLoop {
         entry.set("args", StrUtil.sub(StrUtil.nullToEmpty(call.getArguments()), 0, LOG_TEXT_CHARS));
         entry.set("success", toolResult.isSuccess());
         entry.set("costMs", toolResult.getCostMs());
+        // 阶段 2c-1：写类工具的风险摘要与受影响行数入审计（只读工具无此值，不记录）
+        if (StrUtil.isNotBlank(toolResult.getRiskSummary())) {
+            entry.set("risk", StrUtil.sub(toolResult.getRiskSummary(), 0, LOG_TEXT_CHARS));
+        }
+        if (toolResult.getAffectedRows() != null) {
+            entry.set("affectedRows", toolResult.getAffectedRows());
+        }
         if (!toolResult.isSuccess()) {
             entry.set("error", StrUtil.sub(StrUtil.nullToEmpty(toolResult.getErrorMessage()), 0, LOG_TEXT_CHARS));
         }
