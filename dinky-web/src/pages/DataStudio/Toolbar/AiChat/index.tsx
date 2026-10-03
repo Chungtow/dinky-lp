@@ -598,10 +598,15 @@ const AiChat = (props: AiChatProps) => {
       if (mode === 'craft') {
         const modified = extractFirstCodeBlock(streamed);
         if (modified) {
-          setCraftDiff({
-            original: editorRegistry?.getContent(tabParams?.taskId) ?? '',
-            modified
-          });
+          const original = editorRegistry?.getContent(tabParams?.taskId) ?? '';
+          // 阶段 2c-2 收尾：内容**未发生实际变化**时不弹采纳框。
+          // Craft 模板要求模型「输出有且仅有一个完整代码块」，因此在执行类 / 咨询类提问下，
+          // 模型常原样返回编辑器内容，此前会无意义地弹出采纳框（即使采纳也不会改变任何内容）。
+          if (modified.trim() === original.trim()) {
+            message.info(l('datastudio.aiChat.craft.noChange'));
+          } else {
+            setCraftDiff({ original, modified });
+          }
         } else {
           message.warning(l('datastudio.aiChat.craft.noCodeBlock'));
         }

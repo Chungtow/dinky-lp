@@ -625,6 +625,7 @@ export default {
   'datastudio.aiChat.craft.accept': 'Accept all',
   'datastudio.aiChat.craft.reject': 'Reject',
   'datastudio.aiChat.craft.noCodeBlock': 'AI did not return a complete code block this time; rewriting skipped',
+  'datastudio.aiChat.craft.noChange': 'No code change was produced; nothing to accept',
   'datastudio.aiChat.craft.undo': 'Undo AI change',
   'datastudio.aiChat.craft.undoDone': 'AI change undone',
   'datastudio.aiChat.craft.applyFailed': 'Editor not ready; rewrite not applied',

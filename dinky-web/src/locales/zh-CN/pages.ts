@@ -560,6 +560,7 @@ export default {
   'datastudio.aiChat.craft.accept': '全部采纳',
   'datastudio.aiChat.craft.reject': '拒绝',
   'datastudio.aiChat.craft.noCodeBlock': 'AI 本次未给出完整代码块，已跳过改写',
+  'datastudio.aiChat.craft.noChange': '本次未产生代码改动，无需采纳',
   'datastudio.aiChat.craft.undo': '撤销 AI 改动',
   'datastudio.aiChat.craft.undoDone': '已撤销 AI 改动',
   'datastudio.aiChat.craft.applyFailed': '编辑器未就绪，改写未生效',
