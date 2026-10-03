@@ -646,6 +646,13 @@ export default {
   'datastudio.aiChat.p2b.reject': 'Reject',
   'datastudio.aiChat.p2b.applied': 'Selected snippet replaced',
   'datastudio.aiChat.p2b.applyFailed': 'Editor not ready; replacement not applied',
+  'datastudio.aiChat.writeConfirm.title': 'AI requests to run a write statement (needs your confirmation)',
+  'datastudio.aiChat.writeConfirm.reject': 'Reject',
+  'datastudio.aiChat.writeConfirm.accept': 'Confirm and run',
+  'datastudio.aiChat.writeConfirm.dmlTip':
+    'This statement MODIFIES DATA (DML). It will run directly on the datasource after you confirm — please review the statement and target datasource first.',
+  'datastudio.aiChat.writeConfirm.ddlTip':
+    'This operation MODIFIES SCHEMA (DDL). It is high-risk and usually cannot be rolled back — confirm only if you are sure.',
   'datastudio.aiChat.inserted': 'Inserted at the cursor of the editor',
   'datastudio.aiChat.run': 'Run',
   'datastudio.aiChat.copySuccess': 'Copied to clipboard',

@@ -23,6 +23,7 @@ import org.dinky.data.dto.AiChatMessage;
 import org.dinky.data.model.SystemConfiguration;
 
 import java.util.List;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
 import org.springframework.stereotype.Component;
@@ -57,6 +58,8 @@ public class AiToolLoop {
     private static final int LOG_TEXT_CHARS = 200;
 
     private static final String ROUND_LIMIT_NOTICE = "工具调用已达上限，请基于已经获取到的信息直接回答；" + "如果仍然缺少必要信息，请明确说明缺少什么，不要再尝试调用工具。";
+    /** 阶段 2c-0：收到服务端中断请求时随正文下发的提示 */
+    private static final String CANCELLED_NOTICE = "\n\n> 已中断本次运行。\n";
 
     private final LlmClient llmClient;
     private final AiToolRegistry registry;
@@ -79,7 +82,8 @@ public class AiToolLoop {
             AiToolContext context,
             Consumer<String> onDelta,
             Consumer<String> onReasoning,
-            Listener listener) {
+            Listener listener,
+            BooleanSupplier cancelled) {
         AiToolRunResult result = new AiToolRunResult();
         SystemConfiguration config = SystemConfiguration.getInstances();
         int maxRounds = Math.max(config.getLlmToolCallMaxRounds(), 1);
@@ -94,6 +98,11 @@ public class AiToolLoop {
         }
 
         for (int round = 1; round <= maxRounds; round++) {
+            // 阶段 2c-0：服务端中断——每轮开始前检查取消标记，命中即停止并给出提示
+            if (cancelled != null && cancelled.getAsBoolean()) {
+                result.appendAnswer(CANCELLED_NOTICE);
+                return result;
+            }
             StringBuilder content = new StringBuilder();
             AiChatRound chatRound = callLlm(messages, specs, content, onDelta, onReasoning, thinkingEnabled, result);
             if (chatRound == null) {

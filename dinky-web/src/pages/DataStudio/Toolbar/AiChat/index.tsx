@@ -32,11 +32,14 @@ import SqlDiff from './components/SqlDiff';
 import './index.less';
 import {
   AiChatConfig,
+  AiChatConfirmFrame,
   AiChatMentionItem,
   AiChatMessage,
   AiChatToolStep,
   AiChatVerify,
   aiChatStream,
+  cancelAiChat,
+  confirmAiChat,
   getAiChatConfig,
   listTableColumns,
   reportCraftWrite
@@ -58,6 +61,7 @@ import {
   Button,
   Empty,
   Input,
+  Modal,
   Segmented,
   Select,
   Space,
@@ -170,6 +174,10 @@ const AiChat = (props: AiChatProps) => {
     modified: string;
   } | null>(null);
   const [p2bLoading, setP2bLoading] = useState<boolean>(false);
+  /** 阶段 2c-0：本次运行的 id（SSE 下发，用于二次确认与服务端中断） */
+  const runIdRef = useRef<string>('');
+  /** 阶段 2c-0：待用户拍板的写语句执行确认（非空即弹确认框） */
+  const [writeConfirm, setWriteConfirm] = useState<AiChatConfirmFrame | null>(null);
   const [mentionOpen, setMentionOpen] = useState<boolean>(false);
   const [mentionQuery, setMentionQuery] = useState<string>('');
   const [mentionIndex, setMentionIndex] = useState<number>(0);
@@ -547,7 +555,14 @@ const AiChat = (props: AiChatProps) => {
           // 阶段 2：Craft 改写模式。后端仍会独立校验配置开关，未开启一律回落 ask
           mode
         },
-        ({ content, reasoning, sql, status, execResult, toolCall, toolResult }) => {
+        ({ content, reasoning, sql, status, execResult, toolCall, toolResult, runId, confirmRequest }) => {
+          // 阶段 2c-0：记录运行 id；收到写语句确认请求即弹框
+          if (runId) {
+            runIdRef.current = runId;
+          }
+          if (confirmRequest) {
+            setWriteConfirm(confirmRequest);
+          }
           if (reasoning) {
             appendReasoning(reasoning);
           }
@@ -599,9 +614,27 @@ const AiChat = (props: AiChatProps) => {
     }
   };
 
+  /**
+   * 停止本次运行（阶段 2c-0）：先请求服务端中断（让工具循环 / 等待确认真正取消），再断开 SSE 流。
+   */
   const handleStop = () => {
+    const runId = runIdRef.current;
+    if (runId) {
+      // 旁路：中断请求失败不阻断本地断流
+      cancelAiChat(runId);
+    }
     abortRef.current?.abort();
     setLoading(false);
+  };
+
+  /** 阶段 2c-0：回传写语句执行确认结果（确认即执行；拒绝 / 超时则不执行） */
+  const handleWriteConfirm = async (approve: boolean) => {
+    const current = writeConfirm;
+    setWriteConfirm(null);
+    if (!current?.runId) {
+      return;
+    }
+    await confirmAiChat(current.runId, approve);
   };
 
   /**
@@ -1304,6 +1337,48 @@ const AiChat = (props: AiChatProps) => {
         onAccept={handleP2bAccept}
         onReject={() => setP2bDiff(null)}
       />
+      {/* 阶段 2c-0：写语句（DML/DDL）执行前的二次确认——后端挂起等待，未确认绝不执行 */}
+      <Modal
+        title={l('datastudio.aiChat.writeConfirm.title')}
+        open={!!writeConfirm}
+        maskClosable={false}
+        onCancel={() => handleWriteConfirm(false)}
+        footer={
+          <Space>
+            <Button onClick={() => handleWriteConfirm(false)}>
+              {l('datastudio.aiChat.writeConfirm.reject')}
+            </Button>
+            <Button danger type={'primary'} onClick={() => handleWriteConfirm(true)}>
+              {l('datastudio.aiChat.writeConfirm.accept')}
+            </Button>
+          </Space>
+        }
+      >
+        <div style={{ marginBottom: 8 }}>
+          <Alert
+            type={writeConfirm?.sqlType === 'DDL' ? 'error' : 'warning'}
+            showIcon
+            message={
+              writeConfirm?.sqlType === 'DDL'
+                ? l('datastudio.aiChat.writeConfirm.ddlTip')
+                : l('datastudio.aiChat.writeConfirm.dmlTip')
+            }
+          />
+        </div>
+        <pre
+          style={{
+            maxHeight: '40vh',
+            overflow: 'auto',
+            background: 'rgba(0,0,0,0.04)',
+            padding: 8,
+            borderRadius: 4,
+            margin: 0,
+            whiteSpace: 'pre-wrap'
+          }}
+        >
+          {writeConfirm?.sql}
+        </pre>
+      </Modal>
     </div>
   );
 };

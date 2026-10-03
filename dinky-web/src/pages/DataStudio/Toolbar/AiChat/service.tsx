@@ -50,6 +50,22 @@ export type AiChatToolStep = {
   error?: string;
 };
 
+/**
+ * 写语句二次确认请求（阶段 2c-0）。
+ *
+ * <p>后端在 AI 生成 DML / DDL 且管理员已开放该类语句时下发；前端弹确认框，用户拍板后经
+ * {@code /api/aiChat/confirm} 回传。**未确认则不执行**。
+ */
+export type AiChatConfirmFrame = {
+  runId: string;
+  /** 待执行的写语句原文 */
+  sql: string;
+  /** 语句类型：DML / DDL */
+  sqlType: string;
+  /** 确认等待超时（秒），超时按拒绝 */
+  timeoutSeconds?: number;
+};
+
 /** 页面内的一条消息（reasoning 为模型的思考过程，仅部分模型提供） */
 export type AiChatMessage = {
   role: AiChatRole;
@@ -190,6 +206,40 @@ export const getAiChatConfig = async (): Promise<AiChatConfig> => {
 };
 
 /**
+ * 回传写语句二次确认结果（阶段 2c-0）。
+ *
+ * <p>与对话同为 POST + JSON；返回 HTTP 是否成功即可——runId 失效等业务失败由后端按「拒绝/超时」处理。
+ */
+export const confirmAiChat = async (runId: string, approve: boolean): Promise<boolean> => {
+  try {
+    const res = await fetch(API_CONSTANTS.AI_CHAT_CONFIRM, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ runId, approve })
+    });
+    return res.ok;
+  } catch (e) {
+    return false;
+  }
+};
+
+/** 请求中断本次运行（阶段 2c-0）：不再只断开 SSE HTTP 流，而是让服务端循环真正收到取消信号 */
+export const cancelAiChat = async (runId: string): Promise<boolean> => {
+  try {
+    const res = await fetch(API_CONSTANTS.AI_CHAT_CANCEL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ runId })
+    });
+    return res.ok;
+  } catch (e) {
+    return false;
+  }
+};
+
+/**
  * 流式对话：读取 SSE 帧并回调文本片段。
  *
  * <p>后端按 JSON 帧下发（<code>data: {"content":"..."}</code> / <code>{"error":"..."}</code>），
@@ -207,6 +257,10 @@ export const aiChatStream = async (
     toolCall?: AiChatToolStep;
     /** 工具执行结束（成功或失败） */
     toolResult?: AiChatToolStep;
+    /** 阶段 2c-0：本次运行的 id（对话开始时下发） */
+    runId?: string;
+    /** 阶段 2c-0：写语句执行前的二次确认请求 */
+    confirmRequest?: AiChatConfirmFrame;
   }) => void,
   onError?: (message: string) => void,
   signal?: AbortSignal
@@ -267,6 +321,13 @@ export const aiChatStream = async (
         }
         if (frame?.toolResult && typeof frame.toolResult === 'object') {
           onFrame({ toolResult: frame.toolResult });
+        }
+        // 阶段 2c-0：运行 id 与写语句二次确认请求
+        if (typeof frame?.runId === 'string' && frame.runId.length > 0) {
+          onFrame({ runId: frame.runId });
+        }
+        if (frame?.confirmRequest && typeof frame.confirmRequest === 'object') {
+          onFrame({ confirmRequest: frame.confirmRequest as AiChatConfirmFrame });
         }
         // 其余帧（如 heartbeat）无需处理：此处刻意保持「未知帧静默丢弃」，
         // 避免把结构化数据误当成正文拼接出来。

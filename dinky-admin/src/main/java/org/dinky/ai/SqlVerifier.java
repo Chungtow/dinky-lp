@@ -232,12 +232,32 @@ public class SqlVerifier {
         }
     }
 
-    /** 真正执行查询（在独立线程中运行，便于超时中断） */
+    /**
+     * 真正执行（在独立线程中运行，便于超时中断）：按语句类型分流读写两条通道。
+     *
+     * <p><b>读通道</b>（SELECT / METADATA）：{@code driver.query} + 行数上限；
+     * <b>写通道</b>（DML / DDL，阶段 2c-0）：{@code driver.executeUpdate}，返回受影响行数。
+     * 写通道仅在语句通过分级判定（{@link #rejectReason}）后被调用。
+     */
     private VerifyResult doExecute(DataBase dataBase, String sql) {
         VerifyResult result = new VerifyResult();
         result.setExecuted(true);
         long start = System.currentTimeMillis();
+        SqlType type = classify(sql);
         try (Driver driver = Driver.build(dataBase.getDriverConfig())) {
+            if (type == SqlType.DML || type == SqlType.DDL) {
+                // 写通道：返回受影响行数（去掉结尾分号，避免驱动报错）
+                String writeSql =
+                        sql.endsWith(";") ? sql.substring(0, sql.length() - 1).trim() : sql;
+                int affected = driver.executeUpdate(writeSql);
+                result.setCostMs(System.currentTimeMillis() - start);
+                result.setAffectedRows(affected);
+                result.setSuccess(affected >= 0);
+                if (!result.isSuccess()) {
+                    result.setError("写执行未返回受影响行数");
+                }
+                return result;
+            }
             JdbcSelectResult selectResult = driver.query(sql, MAX_ROWS);
             result.setCostMs(System.currentTimeMillis() - start);
             if (selectResult == null) {
@@ -307,6 +327,8 @@ public class SqlVerifier {
         private boolean success;
         /** 返回行数（仅 SELECT 有意义） */
         private int rowCount;
+        /** 受影响行数（仅 DML/DDL 写通道有意义；-1 表示不适用） */
+        private int affectedRows = -1;
         /** 执行耗时（毫秒） */
         private long costMs;
         /** 数据源返回的原始错误 */

@@ -60,9 +60,13 @@ public class AiToolExecutor {
      */
     public AiToolResult execute(AiTool tool, AiToolCall call, AiToolContext context) {
         long start = System.currentTimeMillis();
-        int timeoutSeconds = context != null && context.getTimeoutSeconds() > 0
-                ? context.getTimeoutSeconds()
-                : DEFAULT_TIMEOUT_SECONDS;
+        // 阶段 2c-0：超时优先级——工具自定义（AiTool#timeoutSeconds）> 上下文（全局配置）> 兜底
+        int toolTimeout = tool.timeoutSeconds();
+        int timeoutSeconds = toolTimeout > 0
+                ? toolTimeout
+                : (context != null && context.getTimeoutSeconds() > 0
+                        ? context.getTimeoutSeconds()
+                        : DEFAULT_TIMEOUT_SECONDS);
         Future<AiToolResult> future = executor.submit(() -> invoke(tool, call, context));
         try {
             AiToolResult result = future.get(timeoutSeconds, TimeUnit.SECONDS);

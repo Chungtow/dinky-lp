@@ -19,6 +19,7 @@
 
 package org.dinky.service;
 
+import org.dinky.data.dto.AiChatConfirmRequest;
 import org.dinky.data.dto.AiChatRequest;
 import org.dinky.data.dto.AiChatWriteAuditRequest;
 import org.dinky.data.vo.AiChatConfig;
@@ -55,4 +56,20 @@ public interface AiChatService {
      * @param request 写入审计请求（只含 hash，不含代码正文）
      */
     void recordCraftWrite(AiChatWriteAuditRequest request);
+
+    /**
+     * 投递「写语句是否执行」的二次确认结果（阶段 2c-0）。
+     *
+     * @param request 确认请求（runId + approve；userId 由服务端覆盖）
+     * @return 是否成功投递（false：runId 已失效或无权限）
+     */
+    boolean confirmRun(AiChatConfirmRequest request);
+
+    /**
+     * 中断指定运行（阶段 2c-0）。
+     *
+     * @param request 取消请求（runId；userId 由服务端覆盖）
+     * @return 是否成功置位（false：runId 已失效或无权限）
+     */
+    boolean cancelRun(AiChatConfirmRequest request);
 }
