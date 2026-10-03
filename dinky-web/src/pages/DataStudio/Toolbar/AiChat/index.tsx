@@ -121,6 +121,20 @@ const AiChat = (props: AiChatProps) => {
       .catch(() => setConfig({}));
   }, []);
 
+  /**
+   * 阶段 3：所选 LLM 实例（多 LLM 实例配置）。
+   *
+   * <p>{@code undefined} = 使用默认实例（与后端"缺省回落"语义一致）；可用列表由 {@code getConfig}
+   * 下发且**已脱敏**（只含 hasApiKey，不含密钥）。
+   */
+  const [profileId, setProfileId] = useState<string | undefined>(undefined);
+  const profileList = useMemo(() => config?.profiles ?? [], [config]);
+  const activeProfileId = profileId ?? config?.defaultProfileId ?? 'default';
+  const activeProfile = useMemo(
+    () => profileList.find((item) => item.id === activeProfileId),
+    [profileList, activeProfileId]
+  );
+
   // 数据源清单：复用注册中心已有的「启用中数据源」接口，不新增后端接口
   useEffect(() => {
     getDataSourceList()
@@ -554,7 +568,9 @@ const AiChat = (props: AiChatProps) => {
           // 阶段 1a（1.4）：@ 显式引用，后端最高优先级且不裁剪
           mentions: mentions.length > 0 ? mentions : undefined,
           // 阶段 2：Craft 改写模式。后端仍会独立校验配置开关，未开启一律回落 ask
-          mode
+          mode,
+          // 阶段 3：所选 LLM 实例；不传 / 传不存在的值 → 后端回落默认实例
+          profileId
         },
         ({ content, reasoning, sql, status, execResult, toolCall, toolResult, runId, confirmRequest }) => {
           // 阶段 2c-0：记录运行 id；收到写语句确认请求即弹框
@@ -671,7 +687,9 @@ const AiChat = (props: AiChatProps) => {
           selectedSql: selected,
           // 阶段 2b：把前端暂存的「最近一次执行报错」带上（编辑器执行报错不落后端库）；
           // 按 taskId 取不到时回退到全局最近一条，避免因 tab/taskId 不匹配而漏带
-          executionError: getExecError(tabParams?.taskId) || getLatestExecError() || undefined
+          executionError: getExecError(tabParams?.taskId) || getLatestExecError() || undefined,
+          // 阶段 3：所选 LLM 实例（**所有 action 一致透传**，非仅取数类）
+          profileId
         },
         ({ sql }) => {
           if (sql) {
@@ -1311,6 +1329,26 @@ const AiChat = (props: AiChatProps) => {
             {config?.model || l('datastudio.aiChat.unconfigured')}
           </Tag>
         </Tooltip>
+        {/* 阶段 3：多 LLM 实例选择——仅当管理员配置了多个实例时才渲染（单实例保持界面简洁） */}
+        {profileList.length > 1 && (
+          <Tooltip title={l('datastudio.aiChat.profileTip')}>
+            <Select
+              size={'small'}
+              style={{ minWidth: 130 }}
+              value={activeProfileId}
+              onChange={(v) => setProfileId(v as string)}
+              options={profileList.map((item) => ({ label: item.name ?? item.id, value: item.id }))}
+            />
+          </Tooltip>
+        )}
+        {/* 阶段 3：该实例声明不支持工具调用时，提示将退化为纯问答（避免"工具链静默失效"） */}
+        {activeProfile && activeProfile.supportsTools === false && (
+          <Tooltip title={l('datastudio.aiChat.profileNoToolsTip')}>
+            <Tag color={'warning'} style={{ marginRight: 0 }}>
+              {l('datastudio.aiChat.profileNoTools')}
+            </Tag>
+          </Tooltip>
+        )}
         {/* 阶段 2：Ask / Craft 切换——仅管理员开启 Craft 时渲染（不展示无功能的控件） */}
         {config?.craftModeEnable && (
           <Tooltip title={l('datastudio.aiChat.modeTip')}>

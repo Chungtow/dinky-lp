@@ -277,6 +277,23 @@ public class SystemConfiguration {
             .defaultValue("deepseek-v4-flash")
             .note(Status.SYS_LLM_SETTINGS_MODEL_NOTE);
 
+    /**
+     * 多 LLM 实例（profile 列表，JSON 串；阶段 3）。
+     *
+     * <p>形如
+     * {@code [{"id":"deepseek","name":"DeepSeek","baseUrl":"...","model":"...","apiKey":"...",
+     * "completionsPath":"/chat/completions","timeoutSeconds":120,"maxTokens":4096,"stream":true,
+     * "supportsTools":true,"note":"..."}]}。
+     *
+     * <p><b>为空时行为与单 profile 时代完全一致</b>（等价于功能级回滚开关）；上面那组单字段配置
+     * （{@link #llmBaseUrl} / {@link #llmApiKey} / {@link #llmModel} …）即「<b>默认 profile</b>」，
+     * 继续作为缺省值使用，无需任何数据迁移。
+     */
+    private final Configuration<String> llmProfiles = key(Status.SYS_LLM_SETTINGS_PROFILES)
+            .stringType()
+            .defaultValue("")
+            .note(Status.SYS_LLM_SETTINGS_PROFILES_NOTE);
+
     private final Configuration<Integer> llmTimeout =
             key(Status.SYS_LLM_SETTINGS_TIMEOUT).intType().defaultValue(60).note(Status.SYS_LLM_SETTINGS_TIMEOUT_NOTE);
 
@@ -664,6 +681,11 @@ public class SystemConfiguration {
 
     public String getLlmModel() {
         return llmModel.getValue();
+    }
+
+    /** @return 多 LLM 实例配置（JSON 串；空串表示未启用多实例，行为等同于单 profile） */
+    public String getLlmProfiles() {
+        return Asserts.isNull(llmProfiles.getValue()) ? llmProfiles.getDefaultValue() : llmProfiles.getValue();
     }
 
     public int getLlmTimeout() {

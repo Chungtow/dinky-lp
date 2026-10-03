@@ -21,7 +21,6 @@ package org.dinky.ai;
 
 import org.dinky.data.dto.AiChatMessage;
 import org.dinky.data.exception.BusException;
-import org.dinky.data.model.SystemConfiguration;
 
 import org.apache.http.client.config.RequestConfig;
 import org.apache.http.client.methods.CloseableHttpResponse;
@@ -47,6 +46,7 @@ import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -71,6 +71,7 @@ import lombok.extern.slf4j.Slf4j;
  */
 @Slf4j
 @Component
+@RequiredArgsConstructor
 public class LlmClient {
 
     private static final String DATA_PREFIX = "data:";
@@ -78,6 +79,9 @@ public class LlmClient {
     private static final int CONNECT_TIMEOUT_MS = 10 * 1000;
 
     private final CloseableHttpClient httpClient = HttpClients.createDefault();
+
+    /** 阶段 3：profile 解析器——仅当调用方未显式传入 profile 时用于回落「默认 profile」（健壮性兜底） */
+    private final LlmProfileResolver profileResolver;
 
     /**
      * 发起流式对话（无工具）。
@@ -88,8 +92,9 @@ public class LlmClient {
      *     <code>reasoning_content</code>）
      * @return 本次调用的 token 用量（模型未返回 usage 时为 0）
      */
-    public TokenUsage streamChat(List<AiChatMessage> messages, Consumer<String> onDelta, Consumer<String> onReasoning) {
-        AiChatRound round = streamChatWithTools(messages, null, onDelta, onReasoning, null);
+    public TokenUsage streamChat(
+            List<AiChatMessage> messages, LlmProfile profile, Consumer<String> onDelta, Consumer<String> onReasoning) {
+        AiChatRound round = streamChatWithTools(messages, null, profile, onDelta, onReasoning, null);
         return round == null ? new TokenUsage() : round.getUsage();
     }
 
@@ -111,17 +116,20 @@ public class LlmClient {
     public AiChatRound streamChatWithTools(
             List<AiChatMessage> messages,
             List<AiToolSpec> tools,
+            LlmProfile requestProfile,
             Consumer<String> onDelta,
             Consumer<String> onReasoning,
             Boolean thinkingEnabled) {
-        SystemConfiguration config = SystemConfiguration.getInstances();
-        boolean stream = config.isLlmStream();
-        String baseUrl = StrUtil.trimToEmpty(config.getLlmBaseUrl());
-        String apiKey = StrUtil.trimToEmpty(config.getLlmApiKey());
-        String model = StrUtil.trimToEmpty(config.getLlmModel());
-        String completionsPath = StrUtil.trimToEmpty(config.getLlmCompletionsPath());
-        int timeoutSeconds = Math.max(config.getLlmTimeout(), 1);
-        int maxTokens = Math.max(config.getLlmMaxTokens(), 1);
+        // 阶段 3：连接与模型信息改由入参 profile 提供（此前每次调用直读全局单例）；
+        // 未显式传入时回落「默认 profile」——保证既有调用点行为完全不变。
+        LlmProfile profile = requestProfile == null ? profileResolver.defaultProfile() : requestProfile;
+        boolean stream = profile.isStream();
+        String baseUrl = StrUtil.trimToEmpty(profile.getBaseUrl());
+        String apiKey = StrUtil.trimToEmpty(profile.getApiKey());
+        String model = StrUtil.trimToEmpty(profile.getModel());
+        String completionsPath = StrUtil.trimToEmpty(profile.getCompletionsPath());
+        int timeoutSeconds = Math.max(profile.getTimeoutSeconds(), 1);
+        int maxTokens = Math.max(profile.getMaxTokens(), 1);
 
         if (StrUtil.isBlank(baseUrl) || StrUtil.isBlank(model)) {
             throw new BusException("AI 能力未正确配置：请先在配置中心-全局设置-LLM 配置中填写模型服务地址与模型名称");

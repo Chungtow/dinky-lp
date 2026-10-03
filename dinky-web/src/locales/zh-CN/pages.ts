@@ -619,6 +619,11 @@ export default {
   'datastudio.aiChat.verify.failed': '执行失败',
   'datastudio.aiChat.verify.rejected': '已跳过执行校验',
   'datastudio.aiChat.modelTip': '当前使用的模型，可在 系统配置 → AI 设置 中修改',
+  // 阶段 3：多 LLM 实例
+  'datastudio.aiChat.profileTip': '模型实例：可切换不同模型（如写 SQL 用 DeepSeek、离线调试用本地模型）',
+  'datastudio.aiChat.profileNoTools': '不支持工具调用',
+  'datastudio.aiChat.profileNoToolsTip':
+    '该模型实例不支持工具调用，本次将退化为纯问答（无法自行查表 / 执行 SQL）',
   // 阶段 1a：Context 三档
   'datastudio.aiChat.scopeTip': '上下文范围：决定本次把哪些表的结构交给模型',
   'datastudio.aiChat.scopeCurrent': '当前表',

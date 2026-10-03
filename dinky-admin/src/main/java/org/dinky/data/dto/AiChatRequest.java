@@ -137,6 +137,15 @@ public class AiChatRequest {
     private String mode;
 
     /**
+     * LLM 实例 id（阶段 3：多 LLM 实例配置）。
+     *
+     * <p>为空 / {@code default} / 传入不存在的 id → 后端一律<b>回落默认实例</b>
+     * （即 {@code sys.llm.*} 单组字段配置），因此<b>旧客户端与评测脚本无需任何改动</b>。
+     */
+    @ApiModelProperty(value = "LLM 实例 id（缺省走默认实例）", example = "default")
+    private String profileId;
+
+    /**
      * 服务端填充的当前用户 id（限流 / 配额 / 审计用）。
      *
      * <p><b>不接受前端传入</b>：Controller 会用 Sa-Token 的登录 id 覆盖，防止伪造绕过限流。
