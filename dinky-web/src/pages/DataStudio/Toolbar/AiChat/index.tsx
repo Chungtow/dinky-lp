@@ -1365,6 +1365,37 @@ const AiChat = (props: AiChatProps) => {
             }
           />
         </div>
+        {/* 阶段 2c-1：变更风险块（语句类型 / 目标对象 / AI 估计影响）——
+            「AI 估计」必须显式标注，不得渲染成精确值 */}
+        <div style={{ marginBottom: 8, fontSize: 12, lineHeight: '22px' }}>
+          <div>
+            <Typography.Text type={'secondary'}>
+              {l('datastudio.aiChat.writeConfirm.risk.sqlType')}
+            </Typography.Text>
+            <Tag color={writeConfirm?.sqlType === 'DDL' ? 'red' : 'orange'}>
+              {writeConfirm?.sqlType ?? '-'}
+            </Tag>
+            {writeConfirm?.risk?.target ? (
+              <>
+                <Typography.Text type={'secondary'}>
+                  {l('datastudio.aiChat.writeConfirm.risk.target')}
+                </Typography.Text>
+                <Typography.Text code>{writeConfirm.risk.target}</Typography.Text>
+              </>
+            ) : null}
+          </div>
+          {writeConfirm?.risk?.modelEstimate ? (
+            <div>
+              <Typography.Text type={'secondary'}>
+                {l('datastudio.aiChat.writeConfirm.risk.estimate')}
+              </Typography.Text>
+              <Typography.Text>{writeConfirm.risk.modelEstimate}</Typography.Text>
+              <Typography.Text type={'secondary'}>
+                {l('datastudio.aiChat.writeConfirm.risk.estimateNote')}
+              </Typography.Text>
+            </div>
+          ) : null}
+        </div>
         <pre
           style={{
             maxHeight: '40vh',

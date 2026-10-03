@@ -47,6 +47,17 @@ public class AiToolResult {
     /** 执行耗时（毫秒，用于前端展示与审计） */
     private long costMs;
 
+    /**
+     * 阶段 2c-1：受影响行数（仅写操作有意义；null 表示不适用）。
+     *
+     * <p>来自 {@code SqlVerifier.VerifyResult#getAffectedRows()} 的<b>事后真实值</b>，
+     * 由前端在工具步骤里展示「已影响 N 行」。
+     */
+    private Integer affectedRows;
+
+    /** 阶段 2c-1：风险摘要（仅写类工具填写；写入审计，不回灌给模型） */
+    private String riskSummary;
+
     public static AiToolResult success(String content, long costMs) {
         return AiToolResult.builder()
                 .success(true)

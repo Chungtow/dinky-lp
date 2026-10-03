@@ -441,6 +441,18 @@ public class SystemConfiguration {
                     .note(Status.SYS_LLM_SETTINGS_TOOLWRITETIMEOUTSECONDS_NOTE);
 
     /**
+     * 是否开放「执行类工具」exec_sql（阶段 2c-1）。
+     *
+     * <p>默认<b>关闭</b>：该工具会真正执行 SQL（含 DML / DDL）。关闭时它<b>不会出现在下发给模型的
+     * tools 清单里</b>（而非下发后再拒绝）；即使开启，仍受语句级开关（{@code sqlExecAllowDml} /
+     * {@code sqlExecAllowDdl}）与「执行前二次确认」双重约束。
+     */
+    private final Configuration<Boolean> llmToolExecSqlEnable = key(Status.SYS_LLM_SETTINGS_TOOLEXECSQLENABLE)
+            .booleanType()
+            .defaultValue(false)
+            .note(Status.SYS_LLM_SETTINGS_TOOLEXECSQLENABLE_NOTE);
+
+    /**
      * 工具轮是否保留 thinking。
      *
      * <p>默认关闭：2026-09-28 探针实测 thinking 默认开启时吃掉约 75% 生成预算
@@ -787,6 +799,13 @@ public class SystemConfiguration {
         return Asserts.isNull(llmToolWriteTimeoutSeconds.getValue())
                 ? llmToolWriteTimeoutSeconds.getDefaultValue()
                 : llmToolWriteTimeoutSeconds.getValue();
+    }
+
+    /** @return 是否开放执行类工具 exec_sql（阶段 2c-1，默认关闭） */
+    public boolean isLlmToolExecSqlEnable() {
+        return Asserts.isNull(llmToolExecSqlEnable.getValue())
+                ? llmToolExecSqlEnable.getDefaultValue()
+                : llmToolExecSqlEnable.getValue();
     }
 
     /** @return 工具轮是否保留 thinking（默认关闭，详见字段注释） */

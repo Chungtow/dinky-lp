@@ -40,6 +40,9 @@ const toolLabel = (name: string): string => {
       return l('datastudio.aiChat.tool.describeTable');
     case 'sample_rows':
       return l('datastudio.aiChat.tool.sampleRows');
+    // 阶段 2c-1：执行类工具
+    case 'exec_sql':
+      return l('datastudio.aiChat.tool.execSql');
     default:
       return name;
   }
@@ -63,7 +66,14 @@ const ToolProcess = ({ steps }: { steps?: AiChatToolStep[] }) => {
 
         if (step.status === 'success') {
           icon = <CheckCircleOutlined style={{ color: 'rgba(82,196,26,0.85)', fontSize: 12 }} />;
-          text = `${label}${target} · ${l('datastudio.aiChat.tool.done')} · ${step.costMs ?? 0}ms`;
+          // 阶段 2c-1：写类工具回报受影响行数时一并展示（只读工具无此值）
+          const affected =
+            step.affectedRows !== undefined && step.affectedRows !== null
+              ? ` · ${l('datastudio.aiChat.tool.affectedRows')} ${step.affectedRows}`
+              : '';
+          text = `${label}${target} · ${l('datastudio.aiChat.tool.done')} · ${
+            step.costMs ?? 0
+          }ms${affected}`;
         } else if (step.status === 'failed') {
           icon = <CloseCircleOutlined style={{ color: 'rgba(255,77,79,0.85)', fontSize: 12 }} />;
           // 失败文案已在服务端脱敏（不含连接串 / 账号 / 内网地址），可直接展示

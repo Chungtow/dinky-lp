@@ -80,6 +80,29 @@ public class AiChatRunRegistry {
 
     private final Map<String, RunContext> runs = new ConcurrentHashMap<>();
 
+    /**
+     * 二次确认的等待超时（秒）：写语句确认与工具内确认共用（阶段 2c-0 引入，2c-1 提取为公共常量）。
+     */
+    public static final int CONFIRM_TIMEOUT_SECONDS = 300;
+
+    /**
+     * 阶段 2c-1：写类工具超时相对确认等待的缓冲（秒）。
+     *
+     * <p>工具执行被 {@code AiToolExecutor#execute} 的 {@code future.get(timeout)} 包裹，而工具内
+     * 「等用户确认」是阻塞行为——若工具超时 &lt; 确认等待，等待中的工具会在用户还没拍板时就被执行器
+     * 掐断。因此写类工具的执行超时必须 ≥ {@link #CONFIRM_TIMEOUT_SECONDS}，这里再加一点执行余量。
+     */
+    private static final int WRITE_TOOL_TIMEOUT_BUFFER_SECONDS = 30;
+
+    /**
+     * 把配置的写工具超时抬到「不短于确认等待 + 缓冲」。
+     *
+     * @param configured 配置项 {@code sys.llm.settings.toolWriteTimeoutSeconds} 的值
+     */
+    public static int writeToolTimeoutSeconds(int configured) {
+        return Math.max(configured, CONFIRM_TIMEOUT_SECONDS + WRITE_TOOL_TIMEOUT_BUFFER_SECONDS);
+    }
+
     /** 创建一次运行的上下文 */
     public RunContext create(String runId, Integer userId) {
         RunContext context = new RunContext(userId);
