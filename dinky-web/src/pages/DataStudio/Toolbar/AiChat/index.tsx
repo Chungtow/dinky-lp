@@ -1320,13 +1320,19 @@ const AiChat = (props: AiChatProps) => {
         </div>
       )}
       <Space wrap style={{ marginTop: 8, rowGap: 6 }}>
-        <Tooltip title={l('datastudio.aiChat.modelTip')}>
+        {/* 模型名跟随「当前所选实例」——此前写死默认实例的 config.model，切换下拉不会更新；
+            实例本身缺 model 时再回落到默认实例，避免出现空白 */}
+        <Tooltip
+          title={`${l('datastudio.aiChat.modelTip')}${
+            activeProfile?.name ? ` · ${activeProfile.name}` : ''
+          }`}
+        >
           <Tag
             icon={<RobotOutlined />}
-            color={config?.hasApiKey ? 'success' : 'warning'}
+            color={(activeProfile?.hasApiKey ?? config?.hasApiKey) ? 'success' : 'warning'}
             style={{ marginRight: 0 }}
           >
-            {config?.model || l('datastudio.aiChat.unconfigured')}
+            {activeProfile?.model || config?.model || l('datastudio.aiChat.unconfigured')}
           </Tag>
         </Tooltip>
         {/* 阶段 3：多 LLM 实例选择——仅当管理员配置了多个实例时才渲染（单实例保持界面简洁） */}
