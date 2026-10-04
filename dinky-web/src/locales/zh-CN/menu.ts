@@ -70,6 +70,7 @@ export default {
   'menu.registration.gitproject': 'Git 项目(Beta)',
   'menu.registration.udf': 'UDF',
   'menu.registration.resource': '资源',
+  'menu.registration.skill': 'Skills',
   'menu.auth': '认证中心',
   'menu.auth.user': '用户',
   'menu.auth.role': '角色',

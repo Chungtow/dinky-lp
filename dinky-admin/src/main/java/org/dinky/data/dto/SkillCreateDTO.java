@@ -26,39 +26,25 @@ import io.swagger.annotations.ApiModelProperty;
 import lombok.Getter;
 import lombok.Setter;
 
+/** 新建 Skill 入参（阶段 4a） */
 @Getter
 @Setter
-@ApiModel(value = "ResourcesDTO", description = "DTO for representing resources")
-public class ResourcesDTO implements Serializable {
+@ApiModel(value = "SkillCreateDTO", description = "Create a skill")
+public class SkillCreateDTO implements Serializable {
+
+    private static final long serialVersionUID = 1L;
 
     @ApiModelProperty(
-            value = "Resource ID",
-            dataType = "Integer",
-            example = "1",
-            notes = "The unique identifier of the resource")
-    private Integer id;
-
-    @ApiModelProperty(
-            value = "File Name",
+            value = "Name",
             dataType = "String",
-            example = "resource_file.txt",
-            notes = "The name of the resource file")
-    private String fileName;
-
-    @ApiModelProperty(
-            value = "Parent ID",
-            dataType = "Integer",
-            example = "1",
-            notes = "The unique identifier of the parent resource")
-    private Integer pid;
+            example = "dw-sql-review",
+            notes = "skill 名：^[a-z0-9][a-z0-9-]{1,63}$（将作为目录名，必须与 SKILL.md frontmatter 一致）")
+    private String name;
 
     @ApiModelProperty(
             value = "Description",
             dataType = "String",
-            example = "A sample resource file",
-            notes = "A brief description of the resource")
+            example = "数仓 SQL 评审批量规范",
+            notes = "一句话说明（会随清单注入模型，用于 @ 候选）")
     private String description;
-
-    @ApiModelProperty(value = "Content", dataType = "String", notes = "文本内容（仅 /api/resource/writeContent 使用）")
-    private String content;
 }

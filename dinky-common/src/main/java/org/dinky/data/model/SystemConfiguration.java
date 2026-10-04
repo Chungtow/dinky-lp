@@ -504,6 +504,30 @@ public class SystemConfiguration {
             .defaultValue(false)
             .note(Status.SYS_LLM_SETTINGS_CRAFTMODEENABLE_NOTE);
 
+    /**
+     * Skills 能力开关（阶段 4a）。
+     *
+     * <p><b>默认关闭</b>：开启后 AI Chat 会注入「当前用户可见 skill 的清单」，并支持 {@code @skill-<名>}
+     * 显式引用（引用时注入该 skill 正文）。关闭时既不注入清单、也不响应 skill 引用——行为与迭代前
+     * 完全一致（等价功能级回滚开关）。
+     */
+    private final Configuration<Boolean> llmSkillEnable = key(Status.SYS_LLM_SETTINGS_SKILLENABLE)
+            .booleanType()
+            .defaultValue(false)
+            .note(Status.SYS_LLM_SETTINGS_SKILLENABLE_NOTE);
+
+    /**
+     * skill 注入预算（字符，阶段 4a）。
+     *
+     * <p><b>独立预算项</b>：skill 内容（清单 + 显式引用的正文）走自己的上限，不与 schema / 字段预算
+     * 相互挤占。<b>注意</b>：本项目 context engineering 的预算整体宽裕（未来还要容纳语义层与业务知识），
+     * 本项是**防爆上限**（避免单个超大 skill 撑爆上下文），不是「省 token」的手段。
+     */
+    private final Configuration<Integer> llmSkillMaxChars = key(Status.SYS_LLM_SETTINGS_SKILLMAXCHARS)
+            .intType()
+            .defaultValue(4000)
+            .note(Status.SYS_LLM_SETTINGS_SKILLMAXCHARS_NOTE);
+
     private final Configuration<Boolean> metricsSysEnable = key(Status.SYS_METRICS_SETTINGS_SYS_ENABLE)
             .booleanType()
             .defaultValue(false)
@@ -805,6 +829,20 @@ public class SystemConfiguration {
         return Asserts.isNull(llmCraftModeEnable.getValue())
                 ? llmCraftModeEnable.getDefaultValue()
                 : llmCraftModeEnable.getValue();
+    }
+
+    /**
+     * @return 是否开启 Skills 能力（阶段 4a）：开启后注入「可见 skill 清单」并支持 {@code @skill-<名>}，默认关闭。
+     */
+    public boolean isLlmSkillEnable() {
+        return Asserts.isNull(llmSkillEnable.getValue()) ? llmSkillEnable.getDefaultValue() : llmSkillEnable.getValue();
+    }
+
+    /** @return skill 注入预算（字符，阶段 4a）：防爆上限，独立于 schema / 字段预算 */
+    public int getLlmSkillMaxChars() {
+        return Asserts.isNull(llmSkillMaxChars.getValue())
+                ? llmSkillMaxChars.getDefaultValue()
+                : llmSkillMaxChars.getValue();
     }
 
     /** @return 是否开放触碰业务数据行的 sample_rows 工具 */

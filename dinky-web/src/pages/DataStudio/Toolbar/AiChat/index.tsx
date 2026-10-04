@@ -42,6 +42,7 @@ import {
   cancelAiChat,
   confirmAiChat,
   getAiChatConfig,
+  listSkills,
   listTableColumns,
   reportCraftWrite
 } from './service';
@@ -204,6 +205,8 @@ const AiChat = (props: AiChatProps) => {
    */
   const [columnOptions, setColumnOptions] = useState<AiChatMentionItem[]>([]);
   const columnCacheRef = useRef<Map<string, AiChatMentionItem[]>>(new Map());
+  /** 阶段 4a：团队 Skill 候选（仅管理员开启 skillEnable 时拉取）——输入 {@code @skill-} 时展示 */
+  const [skillOptions, setSkillOptions] = useState<AiChatMentionItem[]>([]);
   const [recentMentions, setRecentMentions] = useState<string[]>(() => {
     try {
       return JSON.parse(localStorage.getItem(RECENT_MENTION_KEY) ?? '[]');
@@ -276,6 +279,17 @@ const AiChat = (props: AiChatProps) => {
     };
   }, [columnQuery, databaseId, schemaName]);
 
+  // 阶段 4a：skill 候选——仅在管理员开启 skillEnable 时拉取；关闭时清空（避免残留旧候选）
+  useEffect(() => {
+    if (!config?.skillEnable) {
+      setSkillOptions([]);
+      return;
+    }
+    listSkills()
+      .then((items) => setSkillOptions(items))
+      .catch(() => setSkillOptions([]));
+  }, [config?.skillEnable]);
+
   const mentionCandidates = useMemo(() => {
     const list: (AiChatMentionItem & { group: string })[] = [];
     // provider 1：当前 schema 下的表
@@ -318,14 +332,28 @@ const AiChat = (props: AiChatProps) => {
     if (columnQuery) {
       return columnOptions;
     }
+    // provider 5（阶段 4a）：团队 Skill——输入 @skill- 时只给 skill 候选
+    if (mentionQuery.trim().toLowerCase().startsWith('skill-')) {
+      return skillOptions.map((item) => ({
+        ...item,
+        group: l('datastudio.aiChat.mention.groupSkill')
+      }));
+    }
     return list;
     // mentionOpen 作为依赖：每次打开浮层都重新读取最新的选中片段
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [schemas, schemaName, tabs, activeTab, tabParams?.taskId, mentionOpen]);
+  }, [schemas, schemaName, tabs, activeTab, tabParams?.taskId, mentionOpen, mentionQuery, skillOptions]);
 
   /** 过滤 + 排序：最近用过 > 前缀匹配 > 其余 */
   const filteredMentions = useMemo(() => {
     const q = mentionQuery.trim().toLowerCase();
+    // 阶段 4a：@skill-<名> —— 前缀之后才是 skill 名，且此时只保留 skill 候选
+    if (q.startsWith('skill-')) {
+      const skillKey = q.slice('skill-'.length);
+      return mentionCandidates
+        .filter((c) => c.type === 'skill' && c.name?.toLowerCase().includes(skillKey))
+        .slice(0, 20);
+    }
     const matched = q
       ? mentionCandidates.filter((c) =>
           c.type === 'column'
@@ -355,8 +383,14 @@ const AiChat = (props: AiChatProps) => {
     setMentions((prev) =>
       prev.length > 0
         ? prev.filter((m) => {
-            // 字段引用的 token 是 @表名.字段名，只比对表名会误删同名表的其它字段引用
-            const token = m.type === 'column' ? `@${m.name}.${m.columnName}` : `@${m.name}`;
+            // 字段引用的 token 是 @表名.字段名，只比对表名会误删同名表的其它字段引用；
+            // 阶段 4a：skill 的 token 是 @skill-<名>
+            const token =
+              m.type === 'column'
+                ? `@${m.name}.${m.columnName}`
+                : m.type === 'skill'
+                  ? `@skill-${m.name}`
+                  : `@${m.name}`;
             return value.includes(token);
           })
         : prev
@@ -378,7 +412,11 @@ const AiChat = (props: AiChatProps) => {
   /** 选中候选：把 {@code @query} 替换为 {@code @name}，并记录为已引用 */
   const pickMention = (item: AiChatMentionItem) => {
     const token =
-      item.type === 'column' ? `@${item.name}.${item.columnName}` : `@${item.name}`;
+      item.type === 'column'
+        ? `@${item.name}.${item.columnName}`
+        : item.type === 'skill'
+          ? `@skill-${item.name}`
+          : `@${item.name}`;
     setInputValue(inputValue.replace(/@[^\s@]*$/, `${token} `));
     setMentions((prev) =>
       prev.some(

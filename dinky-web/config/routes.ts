@@ -200,6 +200,12 @@ export default [
         name: 'resource',
         icon: 'FileZipOutlined',
         component: './RegCenter/Resource'
+      },
+      {
+        path: '/registration/skill',
+        name: 'skill',
+        icon: 'ThunderboltOutlined',
+        component: './RegCenter/Skills'
       }
     ]
   },

@@ -26,39 +26,20 @@ import io.swagger.annotations.ApiModelProperty;
 import lombok.Getter;
 import lombok.Setter;
 
+/** 保存 Skill 正文入参（阶段 4a） */
 @Getter
 @Setter
-@ApiModel(value = "ResourcesDTO", description = "DTO for representing resources")
-public class ResourcesDTO implements Serializable {
+@ApiModel(value = "SkillSaveDTO", description = "Save skill content")
+public class SkillSaveDTO implements Serializable {
+
+    private static final long serialVersionUID = 1L;
+
+    @ApiModelProperty(value = "Skill ID", dataType = "Long", example = "1")
+    private Long id;
 
     @ApiModelProperty(
-            value = "Resource ID",
-            dataType = "Integer",
-            example = "1",
-            notes = "The unique identifier of the resource")
-    private Integer id;
-
-    @ApiModelProperty(
-            value = "File Name",
+            value = "Content",
             dataType = "String",
-            example = "resource_file.txt",
-            notes = "The name of the resource file")
-    private String fileName;
-
-    @ApiModelProperty(
-            value = "Parent ID",
-            dataType = "Integer",
-            example = "1",
-            notes = "The unique identifier of the parent resource")
-    private Integer pid;
-
-    @ApiModelProperty(
-            value = "Description",
-            dataType = "String",
-            example = "A sample resource file",
-            notes = "A brief description of the resource")
-    private String description;
-
-    @ApiModelProperty(value = "Content", dataType = "String", notes = "文本内容（仅 /api/resource/writeContent 使用）")
+            notes = "SKILL.md 全文（含 frontmatter）。保存时会重新解析 name / description 并回写元数据")
     private String content;
 }
