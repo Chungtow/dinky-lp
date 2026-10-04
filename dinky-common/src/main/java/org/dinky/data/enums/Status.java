@@ -476,6 +476,9 @@ public enum Status {
     /** 阶段 2c-2：自动纠错最大尝试次数 */
     SYS_LLM_SETTINGS_TOOLAUTOREPAIRMAXATTEMPTS(270, "sys.llm.settings.toolAutoRepairMaxAttempts"),
     SYS_LLM_SETTINGS_TOOLAUTOREPAIRMAXATTEMPTS_NOTE(271, "sys.llm.settings.toolAutoRepairMaxAttempts.note"),
+    /** 阶段 3：多 LLM 实例（profile 列表，JSON 串） */
+    SYS_LLM_SETTINGS_PROFILES(272, "sys.llm.settings.profiles"),
+    SYS_LLM_SETTINGS_PROFILES_NOTE(273, "sys.llm.settings.profiles.note"),
     SYS_METRICS_SETTINGS_SYS_ENABLE(148, "sys.metrics.settings.sys.enable"),
     SYS_METRICS_SETTINGS_SYS_ENABLE_NOTE(149, "sys.metrics.settings.sys.enable.note"),
     SYS_METRICS_SETTINGS_SYS_GATHERTIMING(150, "sys.metrics.settings.sys.gatherTiming"),

@@ -684,6 +684,12 @@ export default {
   'datastudio.aiChat.verify.failed': 'Execution failed',
   'datastudio.aiChat.verify.rejected': 'Verification skipped',
   'datastudio.aiChat.modelTip': 'Current model, configurable in System Config - AI Settings',
+  // Stage 3: multiple LLM profiles
+  'datastudio.aiChat.profileTip':
+    'Model profile: switch between models (eg DeepSeek for SQL, a local model for offline debugging)',
+  'datastudio.aiChat.profileNoTools': 'No tool calling',
+  'datastudio.aiChat.profileNoToolsTip':
+    'This profile does not support tool calling; this request degrades to plain Q&A (cannot query tables or execute SQL)',
   // Stage 1a: context scope
   'datastudio.aiChat.scopeTip': 'Context scope: which tables are sent to the model',
   'datastudio.aiChat.scopeCurrent': 'Current',

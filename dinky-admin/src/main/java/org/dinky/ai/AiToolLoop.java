@@ -23,6 +23,7 @@ import org.dinky.ai.tools.ExecSqlTool;
 import org.dinky.data.dto.AiChatMessage;
 import org.dinky.data.model.SystemConfiguration;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -90,6 +91,7 @@ public class AiToolLoop {
     public AiToolRunResult run(
             List<AiChatMessage> messages,
             AiToolContext context,
+            LlmProfile profile,
             Consumer<String> onDelta,
             Consumer<String> onReasoning,
             Listener listener,
@@ -99,11 +101,16 @@ public class AiToolLoop {
         int maxRounds = Math.max(config.getLlmToolCallMaxRounds(), 1);
         // 工具轮的 thinking 默认关闭：探针实测它吃掉约 75% 生成预算（调研报告 §7.9）
         Boolean thinkingEnabled = Boolean.valueOf(config.isLlmToolThinkingEnabled());
-        List<AiToolSpec> specs = registry.specs(config);
+        // 阶段 3：该实例声明「不支持 function calling」时禁用工具循环、退化为纯问答——
+        // 现状对"模型不支持 tools"没有任何兜底（HTTP 400 会被统一转成异常、单轮异常又会被吞掉），
+        // 若不显式降级，工具链会静默失效（探针场景：本地 Ollama 等小模型）。
+        List<AiToolSpec> specs = profile != null && !profile.isSupportsTools()
+                ? Collections.<AiToolSpec>emptyList()
+                : registry.specs(config);
 
         if (specs.isEmpty()) {
             // 无工具可用：退化为普通一轮生成，行为与阶段 1a 完全一致
-            result.appendAnswer(finalRound(messages, onDelta, onReasoning, thinkingEnabled, result));
+            result.appendAnswer(finalRound(messages, profile, onDelta, onReasoning, thinkingEnabled, result));
             return result;
         }
 
@@ -114,7 +121,8 @@ public class AiToolLoop {
                 return result;
             }
             StringBuilder content = new StringBuilder();
-            AiChatRound chatRound = callLlm(messages, specs, content, onDelta, onReasoning, thinkingEnabled, result);
+            AiChatRound chatRound =
+                    callLlm(messages, specs, profile, content, onDelta, onReasoning, thinkingEnabled, result);
             if (chatRound == null) {
                 return result;
             }
@@ -136,7 +144,7 @@ public class AiToolLoop {
         }
         // 走完所有轮次仍在要工具：回灌提示后，再给一次「不带工具」的机会生成最终答案
         messages.add(AiChatMessage.of("user", ROUND_LIMIT_NOTICE));
-        result.appendAnswer(finalRound(messages, onDelta, onReasoning, thinkingEnabled, result));
+        result.appendAnswer(finalRound(messages, profile, onDelta, onReasoning, thinkingEnabled, result));
         return result;
     }
 
@@ -203,18 +211,20 @@ public class AiToolLoop {
     /** 最后一次「不带工具」的生成：保证循环结束时一定有一段正文 */
     private String finalRound(
             List<AiChatMessage> messages,
+            LlmProfile profile,
             Consumer<String> onDelta,
             Consumer<String> onReasoning,
             Boolean thinkingEnabled,
             AiToolRunResult result) {
         StringBuilder content = new StringBuilder();
-        callLlm(messages, null, content, onDelta, onReasoning, thinkingEnabled, result);
+        callLlm(messages, null, profile, content, onDelta, onReasoning, thinkingEnabled, result);
         return content.toString();
     }
 
     private AiChatRound callLlm(
             List<AiChatMessage> messages,
             List<AiToolSpec> specs,
+            LlmProfile profile,
             StringBuilder content,
             Consumer<String> onDelta,
             Consumer<String> onReasoning,
@@ -224,6 +234,7 @@ public class AiToolLoop {
             AiChatRound chatRound = llmClient.streamChatWithTools(
                     messages,
                     specs,
+                    profile,
                     delta -> {
                         content.append(delta);
                         if (onDelta != null) {

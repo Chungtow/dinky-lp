@@ -61,6 +61,9 @@ public class AiChatLog implements Serializable {
     @ApiModelProperty(value = "Model", dataType = "String", notes = "模型名称")
     private String model;
 
+    @ApiModelProperty(value = "LLM Profile Id", dataType = "String", notes = "实际使用的模型实例 id（阶段 3；同名模型跨网关可区分）")
+    private String profileId;
+
     @ApiModelProperty(value = "Database Id", dataType = "Integer", notes = "数据源 id")
     private Integer databaseId;
 

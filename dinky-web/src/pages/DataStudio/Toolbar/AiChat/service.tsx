@@ -107,6 +107,21 @@ export type AiChatMessage = {
   tools?: AiChatToolStep[];
 };
 
+/**
+ * LLM 实例（阶段 3：多 LLM 实例配置）。
+ *
+ * <p>后端逐项**脱敏**后下发：只含 {@code hasApiKey} 布尔，**不含 apiKey 明文**。
+ */
+export type AiChatProfileItem = {
+  id: string;
+  name?: string;
+  model?: string;
+  baseUrl?: string;
+  hasApiKey?: boolean;
+  /** 该实例是否支持工具调用；false 时提示「将退化为纯问答」 */
+  supportsTools?: boolean;
+};
+
 /** 前端可用的 AI 配置（不含密钥） */
 export type AiChatConfig = {
   enable?: boolean;
@@ -115,6 +130,10 @@ export type AiChatConfig = {
   hasApiKey?: boolean;
   /** Craft 模式是否开启（管理员配置）；未开启时前端不渲染模式切换控件 */
   craftModeEnable?: boolean;
+  /** 默认 LLM 实例 id（阶段 3）：未选择时使用它 */
+  defaultProfileId?: string;
+  /** 可用的 LLM 实例列表（阶段 3，不含密钥） */
+  profiles?: AiChatProfileItem[];
 };
 
 /**
@@ -170,6 +189,12 @@ export type AiChatRequestBody = {
    * 即「未授权即无能力」，安全性不依赖前端是否隐藏控件。
    */
   mode?: 'ask' | 'craft';
+  /**
+   * LLM 实例 id（阶段 3）：缺省 / 传不存在的值 → 后端回落默认实例。
+   *
+   * <p>不传时行为与改造前完全一致（评测脚本即不传）。
+   */
+  profileId?: string;
 };
 
 /**

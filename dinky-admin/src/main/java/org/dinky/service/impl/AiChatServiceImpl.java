@@ -28,6 +28,8 @@ import org.dinky.ai.AiToolResult;
 import org.dinky.ai.AiToolRunResult;
 import org.dinky.ai.ChangeRisk;
 import org.dinky.ai.LlmClient;
+import org.dinky.ai.LlmProfile;
+import org.dinky.ai.LlmProfileResolver;
 import org.dinky.ai.PromptStore;
 import org.dinky.ai.SqlVerifier;
 import org.dinky.ai.TableSelector;
@@ -141,6 +143,8 @@ public class AiChatServiceImpl implements AiChatService {
     private final JobInstanceService jobInstanceService;
     private final HistoryService historyService;
     private final AiToolLoop toolLoop;
+    /** 阶段 3：LLM 实例（profile）解析器——请求级解析，缺省回落默认实例，绝不写全局单例 */
+    private final LlmProfileResolver profileResolver;
 
     private final ExecutorService chatExecutor = Executors.newCachedThreadPool();
 
@@ -189,12 +193,33 @@ public class AiChatServiceImpl implements AiChatService {
     @Override
     public AiChatConfig getConfig() {
         SystemConfiguration config = SystemConfiguration.getInstances();
+        // 阶段 3：默认实例由单组 sys.llm.* 字段构造（取值与改造前完全等价）；多实例逐项**脱敏**后返回
+        LlmProfile defaultProfile = profileResolver.defaultProfile();
+        List<AiChatConfig.AiChatProfile> profiles = new ArrayList<>();
+        profiles.add(toProfileView(defaultProfile));
+        for (LlmProfile profile : profileResolver.listProfiles()) {
+            profiles.add(toProfileView(profile));
+        }
         return AiChatConfig.builder()
                 .enable(config.isLlmEnable())
-                .model(config.getLlmModel())
-                .baseUrl(config.getLlmBaseUrl())
-                .hasApiKey(StrUtil.isNotBlank(config.getLlmApiKey()))
+                .model(defaultProfile.getModel())
+                .baseUrl(defaultProfile.getBaseUrl())
+                .hasApiKey(defaultProfile.hasApiKey())
                 .craftModeEnable(config.isLlmCraftModeEnable())
+                .defaultProfileId(LlmProfile.DEFAULT_ID)
+                .profiles(profiles)
+                .build();
+    }
+
+    /** profile → 前端视图（**不含 apiKey 明文**，只回 {@code hasApiKey} 布尔） */
+    private AiChatConfig.AiChatProfile toProfileView(LlmProfile profile) {
+        return AiChatConfig.AiChatProfile.builder()
+                .id(profile.getId())
+                .name(profile.getName())
+                .model(profile.getModel())
+                .baseUrl(profile.getBaseUrl())
+                .hasApiKey(profile.hasApiKey())
+                .supportsTools(profile.isSupportsTools())
                 .build();
     }
 
@@ -219,6 +244,10 @@ public class AiChatServiceImpl implements AiChatService {
             }
 
             Integer userId = request.getUserId();
+            // 阶段 3：解析本次对话使用的 LLM 实例（缺省 / 未命中 / 配置损坏 → 回落默认 profile）。
+            // 一次对话内**锁定不变**：主轮 / 工具轮 / verify 修复轮 / 2c-2 纠错轮共用同一实例，
+            // 避免出现「主轮 A 模型、工具轮 B 模型」。
+            LlmProfile profile = profileResolver.resolve(request.getProfileId());
             // 阶段 2c-0：建立运行上下文并下发 runId（前端凭它做二次确认 / 服务端中断）
             runId = UUID.randomUUID().toString();
             final AiChatRunRegistry.RunContext run = runRegistry.create(runId, userId);
@@ -226,7 +255,9 @@ public class AiChatServiceImpl implements AiChatService {
             audit.setUserId(userId);
             audit.setSessionId(request.getSessionId());
             audit.setAction(StrUtil.blankToDefault(request.getAction(), ACTION_TEXT_TO_SQL));
-            audit.setModel(config.getLlmModel());
+            // 阶段 3：审计记录**实际使用的实例与模型**（同名模型跑在不同网关也能区分）
+            audit.setModel(profile.getModel());
+            audit.setProfileId(profile.getId());
             audit.setDatabaseId(request.getDatabaseId());
             audit.setSchemaName(request.getSchemaName());
             audit.setQuestion(request.getMessage());
@@ -283,6 +314,7 @@ public class AiChatServiceImpl implements AiChatService {
                         answer,
                         dataBase,
                         config,
+                        profile,
                         runId,
                         run,
                         () -> runRegistry.isCancelled(run));
@@ -295,7 +327,7 @@ public class AiChatServiceImpl implements AiChatService {
                     return;
                 }
             } else {
-                mergeUsage(totalUsage, generate(messages, emitter, answer));
+                mergeUsage(totalUsage, generate(messages, profile, emitter, answer));
             }
 
             int retryCount = 0;
@@ -391,7 +423,7 @@ public class AiChatServiceImpl implements AiChatService {
                                 buildRepairPrompt(sql, verifyResult.getError(), schemaContext, request.getDialect())));
                         answer.setLength(0);
                         sendFrame(emitter, "content", "\n\n> 自动修复 " + retryCount + "/" + maxRetry + "：\n");
-                        mergeUsage(totalUsage, generate(messages, emitter, answer));
+                        mergeUsage(totalUsage, generate(messages, profile, emitter, answer));
                         sql = sqlVerifier.extractSql(answer.toString());
                         if (StrUtil.isBlank(sql)) {
                             break;
@@ -434,9 +466,11 @@ public class AiChatServiceImpl implements AiChatService {
     }
 
     /** 调用模型一次：流式内容同时下发给前端并累积到 answer */
-    private TokenUsage generate(List<AiChatMessage> messages, SseEmitter emitter, StringBuilder answer) {
+    private TokenUsage generate(
+            List<AiChatMessage> messages, LlmProfile profile, SseEmitter emitter, StringBuilder answer) {
         TokenUsage usage = llmClient.streamChat(
                 messages,
+                profile,
                 delta -> {
                     answer.append(delta);
                     sendFrame(emitter, "content", delta);
@@ -462,6 +496,7 @@ public class AiChatServiceImpl implements AiChatService {
             StringBuilder answer,
             DataBase dataBase,
             SystemConfiguration config,
+            LlmProfile profile,
             String runId,
             AiChatRunRegistry.RunContext run,
             BooleanSupplier cancelled) {
@@ -485,6 +520,7 @@ public class AiChatServiceImpl implements AiChatService {
         return toolLoop.run(
                 messages,
                 context,
+                profile,
                 delta -> {
                     answer.append(delta);
                     sendFrame(emitter, "content", delta);
