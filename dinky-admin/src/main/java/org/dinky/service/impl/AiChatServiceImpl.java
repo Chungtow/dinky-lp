@@ -221,7 +221,11 @@ public class AiChatServiceImpl implements AiChatService {
             log.warn("Build schema context before stream failed", e);
         }
         final String schemaContext = built;
-        chatExecutor.execute(() -> doChat(request, emitter, dataBase, schemaContext));
+        // 阶段 4b 修复：可见 skill / doc 快照也必须在这里（请求线程）算好——工具循环跑在异步线程，
+        // 那里 Sa-Token 与租户上下文都已丢失，loadVisibleSkillBriefs() 会取不到登录用户而抛异常、
+        // 降级为空集合（表现为 list_skills 恒为空，AI 据此断言"当前账号没有 skill"）。
+        final List<SkillBrief> visibleSkills = loadVisibleSkillBriefs();
+        chatExecutor.execute(() -> doChat(request, emitter, dataBase, schemaContext, visibleSkills));
         return emitter;
     }
 
@@ -273,7 +277,12 @@ public class AiChatServiceImpl implements AiChatService {
     }
 
     /** 实际对话逻辑（在异步线程中执行） */
-    private void doChat(AiChatRequest request, SseEmitter emitter, DataBase dataBase, String prebuiltSchemaContext) {
+    private void doChat(
+            AiChatRequest request,
+            SseEmitter emitter,
+            DataBase dataBase,
+            String prebuiltSchemaContext,
+            List<SkillBrief> visibleSkills) {
         long start = System.currentTimeMillis();
         TokenUsage totalUsage = new TokenUsage();
         AiChatLog audit = new AiChatLog();
@@ -366,7 +375,8 @@ public class AiChatServiceImpl implements AiChatService {
                         profile,
                         runId,
                         run,
-                        () -> runRegistry.isCancelled(run));
+                        () -> runRegistry.isCancelled(run),
+                        visibleSkills);
                 mergeUsage(totalUsage, toolRun.getUsage());
                 // 阶段 2c-0：用户已请求中断——停止后续校验 / 修复，直接收尾
                 if (runRegistry.isCancelled(run)) {
@@ -548,7 +558,8 @@ public class AiChatServiceImpl implements AiChatService {
             LlmProfile profile,
             String runId,
             AiChatRunRegistry.RunContext run,
-            BooleanSupplier cancelled) {
+            BooleanSupplier cancelled,
+            List<SkillBrief> visibleSkills) {
         AiToolContext context = AiToolContext.create(
                 dataBase,
                 StrUtil.nullToEmpty(request.getSchemaName()),
@@ -562,7 +573,9 @@ public class AiChatServiceImpl implements AiChatService {
         // 阶段 4b：在【请求线程】预解析「当前用户可见的 skill / doc 快照」注入上下文。
         // 工具循环跑在异步线程池，那里租户上下文与 Sa-Token 上下文都已丢失——工具内既不能反查 DB
         // （会因租户过滤查不到），也不能依赖 StpUtil 做属主判定。快照 + 显式 userId 即为解法。
-        context.setVisibleSkills(loadVisibleSkillBriefs());
+        // 注意：这里必须使用【请求线程】预解析并传入的快照，不能在此（异步线程）重新查询——
+        // 否则 Sa-Token / 租户上下文均已丢失，会静默降级为空集合（4b UAT 的 B1 即此表现）。
+        context.setVisibleSkills(visibleSkills);
         // 阶段 2c-2：记录最近一次工具失败原因，随确认请求下发，
         // 使「第 N 次尝试」的确认框能同时显示上次为什么失败（用户知情后再决定是否执行）
         AtomicReference<String> lastToolError = new AtomicReference<>();
