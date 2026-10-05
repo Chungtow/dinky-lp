@@ -68,6 +68,41 @@ public class AiToolRegistry {
     }
 
     /** 本次下发给模型的工具声明列表 */
+    /** 阶段 4b：不依赖数据源的工具名（未绑定数据源时仍下发）。 */
+    private static final java.util.List<String> DATA_BASE_FREE_TOOL_NAMES =
+            java.util.Arrays.asList("list_skills", "read_skill", "create_skill", "write_skill_file", "delete_skill");
+
+    /**
+     * 阶段 4b：按「是否绑定数据源」过滤后的工具清单。
+     *
+     * <p>未绑定数据源时只保留不依赖数据源的工具——否则模型会把有限的工具调用额度浪费在必然
+     * 失败的表查询上（UAT B4 实测：先试两次 list_tables 都失败，额度耗尽后，真正要做的
+     * write_skill_file 反而调不到，只能让用户手工粘贴）。
+     */
+    public Map<String, AiTool> enabledTools(SystemConfiguration config, boolean hasDataBase) {
+        Map<String, AiTool> all = enabledTools(config);
+        if (hasDataBase) {
+            return all;
+        }
+        Map<String, AiTool> filtered = new LinkedHashMap<>();
+        all.forEach((name, tool) -> {
+            if (DATA_BASE_FREE_TOOL_NAMES.contains(name)) {
+                filtered.put(name, tool);
+            }
+        });
+        log.info("No database bound, offer only database-free tools: {}", filtered.keySet());
+        return filtered;
+    }
+
+    /** 阶段 4b：按「是否绑定数据源」过滤后的 spec 列表。 */
+    public List<AiToolSpec> specs(SystemConfiguration config, boolean hasDataBase) {
+        List<AiToolSpec> specs = new java.util.ArrayList<>();
+        for (AiTool tool : enabledTools(config, hasDataBase).values()) {
+            specs.add(tool.spec());
+        }
+        return specs;
+    }
+
     public List<AiToolSpec> specs(SystemConfiguration config) {
         List<AiToolSpec> specs = new ArrayList<>();
         for (AiTool tool : enabledTools(config).values()) {

@@ -106,7 +106,10 @@ public class AiToolLoop {
         // 若不显式降级，工具链会静默失效（探针场景：本地 Ollama 等小模型）。
         List<AiToolSpec> specs = profile != null && !profile.isSupportsTools()
                 ? Collections.<AiToolSpec>emptyList()
-                : registry.specs(config);
+                // 阶段 4b 修复（UAT B4）：未绑定数据源时只下发不依赖数据源的工具。
+                // 否则模型会先试 list_tables（必然失败）而白白耗尽工具调用额度，
+                // 导致真正要做的 skill 写入排不上号、只能让用户手工粘贴。
+                : registry.specs(config, context != null && context.getDataBase() != null);
 
         if (specs.isEmpty()) {
             // 无工具可用：退化为普通一轮生成，行为与阶段 1a 完全一致
