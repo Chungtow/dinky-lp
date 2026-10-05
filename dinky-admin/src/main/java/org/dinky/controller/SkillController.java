@@ -126,8 +126,13 @@ public class SkillController {
     @GetMapping("/file/read")
     @ApiOperation("Read a File Inside a Skill")
     @ApiImplicitParam(name = "id", value = "Skill ID", required = true, dataType = "Long", paramType = "query")
-    public Result<String> readFile(@RequestParam Long id, @RequestParam(required = false) String relativePath) {
-        return Result.succeed(skillService.readFile(id, relativePath));
+    public Result<Object> readFile(@RequestParam Long id, @RequestParam(required = false) String relativePath) {
+        // ⚠️ 不能写成 Result.succeed(skillService.readFile(...))：readFile 返回 String 时，
+        // Java 重载决议会优先匹配 Result.succeed(String msg)，把正文塞进 msg 而 data 为 null
+        // （前端只读 data，表现为"文件内容显示为空"，且服务端无任何异常日志）。
+        // 先提升为 Object，强制走泛型重载 Result.succeed(T data)。
+        Object content = skillService.readFile(id, relativePath);
+        return Result.succeed(content);
     }
 
     @PostMapping("/file/write")

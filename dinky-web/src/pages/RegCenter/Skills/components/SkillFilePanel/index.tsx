@@ -53,6 +53,20 @@ const toTreeData = (nodes?: SkillFileNode[]): any[] =>
  * （资源页被 hideSkillsPrefix 挡住、Skills 页又没有文件树）。这里给出完整目录树 + 编辑 + 新建
  * 文件 / 目录 + 删除，**与 AI 工具共用同一组后端接口**（因此权限与路径校验规则完全一致）。
  */
+/** 在树里按 relativePath 找节点（用于判断选中的是文件还是目录） */
+const findNode = (nodes: SkillFileNode[] | undefined, relativePath: string): SkillFileNode | undefined => {
+  for (const node of nodes ?? []) {
+    if (node.relativePath === relativePath) {
+      return node;
+    }
+    const hit = findNode(node.children, relativePath);
+    if (hit) {
+      return hit;
+    }
+  }
+  return undefined;
+};
+
 const SkillFilePanel = ({ skillId, skillName, assetType, open, editable = true, onClose }: Props) => {
   const [tree, setTree] = useState<SkillFileNode[]>([]);
   const [selected, setSelected] = useState<string>('');
@@ -80,8 +94,27 @@ const SkillFilePanel = ({ skillId, skillName, assetType, open, editable = true, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, skillId]);
 
+  /** 新建时的基准目录：选中目录→该目录；选中文件→其父目录；未选→资产根 */
+  const baseDirOf = () => {
+    const node = selected ? findNode(tree, selected) : undefined;
+    if (!node) {
+      return '';
+    }
+    if (node.directory) {
+      return node.relativePath;
+    }
+    const idx = selected.lastIndexOf('/');
+    return idx > 0 ? selected.slice(0, idx) : '';
+  };
+
   const openFile = async (relativePath: string) => {
     if (!skillId || relativePath === selected) {
+      return;
+    }
+    // 目录不是文件：只切换选中态、保留当前内容。
+    // （此前对目录也去读文件，必然触发「Path is not a file」，表现为右侧内容变空）
+    if (findNode(tree, relativePath)?.directory) {
+      setSelected(relativePath);
       return;
     }
     if (dirty && !window.confirm(l('pages.skill.file.unsavedConfirm'))) {
@@ -102,26 +135,38 @@ const SkillFilePanel = ({ skillId, skillName, assetType, open, editable = true, 
     });
   };
 
+  /** 解析用户输入：以 / 开头视为相对资产根，否则拼到基准目录之后 */
+  const resolveInput = (input: string, base: string) =>
+    input.startsWith('/') ? input.slice(1) : base ? `${base}/${input}` : input;
+
   const handleNewFile = () => {
+    const base = baseDirOf();
     let value = '';
     Modal.confirm({
       title: l('pages.skill.file.newFile'),
       content: (
-        <Input
-          placeholder={'references/conventions.md'}
-          onChange={(e) => {
-            value = e.target.value;
-          }}
-        />
+        <div>
+          <div style={{ marginBottom: 6, fontSize: 12, color: 'rgba(0, 0, 0, 0.45)' }}>
+            {l('pages.skill.file.baseDir')}
+            {base ? `${base}/` : '/'}
+          </div>
+          <Input
+            placeholder={'example.md'}
+            onChange={(e) => {
+              value = e.target.value;
+            }}
+          />
+        </div>
       ),
       okText: l('button.confirm'),
       cancelText: l('button.cancel'),
       onOk: async () => {
-        const relativePath = value.trim();
-        if (!relativePath) {
+        const input = value.trim();
+        if (!input) {
           message.warning(l('pages.skill.file.pathRequired'));
           return Promise.reject();
         }
+        const relativePath = resolveInput(input, base);
         if (!/\.(md|txt|json|ya?ml)$/i.test(relativePath)) {
           message.error(l('pages.skill.file.extInvalid'));
           return Promise.reject();
@@ -132,26 +177,36 @@ const SkillFilePanel = ({ skillId, skillName, assetType, open, editable = true, 
   };
 
   const handleNewDir = () => {
+    const base = baseDirOf();
     let value = '';
     Modal.confirm({
       title: l('pages.skill.file.newDir'),
       content: (
-        <Input
-          placeholder={'references'}
-          onChange={(e) => {
-            value = e.target.value;
-          }}
-        />
+        <div>
+          <div style={{ marginBottom: 6, fontSize: 12, color: 'rgba(0, 0, 0, 0.45)' }}>
+            {l('pages.skill.file.baseDir')}
+            {base ? `${base}/` : '/'}
+          </div>
+          <Input
+            placeholder={'references'}
+            onChange={(e) => {
+              value = e.target.value;
+            }}
+          />
+        </div>
       ),
       okText: l('button.confirm'),
       cancelText: l('button.cancel'),
       onOk: async () => {
-        const relativePath = value.trim();
-        if (!relativePath) {
+        const input = value.trim();
+        if (!input) {
           message.warning(l('pages.skill.file.pathRequired'));
           return Promise.reject();
         }
-        await mkdirSkill({ skillId: skillId as number, relativePath }, () => load(selected));
+        await mkdirSkill(
+          { skillId: skillId as number, relativePath: resolveInput(input, base) },
+          () => load(selected),
+        );
       },
     });
   };

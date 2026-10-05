@@ -705,6 +705,7 @@ export default {
   'pages.skill.listTitle': 'Skills',
   'pages.skill.fileManage': 'Files',
   'pages.skill.file.title': 'File Management',
+  'pages.skill.file.baseDir': 'Base folder: ',
   'pages.skill.file.mainFile': 'main file',
   'pages.skill.file.newFile': 'New File',
   'pages.skill.file.newDir': 'New Folder',

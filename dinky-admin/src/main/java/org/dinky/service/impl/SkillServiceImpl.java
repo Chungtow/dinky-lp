@@ -225,9 +225,11 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
                 .eq(Resources::getFullName, skill.getDirFullName())
                 .last("limit 1"));
         if (dir != null) {
-            // 资源侧会递归删除子项（含 SKILL.md 与 references/）
+            // 资源侧会递归删除子项（含主文件与 references/）——但默认只删数据库记录
             resourcesService.remove(dir.getId());
         }
+        // 阶段 4b 修复：删除整个资产时同步清掉物理目录，否则 HDFS 上会残留（与单个文件删除同因）
+        removePhysical(skill, skill.getDirFullName());
         removeById(id);
         log.info("Skill removed: name={}, dir={}", skill.getName(), skill.getDirFullName());
     }
@@ -267,6 +269,11 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
         String fullName = StrUtil.isBlank(relative)
                 ? mainFilePath(skill)
                 : SkillPathGuard.resolve(skill.getDirFullName(), relative);
+        // 目录不是文件：明确拒绝，避免前端误选目录时抛出晦涩的「Path is not a file」
+        Resources resource = findResource(fullName);
+        if (resource != null && Boolean.TRUE.equals(resource.getIsDirectory())) {
+            throw new BusException("该路径是目录，不能作为文件读取：" + relative);
+        }
         try {
             return BaseResourceManager.getInstance().getFileContent(fullName);
         } catch (Exception e) {
@@ -365,8 +372,39 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
         if (resource == null) {
             throw new BusException("文件或目录不存在：" + relative);
         }
-        resourcesService.remove(resource.getId()); // 目录会递归删除子项
+        resourcesService.remove(resource.getId()); // 删数据库记录（目录会递归删除子项）
+        // 阶段 4b 修复：Dinky 的 remove 在 physicalDeletion=false（默认）时只删记录、保留物理文件；
+        // 但「删除 skill 文件」在语义上必须真删，否则 HDFS 上会永久残留。
+        removePhysical(skill, fullName);
         log.info("Skill file removed: name={}, relative={}", skill.getName(), relative);
+    }
+
+    /**
+     * 删除资产的<b>物理文件</b>（阶段 4b 修复：解决「UI 删了、HDFS 上还在」）。
+     *
+     * <p><b>为什么单独做</b>：{@code ResourcesService#remove} 受配置
+     * {@code sys.resource.settings.base.physicalDeletion} 控制，默认为 {@code false}——那是资源页的
+     * 既有设计（只删记录）。但 skill / doc 的文件删除是<b>显式的人工动作</b>（UI 二次确认、AI 侧还要
+     * 输入名称），语义上应该真删。
+     *
+     * <p><b>安全</b>：只允许删除<b>本资产根目录之下</b>的路径（含根目录自身）。调用方已用
+     * {@link SkillPathGuard} 校验过相对路径，这里再做一次断言——删除是不可逆操作，宁可多一道。
+     *
+     * <p>物理删除失败<b>不回滚</b>数据库删除（记录已移除），只记 error 便于运维清理——避免为了一个
+     * 残留文件把用户的删除操作整体回退。
+     */
+    private void removePhysical(Skill skill, String fullName) {
+        String base = SkillPathGuard.normalizeDir(skill.getDirFullName());
+        String target = SkillPathGuard.normalizeDir(fullName);
+        if (!target.equals(base) && !StrUtil.startWith(target, base + "/")) {
+            log.warn("Refuse to delete physical path outside asset dir: base={}, path={}", base, target);
+            return;
+        }
+        try {
+            BaseResourceManager.getInstance().remove(target);
+        } catch (Exception e) {
+            log.error("Remove physical skill file failed: path={}, msg={}", target, e.getMessage());
+        }
     }
 
     // ==================== 内部方法 ====================

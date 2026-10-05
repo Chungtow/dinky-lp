@@ -639,6 +639,7 @@ export default {
   'pages.skill.listTitle': 'Skills 管理',
   'pages.skill.fileManage': '文件',
   'pages.skill.file.title': '文件管理',
+  'pages.skill.file.baseDir': '基准目录：',
   'pages.skill.file.mainFile': '主文件',
   'pages.skill.file.newFile': '新建文件',
   'pages.skill.file.newDir': '新建目录',
