@@ -528,6 +528,30 @@ public class SystemConfiguration {
             .defaultValue(4000)
             .note(Status.SYS_LLM_SETTINGS_SKILLMAXCHARS_NOTE);
 
+    /**
+     * skill <b>只读</b>工具开关（阶段 4b）。
+     *
+     * <p>控制 {@code list_skills} / {@code read_skill} 是否下发给模型。<b>默认开启</b>——它们只读，
+     * 且必须同时满足 {@link #llmSkillEnable}（skill 功能总开关）才生效。
+     */
+    private final Configuration<Boolean> llmToolSkillEnable = key(Status.SYS_LLM_SETTINGS_TOOLSKILLENABLE)
+            .booleanType()
+            .defaultValue(true)
+            .note(Status.SYS_LLM_SETTINGS_TOOLSKILLENABLE_NOTE);
+
+    /**
+     * skill <b>写</b>工具开关（阶段 4b）。
+     *
+     * <p>控制 {@code create_skill} / {@code write_skill_file} / {@code delete_skill} 是否下发给模型。
+     *
+     * <p><b>默认关闭</b>：与 {@code toolExecSqlEnable}（执行类工具）保持同一保守口径——避免「升级即
+     * 获得写权限」。开启后每次写入仍<b>必须</b>经用户二次确认。
+     */
+    private final Configuration<Boolean> llmToolSkillWriteEnable = key(Status.SYS_LLM_SETTINGS_TOOLSKILLWRITEENABLE)
+            .booleanType()
+            .defaultValue(false)
+            .note(Status.SYS_LLM_SETTINGS_TOOLSKILLWRITEENABLE_NOTE);
+
     private final Configuration<Boolean> metricsSysEnable = key(Status.SYS_METRICS_SETTINGS_SYS_ENABLE)
             .booleanType()
             .defaultValue(false)
@@ -843,6 +867,20 @@ public class SystemConfiguration {
         return Asserts.isNull(llmSkillMaxChars.getValue())
                 ? llmSkillMaxChars.getDefaultValue()
                 : llmSkillMaxChars.getValue();
+    }
+
+    /** @return 是否向模型下发 skill <b>只读</b>工具（阶段 4b；需 {@link #isLlmSkillEnable()} 同时为真） */
+    public boolean isLlmToolSkillEnable() {
+        return Asserts.isNull(llmToolSkillEnable.getValue())
+                ? llmToolSkillEnable.getDefaultValue()
+                : llmToolSkillEnable.getValue();
+    }
+
+    /** @return 是否向模型下发 skill <b>写</b>工具（阶段 4b，默认关闭；每次写入仍需用户二次确认） */
+    public boolean isLlmToolSkillWriteEnable() {
+        return Asserts.isNull(llmToolSkillWriteEnable.getValue())
+                ? llmToolSkillWriteEnable.getDefaultValue()
+                : llmToolSkillWriteEnable.getValue();
     }
 
     /** @return 是否开放触碰业务数据行的 sample_rows 工具 */

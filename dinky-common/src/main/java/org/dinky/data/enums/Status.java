@@ -485,6 +485,12 @@ public enum Status {
     /** 阶段 4a：skill 注入预算（字符） */
     SYS_LLM_SETTINGS_SKILLMAXCHARS(276, "sys.llm.settings.skillMaxChars"),
     SYS_LLM_SETTINGS_SKILLMAXCHARS_NOTE(277, "sys.llm.settings.skillMaxChars.note"),
+    /** 阶段 4b：skill 只读工具开关（list_skills / read_skill） */
+    SYS_LLM_SETTINGS_TOOLSKILLENABLE(278, "sys.llm.settings.toolSkillEnable"),
+    SYS_LLM_SETTINGS_TOOLSKILLENABLE_NOTE(279, "sys.llm.settings.toolSkillEnable.note"),
+    /** 阶段 4b：skill 写工具开关（create_skill / write_skill_file / delete_skill） */
+    SYS_LLM_SETTINGS_TOOLSKILLWRITEENABLE(280, "sys.llm.settings.toolSkillWriteEnable"),
+    SYS_LLM_SETTINGS_TOOLSKILLWRITEENABLE_NOTE(281, "sys.llm.settings.toolSkillWriteEnable.note"),
     SYS_METRICS_SETTINGS_SYS_ENABLE(148, "sys.metrics.settings.sys.enable"),
     SYS_METRICS_SETTINGS_SYS_ENABLE_NOTE(149, "sys.metrics.settings.sys.enable.note"),
     SYS_METRICS_SETTINGS_SYS_GATHERTIMING(150, "sys.metrics.settings.sys.gatherTiming"),

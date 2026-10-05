@@ -286,7 +286,16 @@ const AiChat = (props: AiChatProps) => {
       return;
     }
     listSkills()
-      .then((items) => setSkillOptions(items))
+      .then((items) =>
+        // 阶段 4b：同一次查询同时返回 skill 与 doc（后端按 asset_type 区分），这里映射为候选的
+        // type，使 @skill- / @doc- 两个前缀都能命中同一批数据
+        setSkillOptions(
+          items.map((item: any) => ({
+            ...item,
+            type: item.assetType === 'doc' ? 'doc' : 'skill'
+          }))
+        )
+      )
       .catch(() => setSkillOptions([]));
   }, [config?.skillEnable]);
 
@@ -332,12 +341,19 @@ const AiChat = (props: AiChatProps) => {
     if (columnQuery) {
       return columnOptions;
     }
-    // provider 5（阶段 4a）：团队 Skill——输入 @skill- 时只给 skill 候选
-    if (mentionQuery.trim().toLowerCase().startsWith('skill-')) {
-      return skillOptions.map((item) => ({
-        ...item,
-        group: l('datastudio.aiChat.mention.groupSkill')
-      }));
+    // provider 5（阶段 4a 的 skill / 阶段 4b 扩展的 doc）：输入 @skill- / @doc- 时只给对应资产候选
+    const assetPrefix = mentionQuery.trim().toLowerCase().startsWith('doc-')
+      ? 'doc'
+      : mentionQuery.trim().toLowerCase().startsWith('skill-')
+        ? 'skill'
+        : '';
+    if (assetPrefix) {
+      return skillOptions
+        .filter((item) => item.type === assetPrefix)
+        .map((item) => ({
+          ...item,
+          group: l('datastudio.aiChat.mention.groupSkill')
+        }));
     }
     return list;
     // mentionOpen 作为依赖：每次打开浮层都重新读取最新的选中片段
@@ -347,11 +363,12 @@ const AiChat = (props: AiChatProps) => {
   /** 过滤 + 排序：最近用过 > 前缀匹配 > 其余 */
   const filteredMentions = useMemo(() => {
     const q = mentionQuery.trim().toLowerCase();
-    // 阶段 4a：@skill-<名> —— 前缀之后才是 skill 名，且此时只保留 skill 候选
-    if (q.startsWith('skill-')) {
-      const skillKey = q.slice('skill-'.length);
+    // 阶段 4a 的 @skill-<名> / 阶段 4b 的 @doc-<名> —— 前缀之后才是名称，且此时只保留对应类型候选
+    const assetPrefix = q.startsWith('doc-') ? 'doc' : q.startsWith('skill-') ? 'skill' : '';
+    if (assetPrefix) {
+      const assetKey = q.slice(assetPrefix.length + 1);
       return mentionCandidates
-        .filter((c) => c.type === 'skill' && c.name?.toLowerCase().includes(skillKey))
+        .filter((c) => c.type === assetPrefix && c.name?.toLowerCase().includes(assetKey))
         .slice(0, 20);
     }
     const matched = q
@@ -390,7 +407,9 @@ const AiChat = (props: AiChatProps) => {
                 ? `@${m.name}.${m.columnName}`
                 : m.type === 'skill'
                   ? `@skill-${m.name}`
-                  : `@${m.name}`;
+                  : m.type === 'doc'
+                    ? `@doc-${m.name}`
+                    : `@${m.name}`;
             return value.includes(token);
           })
         : prev
@@ -416,7 +435,9 @@ const AiChat = (props: AiChatProps) => {
         ? `@${item.name}.${item.columnName}`
         : item.type === 'skill'
           ? `@skill-${item.name}`
-          : `@${item.name}`;
+          : item.type === 'doc'
+            ? `@doc-${item.name}`
+            : `@${item.name}`;
     setInputValue(inputValue.replace(/@[^\s@]*$/, `${token} `));
     setMentions((prev) =>
       prev.some(

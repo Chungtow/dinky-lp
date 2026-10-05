@@ -1,3 +1,22 @@
+-- ============================================================================
+-- ⚠️  已废弃（DEPRECATED）——请勿用于新建数据库！
+-- ----------------------------------------------------------------------------
+-- 本文件是「上游版本的整库导出脚本」，导出时间早于本项目 AI Chat 迭代，
+-- 不包含 dinky_skill、dinky_ai_chat_log / dinky_ai_chat_tool / dinky_ai_chat_craft
+-- 等新表，也不包含 dinky_ai_chat_log.profile_id 等新增列。
+--
+-- 直接用它建库会同时导致两个问题：
+--   1) schema 非空但无 _dinky_flyway_schema_history → Flyway 触发
+--      baseline-on-migrate（baseline-version=20240506.1.0.2），跳过
+--      V20240506.1.0.2__baseline.sql 及其之前版本，导致缺失的初始表
+--      永远不会被创建；
+--   2) 表结构与代码预期漂移，后续增量迁移可能报错或静默不一致。
+--
+-- 正确做法：交给 Flyway 建表——只需创建一个「空库」（CREATE DATABASE），
+-- 应用启动时会自动执行 jar 内 db/migration/ 下的全部迁移。
+-- 详见 docs/deploy/dinky/Dinky二次开发及部署-lp-v1.4.0-dev.md §2.13
+-- ============================================================================
+
 /*
  *
  *  Licensed to the Apache Software Foundation (ASF) under one or more

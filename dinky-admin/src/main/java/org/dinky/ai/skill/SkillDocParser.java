@@ -52,11 +52,43 @@ public final class SkillDocParser {
     /** SKILL.md 单文件最大字节数 */
     public static final int MAX_DOC_SIZE = 256 * 1024;
 
+    /**
+     * 资产类型：skill（阶段 4a）——「人写的流程知识」，注入方式为**清单常驻 + 显式引用全文**。
+     *
+     * <p>注意：{@code dinky_skill} 表<b>同时承载 doc</b>（见 {@link #ASSET_TYPE_DOC}），
+     * 该表实际语义是「<b>知识资产元数据表</b>」，{@code asset_type} 用于区分。
+     */
+    public static final String ASSET_TYPE_SKILL = "skill";
+
+    /**
+     * 资产类型：doc（阶段 4b）——「业务背景知识」，与 skill **同构**（Markdown 散文、人写、
+     * 权限模型一致），故复用同一张表与同一套存储/权限/引用机制（总体计划 §4.9 决策 A3）。
+     *
+     * <p>它与语义层（Apache Ossie，强结构 JSON、需机器校验）<b>不同</b>——后者按 §4.9 A1 走独立上层。
+     */
+    public static final String ASSET_TYPE_DOC = "doc";
+
     /** skill 根目录名（资源存储中的固定前缀） */
     public static final String SKILLS_DIR = "skills";
 
+    /** doc 根目录名（与 {@code skills/} 并列，见总体计划 §4.8.3-④「目录不写死格式」） */
+    public static final String DOCS_DIR = "docs";
+
     /** skill 主文件名 */
     public static final String SKILL_MAIN_FILE = "SKILL.md";
+
+    /** doc 主文件名 */
+    public static final String DOC_MAIN_FILE = "DOC.md";
+
+    /** 按资产类型取根目录名 */
+    public static String rootDirOf(String assetType) {
+        return ASSET_TYPE_DOC.equals(assetType) ? DOCS_DIR : SKILLS_DIR;
+    }
+
+    /** 按资产类型取主文件名 */
+    public static String mainFileOf(String assetType) {
+        return ASSET_TYPE_DOC.equals(assetType) ? DOC_MAIN_FILE : SKILL_MAIN_FILE;
+    }
 
     private SkillDocParser() {}
 
@@ -113,16 +145,16 @@ public final class SkillDocParser {
      */
     public static void validate(SkillDoc doc, String dirName) {
         if (doc == null || StrUtil.isBlank(doc.getName())) {
-            throw new BusException("SKILL.md 缺少 frontmatter 的 name（合法 skill 必须含 SKILL.md，且声明 name 与 description）");
+            throw new BusException("主文件缺少 frontmatter 的 name（合法 skill / doc 必须含主文件，且声明 name 与 description）");
         }
         if (!NAME_PATTERN.matcher(doc.getName()).matches()) {
-            throw new BusException("skill 名不合法：" + doc.getName() + "（要求 ^[a-z0-9][a-z0-9-]{1,63}$）");
+            throw new BusException("名称不合法：" + doc.getName() + "（要求 ^[a-z0-9][a-z0-9-]{1,63}$）");
         }
         if (StrUtil.isNotBlank(dirName) && !doc.getName().equals(dirName)) {
-            throw new BusException("skill 名与目录名不一致：name=" + doc.getName() + "，dir=" + dirName);
+            throw new BusException("名称与目录名不一致：name=" + doc.getName() + "，dir=" + dirName);
         }
         if (StrUtil.isBlank(doc.getDescription())) {
-            throw new BusException("SKILL.md 缺少 frontmatter 的 description");
+            throw new BusException("主文件缺少 frontmatter 的 description");
         }
         if (doc.getDescription().length() > MAX_DESCRIPTION_LENGTH) {
             throw new BusException("description 过长（最多 " + MAX_DESCRIPTION_LENGTH + " 字符）");
@@ -133,7 +165,20 @@ public final class SkillDocParser {
     public static String buildTemplate(String name, String description) {
         String safeDescription = StrUtil.replace(StrUtil.nullToEmpty(description), "\n", " ");
         return DELIMITER + "\nname: " + name + "\ndescription: " + safeDescription + "\n" + DELIMITER + "\n\n# " + name
-                + "\n\n（在此填写该 skill 的规范 / SOP / 业务流程说明；可另建 references/ 目录放补充文档）\n";
+                + "\n\n（在此填写该 skill 的规范 / SOP / 业务流程说明；可点「文件」按钮新建 references/ 目录放补充文档）\n";
+    }
+
+    /**
+     * 新建 doc 时生成的 {@code DOC.md} 模板（阶段 4b）。
+     *
+     * <p>doc 与 skill 只差「定位」：skill 讲<b>怎么做</b>（流程 / SOP），doc 讲<b>是什么</b>
+     * （业务背景、口径由来、历史上的坑）。模板据此给出不同提示，避免两者写混。
+     */
+    public static String buildDocTemplate(String name, String description) {
+        String safeDescription = StrUtil.replace(StrUtil.nullToEmpty(description), "\n", " ");
+        return DELIMITER + "\nname: " + name + "\ndescription: " + safeDescription + "\n" + DELIMITER + "\n\n# " + name
+                + "\n\n（在此填写业务背景知识：指标口径及其由来、字段含义、历史上的坑等；"
+                + "可点「文件」按钮新建 references/ 目录放补充材料）\n";
     }
 
     private static String unquote(String value) {

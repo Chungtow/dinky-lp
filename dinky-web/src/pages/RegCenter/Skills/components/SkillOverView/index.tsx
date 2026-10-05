@@ -22,6 +22,7 @@ import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { Button, Card, Form, Input, Modal, Popconfirm, Space, Table, Tag } from 'antd';
 import { useEffect, useState } from 'react';
 import { createSkill, detailSkill, listSkills, removeSkill, saveSkill } from '../../service';
+import SkillFilePanel from '../SkillFilePanel';
 import type { SkillInfo } from '@/types/RegCenter/skill';
 
 const SkillOverView = () => {
@@ -31,6 +32,8 @@ const SkillOverView = () => {
   const [createForm] = Form.useForm();
   const [editing, setEditing] = useState<{ id: number; name: string; content: string }>();
   const [saving, setSaving] = useState(false);
+  // 阶段 4b：文件面板（管理 skill 目录树与 references/ 子文件）
+  const [filePanel, setFilePanel] = useState<{ id: number; name: string; assetType?: string; editable: boolean }>();
 
   const load = async () => {
     setLoading(true);
@@ -54,6 +57,17 @@ const SkillOverView = () => {
       return;
     }
     setEditing({ id: row.id, name: row.name, content: detail?.content ?? '' });
+  };
+
+  /** 阶段 4b：打开文件面板（先取详情拿 editable——非属主只读查看） */
+  const openFiles = async (row: SkillInfo) => {
+    const detail = await detailSkill(row.id);
+    setFilePanel({
+      id: row.id,
+      name: row.name,
+      assetType: row.assetType,
+      editable: detail?.editable !== false
+    });
   };
 
   const handleSave = async () => {
@@ -97,11 +111,14 @@ const SkillOverView = () => {
     { title: l('pages.skill.updateTime'), dataIndex: 'updateTime', width: 170 },
     {
       title: l('pages.skill.action'),
-      width: 150,
+      width: 230,
       render: (_: any, row: SkillInfo) => (
         <Space>
           <Button size={'small'} onClick={() => openEdit(row)}>
             {l('pages.skill.viewOrEdit')}
+          </Button>
+          <Button size={'small'} type={'link'} onClick={() => openFiles(row)}>
+            {l('pages.skill.fileManage')}
           </Button>
           <Popconfirm
             title={l('pages.skill.removeConfirm')}
@@ -143,6 +160,16 @@ const SkillOverView = () => {
           pagination={{ pageSize: 10, showSizeChanger: false }}
         />
       </Card>
+
+      {/* 阶段 4b：文件面板（目录树 + references 子文件；与 AI 工具共用同一组后端接口） */}
+      <SkillFilePanel
+        skillId={filePanel?.id}
+        skillName={filePanel?.name}
+        assetType={filePanel?.assetType}
+        editable={filePanel?.editable}
+        open={!!filePanel}
+        onClose={() => setFilePanel(undefined)}
+      />
 
       <Modal
         open={createOpen}

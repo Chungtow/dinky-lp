@@ -19,7 +19,15 @@
 
 import { handleOption, handleRemoveById, queryDataByParams } from '@/services/BusinessCrud';
 import { API_CONSTANTS } from '@/services/endpoints';
-import { SkillCreateParams, SkillDetail, SkillInfo, SkillSaveParams } from '@/types/RegCenter/skill';
+import {
+  SkillCreateParams,
+  SkillDetail,
+  SkillFileNode,
+  SkillFileTargetParams,
+  SkillFileWriteParams,
+  SkillInfo,
+  SkillSaveParams
+} from '@/types/RegCenter/skill';
 import { l } from '@/utils/intl';
 
 /** 当前用户可见的 skill 列表 */
@@ -43,3 +51,29 @@ export const saveSkill = async (params: SkillSaveParams, cb?: () => void) =>
 /** 删除 skill（同时删除其资源目录与文件；前端需二次确认） */
 export const removeSkill = async (id: number, cb?: () => void) =>
   handleRemoveById(API_CONSTANTS.SKILL_REMOVE, id, cb);
+
+// ==================== 文件管理（阶段 4b：目录树与 references 子文件） ====================
+
+/** skill 内文件树（目录 + 文件；只含相对路径） */
+export const listSkillFiles = async (id: number): Promise<SkillFileNode[]> => {
+  const data = await queryDataByParams<SkillFileNode[]>(API_CONSTANTS.SKILL_FILES, { id });
+  return data ?? [];
+};
+
+/** 读取 skill 内某个文件（relativePath 留空表示读主文件 SKILL.md / DOC.md） */
+export const readSkillFile = async (id: number, relativePath?: string): Promise<string> => {
+  const data = await queryDataByParams<string>(API_CONSTANTS.SKILL_FILE_READ, { id, relativePath });
+  return data ?? '';
+};
+
+/** 写入 skill 内文件（新建或覆盖；父目录不存在会自动创建） */
+export const writeSkillFile = async (params: SkillFileWriteParams, cb?: () => void) =>
+  handleOption(API_CONSTANTS.SKILL_FILE_WRITE, l('pages.skill.file.write'), params, cb);
+
+/** 新建 skill 内目录（幂等） */
+export const mkdirSkill = async (params: SkillFileTargetParams, cb?: () => void) =>
+  handleOption(API_CONSTANTS.SKILL_FILE_MKDIR, l('pages.skill.file.mkdir'), params, cb);
+
+/** 删除 skill 内文件或目录（目录会被递归删除） */
+export const removeSkillFile = async (params: SkillFileTargetParams, cb?: () => void) =>
+  handleOption(API_CONSTANTS.SKILL_FILE_REMOVE, l('pages.skill.file.remove'), params, cb);

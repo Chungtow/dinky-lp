@@ -200,6 +200,11 @@ export enum API_CONSTANTS {
   SKILL_CREATE = '/api/skill/create',
   SKILL_SAVE = '/api/skill/save',
   SKILL_REMOVE = '/api/skill/remove',
+  SKILL_FILES = '/api/skill/files',
+  SKILL_FILE_READ = '/api/skill/file/read',
+  SKILL_FILE_WRITE = '/api/skill/file/write',
+  SKILL_FILE_MKDIR = '/api/skill/file/mkdir',
+  SKILL_FILE_REMOVE = '/api/skill/file/remove',
 
   // ------------------------------------ system log ------------------------------------
   SYSTEM_ROOT_LOG = '/api/system/getRootLog',

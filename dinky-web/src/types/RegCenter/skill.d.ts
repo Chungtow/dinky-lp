@@ -55,3 +55,31 @@ export type SkillSaveParams = {
   id: number;
   content: string;
 };
+
+/** skill 内文件树节点（阶段 4b；只含相对路径，前端不感知存储绝对路径） */
+export type SkillFileNode = {
+  name: string;
+  relativePath: string;
+  directory: boolean;
+  /** 是否为主文件（SKILL.md / DOC.md） */
+  mainFile?: boolean;
+  size?: number;
+  updateTime?: string;
+  children?: SkillFileNode[];
+};
+
+/** 写 skill 内文件入参 */
+export type SkillFileWriteParams = {
+  skillId: number;
+  relativePath: string;
+  content: string;
+};
+
+/** skill 内路径目标（新建目录 / 删除） */
+export type SkillFileTargetParams = {
+  skillId: number;
+  relativePath: string;
+};
+
+/** 资产类型（阶段 4b：skill = 流程知识；doc = 业务背景知识） */
+export type SkillAssetType = 'skill' | 'doc';

@@ -144,7 +144,7 @@ export type AiChatConfig = {
  * <p>type 预留 knowledge：后续「语料包」能力可直接复用本结构，前端无需改协议。
  */
 export type AiChatMentionItem = {
-  type: 'table' | 'job' | 'selection' | 'knowledge' | 'column' | 'skill';
+  type: 'table' | 'job' | 'selection' | 'knowledge' | 'column' | 'skill' | 'doc';
   schemaName?: string;
   name: string;
   /**
