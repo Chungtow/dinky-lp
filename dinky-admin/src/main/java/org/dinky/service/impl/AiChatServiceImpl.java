@@ -57,6 +57,7 @@ import org.dinky.data.model.TableRelations;
 import org.dinky.data.model.job.History;
 import org.dinky.data.model.job.JobInstance;
 import org.dinky.data.vo.AiChatConfig;
+import org.dinky.data.vo.SkillFileNode;
 import org.dinky.service.AiChatLogService;
 import org.dinky.service.AiChatService;
 import org.dinky.service.DataBaseService;
@@ -1180,6 +1181,11 @@ public class AiChatServiceImpl implements AiChatService {
             }
             int maxChars = SystemConfiguration.getInstances().getLlmSkillMaxChars();
             sb.append(rendererFor(skill.getAssetType()).render(doc, maxChars)).append("\n\n");
+            // 阶段 4b 修复（UAT B3）：附上该资产的【文件清单】。read_skill 是按路径读取的，
+            // 而模型无法枚举目录——不给清单它只能"猜"文件名（实测它猜了工具描述里的示例
+            // references/conventions.md，该文件其实不存在）。清单 token 成本极低，
+            // 却是「渐进披露 + 按需读取 references/」能真正落地的前提。
+            sb.append(buildAssetFileList(skill));
         } catch (Exception e) {
             log.warn("Append asset detail failed: name={}, msg={}", name, e.getMessage());
         }
@@ -1199,6 +1205,49 @@ public class AiChatServiceImpl implements AiChatService {
         }
         log.warn("No skill renderer for assetType={}, fallback to markdown renderer", type);
         return markdownSkillRenderer;
+    }
+
+    /**
+     * 构建资产的「文件清单」片段（阶段 4b 修复：解决模型无法枚举目录、只能瞎猜文件名的问题）。
+     *
+     * <p>只列相对路径、不列内容——真正的按需读取仍由 {@code read_skill} 工具完成，与既定的
+     * 「清单常驻 + 正文按需」渐进披露策略一致。任何异常都降级为返回空串，<b>不影响正文注入</b>。
+     */
+    private String buildAssetFileList(Skill skill) {
+        try {
+            List<SkillFileNode> files = skillService.listFiles(skill.getId());
+            if (CollUtil.isEmpty(files)) {
+                return "";
+            }
+            List<String> paths = new ArrayList<>();
+            collectFilePaths(files, paths);
+            if (paths.isEmpty()) {
+                return "";
+            }
+            StringBuilder sb = new StringBuilder();
+            sb.append("该资产包含以下文件（如需完整内容，可用 read_skill 按相对路径读取）：\n");
+            for (String path : paths) {
+                sb.append("- ").append(path).append("\n");
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            log.warn("Build asset file list failed: name={}, msg={}", skill.getName(), e.getMessage());
+            return "";
+        }
+    }
+
+    /** 递归收集文件相对路径（只列文件；目录本身不是可读目标） */
+    private void collectFilePaths(List<SkillFileNode> nodes, List<String> target) {
+        for (SkillFileNode node : nodes) {
+            if (node == null) {
+                continue;
+            }
+            if (node.isDirectory()) {
+                collectFilePaths(node.getChildren(), target);
+            } else {
+                target.add(node.getRelativePath());
+            }
+        }
     }
 
     /**

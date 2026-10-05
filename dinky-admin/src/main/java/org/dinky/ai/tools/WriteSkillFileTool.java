@@ -88,7 +88,8 @@ public class WriteSkillFileTool implements AiTool {
         properties.set("name", AiToolSpec.stringProperty("目标 skill / 知识文档名称（先用 list_skills 确认）"));
         properties.set(
                 "relativePath",
-                AiToolSpec.stringProperty("相对路径，如 references/conventions.md；" + "也允许写主文件 SKILL.md（会同步递增版本号）"));
+                AiToolSpec.stringProperty(
+                        "相对路径，如 references/checklist.md（父目录不存在会自动创建）；" + "也允许写主文件 SKILL.md（会同步递增版本号）"));
         properties.set("content", AiToolSpec.stringProperty("要写入的文本内容（UTF-8，仅支持 .md / .txt / .json / .yaml）"));
         return AiToolSpec.builder()
                 .name(NAME)

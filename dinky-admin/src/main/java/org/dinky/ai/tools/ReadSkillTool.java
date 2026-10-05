@@ -74,7 +74,8 @@ public class ReadSkillTool implements AiTool {
         properties.set("name", AiToolSpec.stringProperty("skill / 知识文档的名称；请先用 list_skills 确认准确名称"));
         properties.set(
                 "relativePath",
-                AiToolSpec.stringProperty("可选：要读的文件相对路径（如 references/conventions.md）；" + "留空则读主文件（SKILL.md / DOC.md）"));
+                AiToolSpec.stringProperty(
+                        "可选：要读的文件相对路径（应以正文后「该资产包含以下文件」清单中的路径为准，不要凭猜测填写）；" + "留空则读主文件（SKILL.md / DOC.md）"));
         return AiToolSpec.builder()
                 .name(NAME)
                 .description("读取某个 skill / 知识文档的正文（默认读主文件，也可读 references/ 下的补充文档）。"
