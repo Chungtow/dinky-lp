@@ -1116,7 +1116,9 @@ public class AiChatServiceImpl implements AiChatService {
                         .append(".")
                         .append(StrUtil.nullToEmpty(mention.getName()))
                         .append("\n");
-                appendTableDetail(sb, databaseId, tableSchema, mention.getName());
+                if (databaseId != null) {
+                    appendTableDetail(sb, databaseId, tableSchema, mention.getName());
+                }
             } else if (MentionType.COLUMN.equalsIgnoreCase(mention.getType())) {
                 // 阶段 2 前置：字段级引用——只给该字段的类型/注释，不给整表，省预算
                 String tableSchema = StrUtil.isNotBlank(mention.getSchemaName()) ? mention.getSchemaName() : schemaName;
@@ -1414,18 +1416,14 @@ public class AiChatServiceImpl implements AiChatService {
      * </ul>
      */
     private String buildSchemaContext(AiChatRequest request) {
-        if (request.getDatabaseId() == null) {
-            return "(未绑定数据源，无可用 schema 信息)";
-        }
         Integer databaseId = request.getDatabaseId();
         String schemaName = StrUtil.nullToEmpty(request.getSchemaName());
-        SystemConfiguration config = SystemConfiguration.getInstances();
-        // 阶段 1a：上下文预算改为可配置（原硬编码 24000 / 20000），可按模型窗口与
-        // 「准确率 / p95 延迟 / 成本」实测结果调档（见阶段 1 计划 §3.4.5）
-        int schemaMaxChars = config.getLlmSchemaMaxChars();
-        int columnBudgetChars = config.getLlmColumnBudgetChars();
         StringBuilder sb = new StringBuilder();
 
+        // 阶段 4b 修复（UAT B3）：@ 引用与 skill 清单【不依赖数据源】，必须放在下面"未绑定数据源"
+        // 的提前返回【之前】注入。否则用户在未选 schema 时提问（例如"这个 skill 有哪些参考信息"，
+        // 这类问题根本不需要数据源）会完全看不到引用内容与清单——该缺陷自 4a 起即存在，只是当时
+        // 多在已绑定数据源的取数场景下使用，未暴露。
         // 阶段 1a（1.4）：@ 显式引用优先级最高，先于表清单注入
         sb.append(buildMentionContext(request, databaseId, schemaName));
 
@@ -1433,6 +1431,17 @@ public class AiChatServiceImpl implements AiChatService {
         // 只给清单、不给正文——正文由 @skill-<名> 显式引用时才注入（见 appendAssetDetail）；
         // 内容受 llmSkillMaxChars 独立预算约束，且整体仍受末尾 schemaMaxChars 兜底。
         sb.append(buildSkillListContext());
+
+        if (databaseId == null) {
+            sb.append("(未绑定数据源，无可用 schema 信息)\n");
+            return sb.toString();
+        }
+
+        SystemConfiguration config = SystemConfiguration.getInstances();
+        // 阶段 1a：上下文预算改为可配置（原硬编码 24000 / 20000），可按模型窗口与
+        // 「准确率 / p95 延迟 / 成本」实测结果调档（见阶段 1 计划 §3.4.5）
+        int schemaMaxChars = config.getLlmSchemaMaxChars();
+        int columnBudgetChars = config.getLlmColumnBudgetChars();
 
         if (StrUtil.isNotBlank(request.getTableName())) {
             appendTableDetail(sb, databaseId, schemaName, request.getTableName());
