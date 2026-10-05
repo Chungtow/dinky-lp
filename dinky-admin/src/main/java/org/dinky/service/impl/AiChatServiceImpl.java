@@ -78,6 +78,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import javax.annotation.PostConstruct;
@@ -1098,8 +1100,48 @@ public class AiChatServiceImpl implements AiChatService {
      * <p>显式引用是<b>最高优先级</b>上下文：先于表清单注入，且<b>不参与</b>后续字段预算的裁剪判定。
      * 依据：中文问题配英文表名时自动召回基本失效（2026-09-26 UAT 实测），用户手动指定是唯一可靠兜底。
      */
-    private String buildMentionContext(AiChatRequest request, Integer databaseId, String schemaName) {
+    /** 手打引用兜底的匹配模式：{@code @skill-<名>} / {@code @doc-<名>}（名字规则同 SkillDocParser） */
+    private static final Pattern TEXT_MENTION_PATTERN =
+            Pattern.compile("@(skill|doc)-([a-z0-9][a-z0-9-]{1,63})", Pattern.CASE_INSENSITIVE);
+
+    /**
+     * 解析本次请求的 {@code @} 引用——<b>兼容「点选」与「手打」两种用法</b>（阶段 4b 修复）。
+     *
+     * <p><b>为什么必须兜底</b>：前端的 mentions 只在**从候选浮层点选**时才登记；用户**直接手打**
+     * {@code @skill-xxx}（很自然的用法）不会进入 mentions，后端便完全不知道有引用——表现为
+     * 「AI 看不到正文与 references 清单、只能靠工具去读主文件」，而且服务端**没有任何异常日志**
+     * （因为空集合直接 return ""）。这里从消息文本补提一次，让两条路行为一致。
+     *
+     * <p>只识别 {@code @skill-<名>} 与 {@code @doc-<名>}：{@code @表名} 旧语法前端一定会登记
+     * （否则无法确定所属 schema），不在此兜底，避免误判。
+     */
+    private List<AiChatMention> resolveMentions(AiChatRequest request) {
         List<AiChatMention> mentions = request.getMentions();
+        List<AiChatMention> result = mentions == null ? new ArrayList<>() : new ArrayList<>(mentions);
+        String message = StrUtil.nullToEmpty(request.getMessage());
+        if (StrUtil.isBlank(message)) {
+            return result;
+        }
+        Matcher matcher = TEXT_MENTION_PATTERN.matcher(message);
+        while (matcher.find()) {
+            String type = "doc".equalsIgnoreCase(matcher.group(1)) ? MentionType.DOC : MentionType.SKILL;
+            String name = matcher.group(2);
+            boolean exists = result.stream()
+                    .anyMatch(m -> type.equalsIgnoreCase(m.getType()) && name.equalsIgnoreCase(m.getName()));
+            if (exists) {
+                continue;
+            }
+            AiChatMention mention = new AiChatMention();
+            mention.setType(type);
+            mention.setName(name);
+            result.add(mention);
+            log.info("Mention recovered from message text: type={}, name={}", type, name);
+        }
+        return result;
+    }
+
+    private String buildMentionContext(AiChatRequest request, Integer databaseId, String schemaName) {
+        List<AiChatMention> mentions = resolveMentions(request);
         if (CollUtil.isEmpty(mentions)) {
             return "";
         }
