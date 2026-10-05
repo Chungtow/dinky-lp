@@ -31,6 +31,7 @@ import org.dinky.resource.BaseResourceManager;
 import org.dinky.service.resource.ResourcesService;
 import org.dinky.utils.URLUtils;
 
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -235,6 +236,40 @@ public class ResourceServiceImpl extends ServiceImpl<ResourcesMapper, Resources>
         DinkyAssert.checkNull(resources, Status.RESOURCE_DIR_OR_FILE_NOT_EXIST);
         Assert.isFalse(resources.getSize() > ALLOW_MAX_CAT_CONTENT_SIZE, () -> new BusException("file is too large!"));
         return URLUtils.toFile("rs://" + resources.getFullName());
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void writeContent(Integer id, String content) {
+        Resources resources = getById(id);
+        DinkyAssert.checkNull(resources, Status.RESOURCE_DIR_OR_FILE_NOT_EXIST);
+        Assert.isFalse(
+                Boolean.TRUE.equals(resources.getIsDirectory()),
+                () -> new BusException("cannot write content to a directory!"));
+
+        byte[] bytes = StrUtil.utf8Bytes(StrUtil.nullToEmpty(content));
+        Assert.isFalse(bytes.length > ALLOW_MAX_CAT_CONTENT_SIZE, () -> new BusException("file is too large!"));
+
+        // ① 写文件：复用可插拔存储后端（LOCAL / HDFS / OSS）
+        getBaseResourceManager().putFile(resources.getFullName(), new ByteArrayInputStream(bytes));
+
+        // ② 维护元数据：本文件 size 置为最新字节数；祖先目录按「增量」调整（与 upload 同口径）
+        long oldSize = resources.getSize() == null ? 0L : resources.getSize();
+        long newSize = bytes.length;
+        resources.setSize(newSize);
+        updateById(resources);
+        long delta = newSize - oldSize;
+        List<Resources> ancestors = getResourceByPidToParent(new ArrayList<>(), resources.getPid());
+        if (delta != 0L && CollUtil.isNotEmpty(ancestors)) {
+            ancestors.forEach(x -> x.setSize((x.getSize() == null ? 0L : x.getSize()) + delta));
+            updateBatchById(ancestors);
+        }
+
+        // ③ 失效缓存（自身 + 祖先链，TTL 30s）：否则页面在 30s 内会读到旧 size
+        RESOURCES_CACHE.remove(id);
+        if (CollUtil.isNotEmpty(ancestors)) {
+            ancestors.forEach(x -> RESOURCES_CACHE.remove(x.getId()));
+        }
     }
 
     @Transactional(rollbackFor = Exception.class)

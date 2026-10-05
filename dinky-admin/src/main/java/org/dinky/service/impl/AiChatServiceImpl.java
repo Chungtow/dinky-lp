@@ -34,6 +34,9 @@ import org.dinky.ai.PromptStore;
 import org.dinky.ai.SqlVerifier;
 import org.dinky.ai.TableSelector;
 import org.dinky.ai.TokenUsage;
+import org.dinky.ai.skill.MarkdownSkillRenderer;
+import org.dinky.ai.skill.SkillDoc;
+import org.dinky.ai.skill.SkillDocParser;
 import org.dinky.data.dto.AiChatConfirmRequest;
 import org.dinky.data.dto.AiChatMention;
 import org.dinky.data.dto.AiChatMessage;
@@ -43,6 +46,7 @@ import org.dinky.data.model.AiChatLog;
 import org.dinky.data.model.Column;
 import org.dinky.data.model.DataBase;
 import org.dinky.data.model.ForeignKey;
+import org.dinky.data.model.Skill;
 import org.dinky.data.model.SystemConfiguration;
 import org.dinky.data.model.Table;
 import org.dinky.data.model.TableRelations;
@@ -54,6 +58,7 @@ import org.dinky.service.AiChatService;
 import org.dinky.service.DataBaseService;
 import org.dinky.service.HistoryService;
 import org.dinky.service.JobInstanceService;
+import org.dinky.service.SkillService;
 import org.dinky.sse.SseEmitterUTF8;
 
 import java.time.LocalDateTime;
@@ -146,6 +151,12 @@ public class AiChatServiceImpl implements AiChatService {
     /** 阶段 3：LLM 实例（profile）解析器——请求级解析，缺省回落默认实例，绝不写全局单例 */
     private final LlmProfileResolver profileResolver;
 
+    /** 阶段 4a：skill 可见性查询与正文读取（清单注入 / {@code @skill-<名>} 引用） */
+    private final SkillService skillService;
+
+    /** 阶段 4a：skill 渲染器（Markdown；为未来语义层预留的分派点——新增 asset_type 时加实现即可） */
+    private final MarkdownSkillRenderer markdownSkillRenderer;
+
     private final ExecutorService chatExecutor = Executors.newCachedThreadPool();
 
     @Override
@@ -208,6 +219,7 @@ public class AiChatServiceImpl implements AiChatService {
                 .craftModeEnable(config.isLlmCraftModeEnable())
                 .defaultProfileId(LlmProfile.DEFAULT_ID)
                 .profiles(profiles)
+                .skillEnable(config.isLlmSkillEnable())
                 .build();
     }
 
@@ -953,6 +965,9 @@ public class AiChatServiceImpl implements AiChatService {
                         .append(column)
                         .append("\n");
                 appendColumnDetail(sb, databaseId, tableSchema, table, column);
+            } else if ("skill".equalsIgnoreCase(mention.getType())) {
+                // 阶段 4a：@skill-<名>——显式引用时注入该 skill 正文（可见性校验 + 渲染器 + 独立预算）
+                appendSkillDetail(sb, mention.getName());
             } else if (StrUtil.isNotBlank(mention.getContent())) {
                 // selection / job：片段正文（仅编辑器文本，不含业务数据行）
                 String content = mention.getContent().trim();
@@ -969,6 +984,70 @@ public class AiChatServiceImpl implements AiChatService {
         }
         sb.append("\n");
         return sb.toString();
+    }
+
+    /**
+     * 追加显式引用的 skill 正文（阶段 4a）。
+     *
+     * <p>三件事：① 按<b>可见性</b>取 skill（不可见 / 不存在则<b>不注入</b>，绝不放行越权读取）；
+     * ② 交给渲染器按 {@code llmSkillMaxChars} 预算渲染（渲染器负责截断与「注入边界声明」）；
+     * ③ 任何异常只记日志，<b>不阻断对话</b>。
+     */
+    private void appendSkillDetail(StringBuilder sb, String name) {
+        if (StrUtil.isBlank(name)) {
+            return;
+        }
+        try {
+            Skill skill = skillService.findVisibleByName(name);
+            if (skill == null) {
+                log.info("Skill mention ignored (not visible or not found): {}", name);
+                return;
+            }
+            String content = skillService.readContent(skill);
+            SkillDoc doc = SkillDocParser.parse(content);
+            if (doc == null) {
+                log.info("Skill mention ignored (invalid SKILL.md): {}", name);
+                return;
+            }
+            int maxChars = SystemConfiguration.getInstances().getLlmSkillMaxChars();
+            sb.append(markdownSkillRenderer.render(doc, maxChars)).append("\n\n");
+        } catch (Exception e) {
+            log.warn("Append skill detail failed: name={}, msg={}", name, e.getMessage());
+        }
+    }
+
+    /**
+     * 构建「当前用户可见 skill 清单」区块（阶段 4a）。
+     *
+     * <p><b>渐进披露</b>：清单只含 {@code name — description}（来自 {@code dinky_skill} 单表查询，
+     * <b>不读文件</b>）；正文只在 {@code @skill-<名>} 显式引用时注入（见 {@link #appendSkillDetail}）。
+     *
+     * <p>开关关闭 / 无可见 skill / 查询失败时返回空串——<b>任何情况都不阻断对话</b>。
+     */
+    private String buildSkillListContext() {
+        if (!SystemConfiguration.getInstances().isLlmSkillEnable()) {
+            return "";
+        }
+        try {
+            List<Skill> skills = skillService.listVisible();
+            if (CollUtil.isEmpty(skills)) {
+                return "";
+            }
+            StringBuilder sb = new StringBuilder();
+            sb.append("## 可用的团队 Skill（如与本次问题相关，可在输入框用 @skill-<名> 引用其完整内容）\n");
+            for (Skill skill : skills) {
+                sb.append("- ").append(skill.getName());
+                if (StrUtil.isNotBlank(skill.getDescription())) {
+                    sb.append(" — ").append(skill.getDescription());
+                }
+                sb.append("\n");
+            }
+            sb.append("\n");
+            return sb.toString();
+        } catch (Exception e) {
+            log.warn("Build skill list context failed: {}", e.getMessage());
+            return "";
+        }
     }
 
     /**
@@ -1115,6 +1194,11 @@ public class AiChatServiceImpl implements AiChatService {
 
         // 阶段 1a（1.4）：@ 显式引用优先级最高，先于表清单注入
         sb.append(buildMentionContext(request, databaseId, schemaName));
+
+        // 阶段 4a：注入「当前用户可见 skill 清单」（name + description，渐进披露）。
+        // 只给清单、不给正文——正文由 @skill-<名> 显式引用时才注入（见 appendSkillDetail）；
+        // 内容受 llmSkillMaxChars 独立预算约束，且整体仍受末尾 schemaMaxChars 兜底。
+        sb.append(buildSkillListContext());
 
         if (StrUtil.isNotBlank(request.getTableName())) {
             appendTableDetail(sb, databaseId, schemaName, request.getTableName());

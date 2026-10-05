@@ -194,6 +194,13 @@ export enum API_CONSTANTS {
   AI_CHAT_CONFIRM = '/api/aiChat/confirm',
   AI_CHAT_CANCEL = '/api/aiChat/cancel',
 
+  /** --------------------------------------------  skill（阶段 4a）  ------------------------------------------------------- */
+  SKILL_LIST = '/api/skill/list',
+  SKILL_DETAIL = '/api/skill/detail',
+  SKILL_CREATE = '/api/skill/create',
+  SKILL_SAVE = '/api/skill/save',
+  SKILL_REMOVE = '/api/skill/remove',
+
   // ------------------------------------ system log ------------------------------------
   SYSTEM_ROOT_LOG = '/api/system/getRootLog',
   SYSTEM_ROOT_LOG_LIST = '/api/system/listLogDir',

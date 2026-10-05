@@ -85,6 +85,18 @@ public interface ResourcesService extends IService<Resources> {
     String getContentByResourceId(Integer id);
 
     /**
+     * 写入文本内容到指定资源（阶段 4a：Skills 需要「编辑并保存」能力）。
+     *
+     * <p>只处理文本（UTF-8）：写入后同步该资源与其祖先目录的 size，并失效资源缓存。
+     *
+     * <p><b>职责边界</b>：本方法只校验「能否写资源」；「能否写某个 skill」由 Skill 服务判定（owner 校验后调用本方法）。
+     *
+     * @param id 资源 id（必须是文件，不能是目录）
+     * @param content 文本内容
+     */
+    void writeContent(Integer id, String content);
+
+    /**
      * Download files from explorer（从资源管理器下载文件）
      * @param id resource id
      * @return {@link File}

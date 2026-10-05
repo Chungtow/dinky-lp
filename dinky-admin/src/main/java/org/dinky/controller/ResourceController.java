@@ -119,6 +119,21 @@ public class ResourceController {
         return Result.data(resourcesService.getContentByResourceId(id));
     }
 
+    /**
+     * 写入资源文本内容（阶段 4a：Skills 的「编辑并保存」链路）。
+     *
+     * <p>⚠️ 本接口是<b>通用资源写能力</b>：权限只到「能否写资源」。skill 语义层（谁能改这个 skill）由
+     * {@code SkillController} 判定后调用，不要把 skill 语义塞进本接口。
+     */
+    @PostMapping("/writeContent")
+    @ApiOperation("Write Resource Text Content")
+    @Log(title = "Write Resource Content", businessType = BusinessType.UPDATE)
+    @SaCheckPermission(PermissionConstants.REGISTRATION_RESOURCE_UPLOAD)
+    public Result<Void> writeContent(@RequestBody ResourcesDTO resourcesDTO) {
+        resourcesService.writeContent(resourcesDTO.getId(), resourcesDTO.getContent());
+        return Result.succeed();
+    }
+
     @PostMapping("/uploadFile")
     @ApiOperation("Upload File")
     @ApiImplicitParams({

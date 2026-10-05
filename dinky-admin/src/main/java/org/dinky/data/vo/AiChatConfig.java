@@ -80,6 +80,14 @@ public class AiChatConfig {
     @ApiModelProperty(value = "可用 LLM 实例列表（不含密钥）")
     private List<AiChatProfile> profiles;
 
+    /**
+     * 是否开启 Skills 能力（阶段 4a）。
+     *
+     * <p>前端据此决定「输入框 {@code @} 候选里是否提供 skill」；关闭时行为与迭代前一致。
+     */
+    @ApiModelProperty(value = "是否开启 Skills 能力")
+    private Boolean skillEnable;
+
     /** 实例的前端视图（阶段 3）：<b>不含 apiKey</b>，仅暴露 {@link #hasApiKey} 布尔 */
     @Data
     @Builder

@@ -479,6 +479,12 @@ public enum Status {
     /** 阶段 3：多 LLM 实例（profile 列表，JSON 串） */
     SYS_LLM_SETTINGS_PROFILES(272, "sys.llm.settings.profiles"),
     SYS_LLM_SETTINGS_PROFILES_NOTE(273, "sys.llm.settings.profiles.note"),
+    /** 阶段 4a：Skills 能力开关 */
+    SYS_LLM_SETTINGS_SKILLENABLE(274, "sys.llm.settings.skillEnable"),
+    SYS_LLM_SETTINGS_SKILLENABLE_NOTE(275, "sys.llm.settings.skillEnable.note"),
+    /** 阶段 4a：skill 注入预算（字符） */
+    SYS_LLM_SETTINGS_SKILLMAXCHARS(276, "sys.llm.settings.skillMaxChars"),
+    SYS_LLM_SETTINGS_SKILLMAXCHARS_NOTE(277, "sys.llm.settings.skillMaxChars.note"),
     SYS_METRICS_SETTINGS_SYS_ENABLE(148, "sys.metrics.settings.sys.enable"),
     SYS_METRICS_SETTINGS_SYS_ENABLE_NOTE(149, "sys.metrics.settings.sys.enable.note"),
     SYS_METRICS_SETTINGS_SYS_GATHERTIMING(150, "sys.metrics.settings.sys.gatherTiming"),

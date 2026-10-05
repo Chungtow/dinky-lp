@@ -134,6 +134,8 @@ export type AiChatConfig = {
   defaultProfileId?: string;
   /** 可用的 LLM 实例列表（阶段 3，不含密钥） */
   profiles?: AiChatProfileItem[];
+  /** 是否开启 Skills 能力（阶段 4a）：决定输入框 @ 候选里是否提供 skill */
+  skillEnable?: boolean;
 };
 
 /**
@@ -142,7 +144,7 @@ export type AiChatConfig = {
  * <p>type 预留 knowledge：后续「语料包」能力可直接复用本结构，前端无需改协议。
  */
 export type AiChatMentionItem = {
-  type: 'table' | 'job' | 'selection' | 'knowledge' | 'column';
+  type: 'table' | 'job' | 'selection' | 'knowledge' | 'column' | 'skill';
   schemaName?: string;
   name: string;
   /**
@@ -259,6 +261,22 @@ export const reportCraftWrite = async (params: {
 export const getAiChatConfig = async (): Promise<AiChatConfig> => {
   const res = await getData(API_CONSTANTS.AI_CHAT_CONFIG);
   return (res?.data ?? {}) as AiChatConfig;
+};
+
+/**
+ * 拉取当前用户可见的 skill 列表（阶段 4a：{@code @skill-<名>} 的候选来源）。
+ *
+ * <p>仅在管理员开启 {@code sys.llm.settings.skillEnable} 时调用；description 只用于候选展示，
+ * 提交给后端时按 name 定位（正文由后端按可见性读取后注入）。
+ */
+export const listSkills = async (): Promise<AiChatMentionItem[]> => {
+  const res: any = await getData(API_CONSTANTS.SKILL_LIST);
+  const rows = res?.data ?? res ?? [];
+  return (rows as any[]).map((s) => ({
+    type: 'skill' as const,
+    name: s.name,
+    content: s.description
+  }));
 };
 
 /**
