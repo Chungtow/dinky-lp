@@ -32,16 +32,16 @@ package org.dinky.ai.mention;
  */
 public final class MentionType {
 
-    /** 表引用（{@code @table-<名>} 或旧写法 {@code @表名}） */
+    /** 表引用（{@code @table/<名>}（旧写法 {@code @table-<名>} 仍兼容）或最旧写法 {@code @表名}） */
     public static final String TABLE = "table";
 
     /** 字段引用（{@code @表.字段}，阶段 2a） */
     public static final String COLUMN = "column";
 
-    /** skill 引用（{@code @skill-<名>}，阶段 4a） */
+    /** skill 引用（{@code @skill/<名>}，阶段 4a） */
     public static final String SKILL = "skill";
 
-    /** 知识文档引用（{@code @doc-<名>}，阶段 4b；与 skill 共用存储与权限模型） */
+    /** 知识文档引用（{@code @doc/<名>}，阶段 4b；与 skill 共用存储与权限模型） */
     public static final String DOC = "doc";
 
     private MentionType() {}

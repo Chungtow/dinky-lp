@@ -162,7 +162,7 @@ public class AiChatServiceImpl implements AiChatService {
     /** 阶段 3：LLM 实例（profile）解析器——请求级解析，缺省回落默认实例，绝不写全局单例 */
     private final LlmProfileResolver profileResolver;
 
-    /** 阶段 4a：skill 可见性查询与正文读取（清单注入 / {@code @skill-<名>} 引用） */
+    /** 阶段 4a：skill 可见性查询与正文读取（清单注入 / {@code @skill/<名>} 引用） */
     private final SkillService skillService;
 
     /** 阶段 4a：Markdown 渲染器（默认实现；也是查不到 asset_type 实现时的回落目标） */
@@ -1139,11 +1139,17 @@ public class AiChatServiceImpl implements AiChatService {
     }
 
     /**
-     * 手打引用兜底的匹配模式：{@code @skill-<名>} / {@code @doc-<名>} / {@code @table-<表名>}。
+     * 手打引用兜底的匹配模式：{@code @skill/<名>} / {@code @doc/<名>} / {@code @table/<表名>}。
+     *
+     * <p><b>分隔符</b>：2026-10-06 起统一为<b>斜杠</b>——名字本身允许连字符（{@code dw-sql-review}），
+     * 用连字符分隔时 {@code @skill-dw-sql-review} 人与机器都要靠"第一个连字符"切分，可读性差；
+     * 斜杠则天然无歧义，且与 {@code /skills/<名>/SKILL.md} 的路径心智一致。
+     * 但<b>旧连字符写法继续兼容</b>（存量对话与肌肉记忆），故分隔符写成字符类 {@code [-/]}。
      *
      * <p>名字字符类要同时覆盖三类输入：skill / doc 名<b>允许连字符</b>（{@code ^[a-z0-9][a-z0-9-]{1,63}$}，
      * 如 {@code diny-meta-anly} / {@code lpdw-dict}）；表名常含下划线与大写（{@code dinky_task} /
-     * {@code ODS_ORDER}）。故用 {@code [A-Za-z0-9_-]}。
+     * {@code ODS_ORDER}）。故用 {@code [A-Za-z0-9_-]}；<b>不含点号</b>——否则句末
+     * {@code @skill/lpdw-dict。} 会把句号一起吞进名字。
      *
      * <p>⚠️ <b>踩过的坑</b>：曾把字符类写成 {@code [A-Za-z0-9_]}（漏了连字符），结果
      * {@code @doc-lpdw-dict} 被截成 {@code name=lpdw}，表现为"未找到可见的资产"；而当时用
@@ -1154,17 +1160,18 @@ public class AiChatServiceImpl implements AiChatService {
      * 无法确定所属 schema），见 {@link #resolveMentions}。
      */
     private static final Pattern TEXT_MENTION_PATTERN =
-            Pattern.compile("@(skill|doc|table)-([A-Za-z0-9_-]{1,64})", Pattern.CASE_INSENSITIVE);
+            Pattern.compile("@(skill|doc|table)[-/]([A-Za-z0-9_-]{1,64})", Pattern.CASE_INSENSITIVE);
 
     /**
      * 解析本次请求的 {@code @} 引用——<b>兼容「点选」与「手打」两种用法</b>（阶段 4b 修复）。
      *
      * <p><b>为什么必须兜底</b>：前端的 mentions 只在**从候选浮层点选**时才登记；用户**直接手打**
-     * {@code @skill-xxx}（很自然的用法）不会进入 mentions，后端便完全不知道有引用——表现为
+     * {@code @skill/xxx}（很自然的用法）不会进入 mentions，后端便完全不知道有引用——表现为
      * 「AI 看不到正文与 references 清单、只能靠工具去读主文件」，而且服务端**没有任何异常日志**
      * （因为空集合直接 return ""）。这里从消息文本补提一次，让两条路行为一致。
      *
-     * <p>只识别 {@code @skill-<名>} 与 {@code @doc-<名>}：{@code @表名} 旧语法前端一定会登记
+     * <p>只识别 {@code @skill/<名>} 与 {@code @doc/<名>}（含旧写法 {@code @skill/<名>}）：
+     * {@code @表名} 旧语法前端一定会登记
      * （否则无法确定所属 schema），不在此兜底，避免误判。
      */
     private List<AiChatMention> resolveMentions(AiChatRequest request) {
@@ -1230,7 +1237,7 @@ public class AiChatServiceImpl implements AiChatService {
                 appendColumnDetail(sb, databaseId, tableSchema, table, column);
             } else if (MentionType.SKILL.equalsIgnoreCase(mention.getType())
                     || MentionType.DOC.equalsIgnoreCase(mention.getType())) {
-                // 阶段 4a：@skill-<名>；阶段 4b：@doc-<名>（业务背景知识，与 skill 同构）。
+                // 阶段 4a：@skill/<名>；阶段 4b：@doc/<名>（业务背景知识，与 skill 同构）。
                 // 两者走同一条路径：可见性校验 → 按 asset_type 分派渲染器 → 独立预算渲染。
                 appendAssetDetail(sb, mention.getName());
             } else if (StrUtil.isNotBlank(mention.getContent())) {
@@ -1352,7 +1359,7 @@ public class AiChatServiceImpl implements AiChatService {
      * 构建「当前用户可见 skill 清单」区块（阶段 4a）。
      *
      * <p><b>渐进披露</b>：清单只含 {@code name — description}（来自 {@code dinky_skill} 单表查询，
-     * <b>不读文件</b>）；正文只在 {@code @skill-<名>} 显式引用时注入（见 {@link #appendAssetDetail}）。
+     * <b>不读文件</b>）；正文只在 {@code @skill/<名>} 显式引用时注入（见 {@link #appendAssetDetail}）。
      *
      * <p>开关关闭 / 无可见 skill / 查询失败时返回空串——<b>任何情况都不阻断对话</b>。
      */
@@ -1366,7 +1373,7 @@ public class AiChatServiceImpl implements AiChatService {
                 return "";
             }
             StringBuilder sb = new StringBuilder();
-            sb.append("## 可用的团队 Skill（如与本次问题相关，可在输入框用 @skill-<名> 引用其完整内容）\n");
+            sb.append("## 可用的团队 Skill（如与本次问题相关，可在输入框用 @skill/<名> 引用其完整内容）\n");
             for (Skill skill : skills) {
                 sb.append("- ").append(skill.getName());
                 if (StrUtil.isNotBlank(skill.getDescription())) {
@@ -1524,7 +1531,7 @@ public class AiChatServiceImpl implements AiChatService {
         sb.append(buildMentionContext(request, databaseId, schemaName));
 
         // 阶段 4a：注入「当前用户可见 skill 清单」（name + description，渐进披露）。
-        // 只给清单、不给正文——正文由 @skill-<名> 显式引用时才注入（见 appendAssetDetail）；
+        // 只给清单、不给正文——正文由 @skill/<名> 显式引用时才注入（见 appendAssetDetail）；
         // 内容受 llmSkillMaxChars 独立预算约束，且整体仍受末尾 schemaMaxChars 兜底。
         sb.append(buildSkillListContext());
 
@@ -1623,7 +1630,7 @@ public class AiChatServiceImpl implements AiChatService {
             StringBuilder target, Integer databaseId, String schemaName, String tableName, String columnName) {
         // 阶段 4b 修复（UAT R6）：未绑定数据源时直接跳过。
         // @表.字段 引用分支在无 databaseId 时仍会走到这里，而 listColumns 必须依赖数据源——
-        // 不拦会抛异常或做空查询，与「未绑定数据源时 @skill- / @doc- 正文仍照常注入」的既有行为
+        // 不拦会抛异常或做空查询，与「未绑定数据源时 @skill/ / @doc/ 正文仍照常注入」的既有行为
         // 不一致（同类保护见 buildSchemaContext 的提前返回与 resolveMentions）。
         if (databaseId == null || StrUtil.isBlank(columnName) || StrUtil.isBlank(tableName)) {
             return;

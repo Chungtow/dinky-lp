@@ -49,7 +49,7 @@ public interface SkillService extends ISuperService<Skill> {
      */
     Skill getVisibleById(Long id);
 
-    /** 按 name 取当前用户<b>可见</b>的 skill（{@code @skill-<name>} 引用时用）；不可见 / 不存在返回 null */
+    /** 按 name 取当前用户<b>可见</b>的 skill（{@code @skill/<name>} 引用时用）；不可见 / 不存在返回 null */
     Skill findVisibleByName(String name);
 
     /** 读取 skill 的 {@code SKILL.md} 正文（可见性校验后按路径直读资源存储） */

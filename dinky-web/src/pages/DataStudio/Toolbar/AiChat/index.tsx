@@ -211,7 +211,7 @@ const AiChat = (props: AiChatProps) => {
    */
   const [columnOptions, setColumnOptions] = useState<AiChatMentionItem[]>([]);
   const columnCacheRef = useRef<Map<string, AiChatMentionItem[]>>(new Map());
-  /** 阶段 4a：团队 Skill 候选（仅管理员开启 skillEnable 时拉取）——输入 {@code @skill-} 时展示 */
+  /** 阶段 4a：团队 Skill 候选（仅管理员开启 skillEnable 时拉取）——输入 {@code @skill/} 时展示 */
   const [skillOptions, setSkillOptions] = useState<AiChatMentionItem[]>([]);
   const [recentMentions, setRecentMentions] = useState<string[]>(() => {
     try {
@@ -294,7 +294,7 @@ const AiChat = (props: AiChatProps) => {
     listSkills()
       .then((items) =>
         // 阶段 4b：同一次查询同时返回 skill 与 doc（后端按 asset_type 区分），这里映射为候选的
-        // type，使 @skill- / @doc- 两个前缀都能命中同一批数据
+        // type，使 @skill/ / @doc/ 两个前缀都能命中同一批数据
         setSkillOptions(
           items.map((item: any) => ({
             ...item,
@@ -347,14 +347,17 @@ const AiChat = (props: AiChatProps) => {
     if (columnQuery) {
       return columnOptions;
     }
-    // provider 5（阶段 4a 的 skill / 阶段 4b 扩展的 doc）：输入 @skill- / @doc- 时只给对应资产候选
-    // 阶段 4b 补：@table-<表名> 与旧语法 @表名 等价，但显式前缀在「表名与 skill 名相同」时
-    // 可消除歧义。此处只影响候选过滤：输入 @table- 时只给表候选。
-    const assetPrefix = mentionQuery.trim().toLowerCase().startsWith('doc-')
+    // provider 5（阶段 4a 的 skill / 阶段 4b 扩展的 doc）：输入 @skill/ / @doc/ 时只给对应资产候选
+    // 阶段 4b 补：@table/<表名> 与旧语法 @表名 等价，但显式前缀在「表名与 skill 名相同」时
+    // 可消除歧义。此处只影响候选过滤：输入 @table/ 时只给表候选。
+    // 2026-10-06：分隔符由「连字符」统一为「斜杠」（名字本身允许连字符，@skill/dw-sql-review
+    // 比 @skill-dw-sql-review 更易切分）；但仍兼容旧写法 @skill- / @doc- / @table-。
+    const assetQuery = mentionQuery.trim().toLowerCase();
+    const assetPrefix = /^doc[-/]/.test(assetQuery)
       ? 'doc'
-      : mentionQuery.trim().toLowerCase().startsWith('skill-')
+      : /^skill[-/]/.test(assetQuery)
         ? 'skill'
-        : mentionQuery.trim().toLowerCase().startsWith('table-')
+        : /^table[-/]/.test(assetQuery)
           ? 'table'
           : '';
     if (assetPrefix) {
@@ -373,13 +376,13 @@ const AiChat = (props: AiChatProps) => {
   /** 过滤 + 排序：最近用过 > 前缀匹配 > 其余 */
   const filteredMentions = useMemo(() => {
     const q = mentionQuery.trim().toLowerCase();
-    // 阶段 4a 的 @skill-<名> / 4b 的 @doc-<名> / 4b 补充的 @table-<表名>——
-    // 前缀之后才是名称，此时只保留对应类型的候选
-    const assetPrefix = q.startsWith('doc-')
+    // 阶段 4a 的 @skill/<名> / 4b 的 @doc/<名> / 4b 补充的 @table/<表名>——
+    // 前缀之后才是名称，此时只保留对应类型的候选（旧分隔符「-」同样识别）
+    const assetPrefix = /^doc[-/]/.test(q)
       ? 'doc'
-      : q.startsWith('skill-')
+      : /^skill[-/]/.test(q)
         ? 'skill'
-        : q.startsWith('table-')
+        : /^table[-/]/.test(q)
           ? 'table'
           : '';
     if (assetPrefix) {
@@ -418,19 +421,27 @@ const AiChat = (props: AiChatProps) => {
       prev.length > 0
         ? prev.filter((m) => {
             // 字段引用的 token 是 @表名.字段名，只比对表名会误删同名表的其它字段引用；
-            // 阶段 4a：skill 的 token 是 @skill-<名>
+            // 阶段 4a：skill 的 token 是 @skill/<名>（2026-10-06 起），旧写法 @skill-<名> 仍视为引用
             const token =
               m.type === 'column'
                 ? `@${m.name}.${m.columnName}`
                 : m.type === 'skill'
-                  ? `@skill-${m.name}`
+                  ? `@skill/${m.name}`
                   : m.type === 'doc'
-                    ? `@doc-${m.name}`
+                    ? `@doc/${m.name}`
                     : `@${m.name}`;
-            // 阶段 4b 补：table 类型有两种合法 token——旧语法 `@表名` 与显式前缀 `@table-表名`，
-            // 任一仍存在于输入框即视为被引用（否则用 @table- 选中后会被这里误删）
+            // 阶段 4b 补：table 类型有三种合法 token——旧语法 `@表名` 与显式前缀 `@table-表名`
+            // / `@table/表名`，任一仍存在于输入框即视为被引用（否则用前缀选中后会被这里误删）
             if (m.type === 'table') {
-              return value.includes(`@${m.name}`) || value.includes(`@table-${m.name}`);
+              return (
+                value.includes(`@${m.name}`) ||
+                value.includes(`@table-${m.name}`) ||
+                value.includes(`@table/${m.name}`)
+              );
+            }
+            if (m.type === 'skill' || m.type === 'doc') {
+              const legacy = `@${m.type}-${m.name}`;
+              return value.includes(token) || value.includes(legacy);
             }
             return value.includes(token);
           })
@@ -452,18 +463,19 @@ const AiChat = (props: AiChatProps) => {
 
   /** 选中候选：把 {@code @query} 替换为 {@code @name}，并记录为已引用 */
   const pickMention = (item: AiChatMentionItem) => {
-    // 阶段 4b 补：以 @table- 前缀输入时生成 `@table-<表名>`；旧语法（直接 @ 选表）仍生成
+    // 阶段 4b 补：以 @table/ 前缀输入时生成 `@table/<表名>`；旧语法（直接 @ 选表）仍生成
     // `@<表名>`——保证 C2「与迭代前完全一致」这条兼容性红线不被破坏。
-    const viaTablePrefix = mentionQuery.trim().toLowerCase().startsWith('table-');
+    // 2026-10-06：分隔符统一为斜杠，选中后一律生成新语法；手打旧语法（连字符）后端仍解析。
+    const viaTablePrefix = /^table[-/]/.test(mentionQuery.trim().toLowerCase());
     const token =
       item.type === 'column'
         ? `@${item.name}.${item.columnName}`
         : item.type === 'skill'
-          ? `@skill-${item.name}`
+          ? `@skill/${item.name}`
           : item.type === 'doc'
-            ? `@doc-${item.name}`
+            ? `@doc/${item.name}`
             : item.type === 'table' && viaTablePrefix
-              ? `@table-${item.name}`
+              ? `@table/${item.name}`
               : `@${item.name}`;
     setInputValue(inputValue.replace(/@[^\s@]*$/, `${token} `));
     setMentions((prev) =>
@@ -496,10 +508,12 @@ const AiChat = (props: AiChatProps) => {
       const end: number = el.selectionEnd ?? 0;
       // 光标贴着 token（选中态除外）：向前找 @token 头，向后吸收残余，保证整块删除
       if (start === end && start > 0) {
-        const head = /@[A-Za-z0-9_.]+$/.exec(inputValue.slice(0, start));
+        // 2026-10-06：字符集补 `-` 与 `/`，否则 @skill/dw-sql-review 这种 token 只能删到分隔符为止，
+        // 退格会变成逐字符删（原子引用体验破损）
+        const head = /@[A-Za-z0-9_./-]+$/.exec(inputValue.slice(0, start));
         // 孤零零一个 @ 保持默认逐字符删除
         if (head && head[0].length > 1) {
-          const tail = /^[A-Za-z0-9_.]*/.exec(inputValue.slice(end))?.[0] ?? '';
+          const tail = /^[A-Za-z0-9_./-]*/.exec(inputValue.slice(end))?.[0] ?? '';
           const cut = start - head[0].length;
           const nextValue =
             inputValue.slice(0, cut) + inputValue.slice(end + tail.length);

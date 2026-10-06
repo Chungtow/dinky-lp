@@ -517,7 +517,7 @@ public class SystemConfiguration {
     /**
      * Skills 能力开关（阶段 4a）。
      *
-     * <p><b>默认关闭</b>：开启后 AI Chat 会注入「当前用户可见 skill 的清单」，并支持 {@code @skill-<名>}
+     * <p><b>默认关闭</b>：开启后 AI Chat 会注入「当前用户可见 skill 的清单」，并支持 {@code @skill/<名>}
      * 显式引用（引用时注入该 skill 正文）。关闭时既不注入清单、也不响应 skill 引用——行为与迭代前
      * 完全一致（等价功能级回滚开关）。
      */
@@ -866,7 +866,7 @@ public class SystemConfiguration {
     }
 
     /**
-     * @return 是否开启 Skills 能力（阶段 4a）：开启后注入「可见 skill 清单」并支持 {@code @skill-<名>}，默认关闭。
+     * @return 是否开启 Skills 能力（阶段 4a）：开启后注入「可见 skill 清单」并支持 {@code @skill/<名>}，默认关闭。
      */
     public boolean isLlmSkillEnable() {
         return Asserts.isNull(llmSkillEnable.getValue()) ? llmSkillEnable.getDefaultValue() : llmSkillEnable.getValue();

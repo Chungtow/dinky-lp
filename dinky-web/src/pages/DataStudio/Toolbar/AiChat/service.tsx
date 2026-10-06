@@ -284,7 +284,7 @@ export const getAiChatConfig = async (): Promise<AiChatConfig> => {
 };
 
 /**
- * 拉取当前用户可见的 skill 列表（阶段 4a：{@code @skill-<名>} 的候选来源）。
+ * 拉取当前用户可见的 skill 列表（阶段 4a：{@code @skill/<名>} 的候选来源）。
  *
  * <p>仅在管理员开启 {@code sys.llm.settings.skillEnable} 时调用；description 只用于候选展示，
  * 提交给后端时按 name 定位（正文由后端按可见性读取后注入）。
