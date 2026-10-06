@@ -361,12 +361,18 @@ const AiChat = (props: AiChatProps) => {
           ? 'table'
           : '';
     if (assetPrefix) {
-      return skillOptions
+      // ⚠️ 2026-10-06 修复（UAT 反馈）：候选来源不能一律取 skillOptions——
+      // skillOptions 只装 /api/skill/list 返回的 skill / doc 资产，**根本没有 table**，
+      // 所以 @table/ 恒为空（"输入 @table/ 不出任何表候选"）。
+      // 表候选来自 provider 1（当前 schema 的 tables），即上面的 list；skill / doc 才取 skillOptions。
+      const source = assetPrefix === 'table' ? list : skillOptions;
+      const group =
+        assetPrefix === 'table'
+          ? l('datastudio.aiChat.mention.groupTable')
+          : l('datastudio.aiChat.mention.groupSkill');
+      return source
         .filter((item) => item.type === assetPrefix)
-        .map((item) => ({
-          ...item,
-          group: l('datastudio.aiChat.mention.groupSkill')
-        }));
+        .map((item) => ({ ...item, group }));
     }
     return list;
     // mentionOpen 作为依赖：每次打开浮层都重新读取最新的选中片段
