@@ -1141,13 +1141,20 @@ public class AiChatServiceImpl implements AiChatService {
     /**
      * 手打引用兜底的匹配模式：{@code @skill-<名>} / {@code @doc-<名>} / {@code @table-<表名>}。
      *
-     * <p>名字字符类比 skill / doc 的命名规则（{@code ^[a-z0-9][a-z0-9-]{1,63}$}）更宽——表名常含
-     * 下划线与大写（{@code dinky_task} / {@code ODS_ORDER}），故统一用 {@code [A-Za-z0-9_]}。
-     * 有前缀约束在，放宽不会误匹配。旧语法 {@code @表名} 不在此兜底（必须由前端登记，否则无法
-     * 确定所属 schema），见 {@link #resolveMentions}。
+     * <p>名字字符类要同时覆盖三类输入：skill / doc 名<b>允许连字符</b>（{@code ^[a-z0-9][a-z0-9-]{1,63}$}，
+     * 如 {@code diny-meta-anly} / {@code lpdw-dict}）；表名常含下划线与大写（{@code dinky_task} /
+     * {@code ODS_ORDER}）。故用 {@code [A-Za-z0-9_-]}。
+     *
+     * <p>⚠️ <b>踩过的坑</b>：曾把字符类写成 {@code [A-Za-z0-9_]}（漏了连字符），结果
+     * {@code @doc-lpdw-dict} 被截成 {@code name=lpdw}，表现为"未找到可见的资产"；而当时用
+     * {@code @table-dinky_skill} 做验证，恰好只含下划线，**把这个 bug 掩盖了**。
+     * <b>结论：验证前缀解析时，必须同时用一个含连字符的名字和一个含下划线的名字。</b>
+     *
+     * <p>有前缀约束在，放宽不会误匹配。旧语法 {@code @表名} 不在此兜底（必须由前端登记，否则
+     * 无法确定所属 schema），见 {@link #resolveMentions}。
      */
     private static final Pattern TEXT_MENTION_PATTERN =
-            Pattern.compile("@(skill|doc|table)-([A-Za-z0-9_]{1,64})", Pattern.CASE_INSENSITIVE);
+            Pattern.compile("@(skill|doc|table)-([A-Za-z0-9_-]{1,64})", Pattern.CASE_INSENSITIVE);
 
     /**
      * 解析本次请求的 {@code @} 引用——<b>兼容「点选」与「手打」两种用法</b>（阶段 4b 修复）。
