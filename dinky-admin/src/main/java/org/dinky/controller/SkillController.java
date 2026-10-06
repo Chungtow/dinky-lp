@@ -22,11 +22,14 @@ package org.dinky.controller;
 import org.dinky.data.annotations.Log;
 import org.dinky.data.constant.PermissionConstants;
 import org.dinky.data.dto.SkillCreateDTO;
+import org.dinky.data.dto.SkillFileRemoveDTO;
+import org.dinky.data.dto.SkillFileWriteDTO;
 import org.dinky.data.dto.SkillSaveDTO;
 import org.dinky.data.enums.BusinessType;
 import org.dinky.data.model.Skill;
 import org.dinky.data.result.Result;
 import org.dinky.data.vo.SkillDetailVO;
+import org.dinky.data.vo.SkillFileNode;
 import org.dinky.service.SkillService;
 
 import java.util.List;
@@ -90,7 +93,12 @@ public class SkillController {
     @Log(title = "Create Skill", businessType = BusinessType.INSERT)
     @SaCheckPermission(PermissionConstants.REGISTRATION_RESOURCE_UPLOAD)
     public Result<Skill> create(@RequestBody SkillCreateDTO skillCreateDTO) {
-        return Result.succeed(skillService.create(skillCreateDTO.getName(), skillCreateDTO.getDescription()));
+        return Result.succeed(skillService.create(
+                skillCreateDTO.getName(),
+                skillCreateDTO.getDescription(),
+                // 阶段 4b 补（UAT R2）：assetType 为空按 skill 处理，兼容旧前端
+                skillCreateDTO.getAssetType(),
+                StpUtil.getLoginIdAsInt()));
     }
 
     @PostMapping("/save")
@@ -106,7 +114,59 @@ public class SkillController {
     @Log(title = "Remove Skill", businessType = BusinessType.DELETE)
     @SaCheckPermission(PermissionConstants.REGISTRATION_RESOURCE_DELETE)
     public Result<Void> remove(@RequestParam Long id) {
-        skillService.removeSkill(id);
+        skillService.removeSkill(id, StpUtil.getLoginIdAsInt());
+        return Result.succeed();
+    }
+
+    // ==================== 文件管理（阶段 4b：目录树 / references 子文件；人与 AI 共用同一组 Service） ====================
+
+    @GetMapping("/files")
+    @ApiOperation("List Files Inside a Skill")
+    @ApiImplicitParam(name = "id", value = "Skill ID", required = true, dataType = "Long", paramType = "query")
+    public Result<List<SkillFileNode>> files(@RequestParam Long id) {
+        return Result.succeed(skillService.listFiles(id));
+    }
+
+    @GetMapping("/file/read")
+    @ApiOperation("Read a File Inside a Skill")
+    @ApiImplicitParam(name = "id", value = "Skill ID", required = true, dataType = "Long", paramType = "query")
+    public Result<Object> readFile(@RequestParam Long id, @RequestParam(required = false) String relativePath) {
+        // ⚠️ 不能写成 Result.succeed(skillService.readFile(...))：readFile 返回 String 时，
+        // Java 重载决议会优先匹配 Result.succeed(String msg)，把正文塞进 msg 而 data 为 null
+        // （前端只读 data，表现为"文件内容显示为空"，且服务端无任何异常日志）。
+        // 先提升为 Object，强制走泛型重载 Result.succeed(T data)。
+        Object content = skillService.readFile(id, relativePath);
+        return Result.succeed(content);
+    }
+
+    @PostMapping("/file/write")
+    @ApiOperation("Write a File Inside a Skill")
+    @Log(title = "Write Skill File", businessType = BusinessType.UPDATE)
+    @SaCheckPermission(PermissionConstants.REGISTRATION_RESOURCE_UPLOAD)
+    public Result<SkillFileNode> writeFile(@RequestBody SkillFileWriteDTO skillFileWriteDTO) {
+        return Result.succeed(skillService.writeFile(
+                skillFileWriteDTO.getSkillId(),
+                skillFileWriteDTO.getRelativePath(),
+                skillFileWriteDTO.getContent(),
+                StpUtil.getLoginIdAsInt()));
+    }
+
+    @PostMapping("/file/mkdir")
+    @ApiOperation("Create a Directory Inside a Skill")
+    @Log(title = "Create Skill Directory", businessType = BusinessType.INSERT)
+    @SaCheckPermission(PermissionConstants.REGISTRATION_RESOURCE_UPLOAD)
+    public Result<SkillFileNode> mkdir(@RequestBody SkillFileRemoveDTO skillFileRemoveDTO) {
+        return Result.succeed(skillService.mkdir(
+                skillFileRemoveDTO.getSkillId(), skillFileRemoveDTO.getRelativePath(), StpUtil.getLoginIdAsInt()));
+    }
+
+    @PostMapping("/file/remove")
+    @ApiOperation("Remove a File or Directory Inside a Skill")
+    @Log(title = "Remove Skill File", businessType = BusinessType.DELETE)
+    @SaCheckPermission(PermissionConstants.REGISTRATION_RESOURCE_DELETE)
+    public Result<Void> removeFile(@RequestBody SkillFileRemoveDTO skillFileRemoveDTO) {
+        skillService.removeFile(
+                skillFileRemoveDTO.getSkillId(), skillFileRemoveDTO.getRelativePath(), StpUtil.getLoginIdAsInt());
         return Result.succeed();
     }
 }

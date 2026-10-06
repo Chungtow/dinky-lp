@@ -58,6 +58,19 @@ public class AiChatRunRegistry {
         /** 是否已被请求取消（volatile，供循环线程读取） */
         private volatile boolean cancelled = false;
 
+        /**
+         * 阶段 4b：<b>强化确认</b>时用户手动输入的名称（删除 skill / doc 等破坏性操作用）。
+         *
+         * <p>由 {@link #setConfirmTypedName} 在投递结果<b>之前</b>写入；写操作侧在拿到「确认」后
+         * 再做一次比对，不匹配即视为拒绝——因此即使绕开前端 UI 直接调接口，也过不了这道闸。
+         */
+        private volatile String confirmTypedName;
+
+        /** 阶段 4b：记录用户手输的名称（仅供强化确认比对，不参与其他判定） */
+        void setConfirmTypedName(String confirmTypedName) {
+            this.confirmTypedName = confirmTypedName;
+        }
+
         RunContext(Integer userId) {
             this.userId = userId;
         }
@@ -139,10 +152,23 @@ public class AiChatRunRegistry {
      * @return 是否成功投递（false：runId 不存在、用户不匹配、或已投递过）
      */
     public boolean submitConfirm(String runId, Integer userId, boolean approve) {
+        return submitConfirm(runId, userId, approve, null);
+    }
+
+    /**
+     * 阶段 4b：携带「用户手输名称」的确认投递（删除类破坏性操作的强化确认）。
+     *
+     * <p>名称在投递结果<b>之前</b>写入 {@link RunContext}，等待侧拿到结果后可比对——
+     * 顺序很重要：先写名称再投递，否则等待线程可能先被唤醒而读不到名称。
+     *
+     * @param confirmName 用户手输的目标名称；非强化确认场景传 {@code null}
+     */
+    public boolean submitConfirm(String runId, Integer userId, boolean approve, String confirmName) {
         RunContext context = get(runId);
         if (context == null || !Objects.equals(context.getUserId(), userId)) {
             return false;
         }
+        context.setConfirmTypedName(confirmName);
         boolean accepted = context.offer(approve);
         if (!accepted) {
             log.debug("Duplicate confirm ignored, runId: {}", runId);

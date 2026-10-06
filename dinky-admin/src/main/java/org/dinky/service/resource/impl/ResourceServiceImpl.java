@@ -99,6 +99,7 @@ public class ResourceServiceImpl extends ServiceImpl<ResourcesMapper, Resources>
 
     @Override
     public TreeNodeDTO createFolder(Integer pid, String fileName, String desc) {
+        checkResourceName(fileName);
         long count = count(
                 new LambdaQueryWrapper<Resources>().eq(Resources::getPid, pid).eq(Resources::getFileName, fileName));
         if (count > 0) {
@@ -119,6 +120,7 @@ public class ResourceServiceImpl extends ServiceImpl<ResourcesMapper, Resources>
 
     @Override
     public TreeNodeDTO createFolderOrGet(Integer pid, String fileName, String desc) {
+        checkResourceName(fileName);
         String path = "/" + fileName;
         Resources resources;
         long count = count(
@@ -139,6 +141,35 @@ public class ResourceServiceImpl extends ServiceImpl<ResourcesMapper, Resources>
             save(resources);
         }
         return convertTree(resources);
+    }
+
+    /**
+     * 校验用户输入的「资源名」（<b>防目录穿越</b>）。
+     *
+     * <p>4b 之前这里<b>没有任何校验</b>：{@code fullName} 由「父目录 fullName + "/" + fileName」直接拼接，
+     * 传入 {@code ..} 即可让新目录落在父目录之外（本方法是当时唯一接收用户自由文本当路径名的入口）。
+     * 资源名允许中文 / 空格（用户上传的文件名很随意），但<b>不允许</b>路径分隔符、
+     * {@code .} / {@code ..}、控制字符。
+     */
+    private static void checkResourceName(String fileName) {
+        if (fileName == null || fileName.trim().isEmpty()) {
+            throw new BusException("资源名不能为空");
+        }
+        if (fileName.length() > 255) {
+            throw new BusException("资源名过长（最多 255 字符）");
+        }
+        if (fileName.indexOf('/') >= 0 || fileName.indexOf('\\') >= 0) {
+            throw new BusException("资源名不能包含路径分隔符：" + fileName);
+        }
+        if (".".equals(fileName) || "..".equals(fileName)) {
+            throw new BusException("资源名不合法：" + fileName);
+        }
+        for (int i = 0; i < fileName.length(); i++) {
+            char c = fileName.charAt(i);
+            if (c < 0x20 || c == 0x7F) {
+                throw new BusException("资源名不能包含控制字符");
+            }
+        }
     }
 
     @Override

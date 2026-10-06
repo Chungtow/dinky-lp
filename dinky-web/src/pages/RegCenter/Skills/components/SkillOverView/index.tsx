@@ -22,15 +22,23 @@ import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { Button, Card, Form, Input, Modal, Popconfirm, Space, Table, Tag } from 'antd';
 import { useEffect, useState } from 'react';
 import { createSkill, detailSkill, listSkills, removeSkill, saveSkill } from '../../service';
+import SkillFilePanel from '../SkillFilePanel';
 import type { SkillInfo } from '@/types/RegCenter/skill';
 
 const SkillOverView = () => {
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<SkillInfo[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
+  /**
+   * 阶段 4b 补（UAT R2）：本次新建弹窗的目标资产类型。
+   * skill 与 doc 共用同一套后端能力与表单，只在入口按钮上区分（doc 落在 docs/<name>/DOC.md）。
+   */
+  const [createAssetType, setCreateAssetType] = useState<'skill' | 'doc'>('skill');
   const [createForm] = Form.useForm();
   const [editing, setEditing] = useState<{ id: number; name: string; content: string }>();
   const [saving, setSaving] = useState(false);
+  // 阶段 4b：文件面板（管理 skill 目录树与 references/ 子文件）
+  const [filePanel, setFilePanel] = useState<{ id: number; name: string; assetType?: string; editable: boolean }>();
 
   const load = async () => {
     setLoading(true);
@@ -56,6 +64,17 @@ const SkillOverView = () => {
     setEditing({ id: row.id, name: row.name, content: detail?.content ?? '' });
   };
 
+  /** 阶段 4b：打开文件面板（先取详情拿 editable——非属主只读查看） */
+  const openFiles = async (row: SkillInfo) => {
+    const detail = await detailSkill(row.id);
+    setFilePanel({
+      id: row.id,
+      name: row.name,
+      assetType: row.assetType,
+      editable: detail?.editable !== false
+    });
+  };
+
   const handleSave = async () => {
     if (!editing) {
       return;
@@ -73,7 +92,7 @@ const SkillOverView = () => {
 
   const handleCreate = async () => {
     const values = await createForm.validateFields();
-    await createSkill(values, () => {
+    await createSkill({ ...values, assetType: createAssetType }, () => {
       setCreateOpen(false);
       createForm.resetFields();
     });
@@ -82,6 +101,17 @@ const SkillOverView = () => {
 
   const columns = [
     { title: l('pages.skill.name'), dataIndex: 'name', width: 200 },
+    {
+      // 阶段 4b 补（UAT R2）：同表承载 skill 与知识文档，列表上明确区分
+      title: l('pages.skill.assetType'),
+      dataIndex: 'assetType',
+      width: 100,
+      render: (value: string) => (
+        <Tag color={value === 'doc' ? 'purple' : 'green'}>
+          {value === 'doc' ? l('pages.skill.typeDoc') : l('pages.skill.typeSkill')}
+        </Tag>
+      )
+    },
     { title: l('pages.skill.description'), dataIndex: 'description', ellipsis: true },
     {
       title: l('pages.skill.visibility'),
@@ -97,11 +127,14 @@ const SkillOverView = () => {
     { title: l('pages.skill.updateTime'), dataIndex: 'updateTime', width: 170 },
     {
       title: l('pages.skill.action'),
-      width: 150,
+      width: 230,
       render: (_: any, row: SkillInfo) => (
         <Space>
           <Button size={'small'} onClick={() => openEdit(row)}>
             {l('pages.skill.viewOrEdit')}
+          </Button>
+          <Button size={'small'} type={'link'} onClick={() => openFiles(row)}>
+            {l('pages.skill.fileManage')}
           </Button>
           <Popconfirm
             title={l('pages.skill.removeConfirm')}
@@ -127,7 +160,23 @@ const SkillOverView = () => {
             <Button icon={<ReloadOutlined />} onClick={load}>
               {l('button.refresh')}
             </Button>
-            <Button type={'primary'} icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+            <Button
+              icon={<PlusOutlined />}
+              onClick={() => {
+                setCreateAssetType('doc');
+                setCreateOpen(true);
+              }}
+            >
+              {l('pages.skill.createDoc')}
+            </Button>
+            <Button
+              type={'primary'}
+              icon={<PlusOutlined />}
+              onClick={() => {
+                setCreateAssetType('skill');
+                setCreateOpen(true);
+              }}
+            >
               {l('button.create')}
             </Button>
           </Space>
@@ -144,9 +193,19 @@ const SkillOverView = () => {
         />
       </Card>
 
+      {/* 阶段 4b：文件面板（目录树 + references 子文件；与 AI 工具共用同一组后端接口） */}
+      <SkillFilePanel
+        skillId={filePanel?.id}
+        skillName={filePanel?.name}
+        assetType={filePanel?.assetType}
+        editable={filePanel?.editable}
+        open={!!filePanel}
+        onClose={() => setFilePanel(undefined)}
+      />
+
       <Modal
         open={createOpen}
-        title={l('pages.skill.createTitle')}
+        title={createAssetType === 'doc' ? l('pages.skill.createDocTitle') : l('pages.skill.createTitle')}
         okText={l('button.create')}
         cancelText={l('button.cancel')}
         onCancel={() => setCreateOpen(false)}

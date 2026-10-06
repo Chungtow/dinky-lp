@@ -26,34 +26,24 @@ import io.swagger.annotations.ApiModelProperty;
 import lombok.Getter;
 import lombok.Setter;
 
-/** 新建 Skill 入参（阶段 4a） */
+/** 写 skill 内文件入参（阶段 4b）。路径由 {@code org.dinky.ai.skill.SkillPathGuard} 统一校验。 */
 @Getter
 @Setter
-@ApiModel(value = "SkillCreateDTO", description = "Create a skill")
-public class SkillCreateDTO implements Serializable {
+@ApiModel(value = "SkillFileWriteDTO", description = "Write a file inside a skill directory")
+public class SkillFileWriteDTO implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
-    @ApiModelProperty(
-            value = "Name",
-            dataType = "String",
-            example = "dw-sql-review",
-            notes = "skill 名：^[a-z0-9][a-z0-9-]{1,63}$（将作为目录名，必须与 SKILL.md frontmatter 一致）")
-    private String name;
+    @ApiModelProperty(value = "Skill ID", dataType = "Long", example = "1")
+    private Long skillId;
 
     @ApiModelProperty(
-            value = "Description",
+            value = "Relative Path",
             dataType = "String",
-            example = "数仓 SQL 评审批量规范",
-            notes = "一句话说明（会随清单注入模型，用于 @ 候选）")
-    private String description;
+            example = "references/conventions.md",
+            notes = "相对 skill 根目录的路径；不允许绝对路径与 .. 片段")
+    private String relativePath;
 
-    @ApiModelProperty(
-            value = "AssetType",
-            dataType = "String",
-            example = "skill",
-            notes = "阶段 4b 补：资产类型——skill（默认）或 doc（业务背景知识文档）。"
-                    + "二者共用 dinky_skill 表与同一套可见性 / 权限模型，仅目录（skills/ 与 docs/）"
-                    + "和主文件名（SKILL.md 与 DOC.md）不同")
-    private String assetType;
+    @ApiModelProperty(value = "Content", dataType = "String", notes = "文本内容（UTF-8）")
+    private String content;
 }

@@ -19,8 +19,11 @@
 
 package org.dinky.ai;
 
+import org.dinky.ai.skill.SkillBrief;
 import org.dinky.data.model.DataBase;
 
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import lombok.Getter;
@@ -54,6 +57,17 @@ public class AiToolContext {
     private Integer userId;
 
     private Integer tenantId;
+
+    /**
+     * 阶段 4b：当前对话<b>可见的 skill / doc 快照</b>（由请求线程预解析后注入）。
+     *
+     * <p><b>为什么不是 id 而是快照</b>：工具循环跑在异步线程池，租户上下文已丢失（本类头注释已说明）。
+     * 工具内按 name / id 反查数据库，要么查不到，要么把「能否看见」交给数据库运气——而模型完全
+     * 可能编造一个名字。<b>先在请求线程算好白名单、工具内只做集合判定</b>，越权请求在工具入口即被拒。
+     *
+     * <p>默认为<b>空列表</b>而非 {@code null}：工具侧可直接遍历，无需判空。
+     */
+    private List<SkillBrief> visibleSkills = Collections.emptyList();
 
     /** 单个工具的超时秒数 */
     private int timeoutSeconds;
@@ -96,6 +110,16 @@ public class AiToolContext {
          * @return true = 用户确认执行；false = 拒绝或超时
          */
         boolean request(String sql, ChangeRisk risk);
+
+        /**
+         * 阶段 4b：<b>通用确认</b>入口（支持非 SQL 的写操作，如写 skill 文件 / 删除 skill）。
+         *
+         * <p>默认实现把载荷转回 SQL 语义 —— 因此<b>既有 SQL 链路（{@code ExecSqlTool}）一行都不用改</b>，
+         * 行为与 2c 完全一致；只有 skill 类写工具会真正走到装配侧的覆盖实现。
+         */
+        default boolean request(ConfirmPayload payload) {
+            return request(payload == null ? null : payload.getSql(), payload == null ? null : payload.getRisk());
+        }
     }
 
     public static AiToolContext create(

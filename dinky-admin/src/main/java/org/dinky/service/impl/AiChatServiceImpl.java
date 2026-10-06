@@ -27,6 +27,7 @@ import org.dinky.ai.AiToolLoop;
 import org.dinky.ai.AiToolResult;
 import org.dinky.ai.AiToolRunResult;
 import org.dinky.ai.ChangeRisk;
+import org.dinky.ai.ConfirmPayload;
 import org.dinky.ai.LlmClient;
 import org.dinky.ai.LlmProfile;
 import org.dinky.ai.LlmProfileResolver;
@@ -34,9 +35,12 @@ import org.dinky.ai.PromptStore;
 import org.dinky.ai.SqlVerifier;
 import org.dinky.ai.TableSelector;
 import org.dinky.ai.TokenUsage;
+import org.dinky.ai.mention.MentionType;
 import org.dinky.ai.skill.MarkdownSkillRenderer;
+import org.dinky.ai.skill.SkillBrief;
 import org.dinky.ai.skill.SkillDoc;
 import org.dinky.ai.skill.SkillDocParser;
+import org.dinky.ai.skill.SkillRenderer;
 import org.dinky.data.dto.AiChatConfirmRequest;
 import org.dinky.data.dto.AiChatMention;
 import org.dinky.data.dto.AiChatMessage;
@@ -53,6 +57,7 @@ import org.dinky.data.model.TableRelations;
 import org.dinky.data.model.job.History;
 import org.dinky.data.model.job.JobInstance;
 import org.dinky.data.vo.AiChatConfig;
+import org.dinky.data.vo.SkillFileNode;
 import org.dinky.service.AiChatLogService;
 import org.dinky.service.AiChatService;
 import org.dinky.service.DataBaseService;
@@ -63,15 +68,21 @@ import org.dinky.sse.SseEmitterUTF8;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
+import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
 
 import org.springframework.stereotype.Service;
@@ -151,11 +162,40 @@ public class AiChatServiceImpl implements AiChatService {
     /** 阶段 3：LLM 实例（profile）解析器——请求级解析，缺省回落默认实例，绝不写全局单例 */
     private final LlmProfileResolver profileResolver;
 
-    /** 阶段 4a：skill 可见性查询与正文读取（清单注入 / {@code @skill-<名>} 引用） */
+    /** 阶段 4a：skill 可见性查询与正文读取（清单注入 / {@code @skill/<名>} 引用） */
     private final SkillService skillService;
 
-    /** 阶段 4a：skill 渲染器（Markdown；为未来语义层预留的分派点——新增 asset_type 时加实现即可） */
+    /** 阶段 4a：Markdown 渲染器（默认实现；也是查不到 asset_type 实现时的回落目标） */
     private final MarkdownSkillRenderer markdownSkillRenderer;
+
+    /** 阶段 4b：全部渲染器实现（Spring 自动注入，按 {@code assetType} 分派） */
+    private final List<SkillRenderer> skillRendererList;
+
+    /** 阶段 4b：assetType → 渲染器（初始化时构建一次；见 {@link #initSkillRenderers()}） */
+    private Map<String, SkillRenderer> skillRenderers = Collections.emptyMap();
+
+    @PostConstruct
+    void initSkillRenderers() {
+        Map<String, SkillRenderer> map = new HashMap<>();
+        if (CollUtil.isNotEmpty(skillRendererList)) {
+            for (SkillRenderer renderer : skillRendererList) {
+                if (renderer == null) {
+                    continue;
+                }
+                String key = renderer.assetType();
+                SkillRenderer exists = map.put(key, renderer);
+                if (exists != null) {
+                    log.warn(
+                            "Duplicate skill renderer for assetType={}: {} overrides {}",
+                            key,
+                            renderer.getClass().getSimpleName(),
+                            exists.getClass().getSimpleName());
+                }
+            }
+        }
+        this.skillRenderers = map;
+        log.info("Skill renderers initialized: {}", map.keySet());
+    }
 
     private final ExecutorService chatExecutor = Executors.newCachedThreadPool();
 
@@ -184,7 +224,11 @@ public class AiChatServiceImpl implements AiChatService {
             log.warn("Build schema context before stream failed", e);
         }
         final String schemaContext = built;
-        chatExecutor.execute(() -> doChat(request, emitter, dataBase, schemaContext));
+        // 阶段 4b 修复：可见 skill / doc 快照也必须在这里（请求线程）算好——工具循环跑在异步线程，
+        // 那里 Sa-Token 与租户上下文都已丢失，loadVisibleSkillBriefs() 会取不到登录用户而抛异常、
+        // 降级为空集合（表现为 list_skills 恒为空，AI 据此断言"当前账号没有 skill"）。
+        final List<SkillBrief> visibleSkills = loadVisibleSkillBriefs();
+        chatExecutor.execute(() -> doChat(request, emitter, dataBase, schemaContext, visibleSkills));
         return emitter;
     }
 
@@ -236,7 +280,12 @@ public class AiChatServiceImpl implements AiChatService {
     }
 
     /** 实际对话逻辑（在异步线程中执行） */
-    private void doChat(AiChatRequest request, SseEmitter emitter, DataBase dataBase, String prebuiltSchemaContext) {
+    private void doChat(
+            AiChatRequest request,
+            SseEmitter emitter,
+            DataBase dataBase,
+            String prebuiltSchemaContext,
+            List<SkillBrief> visibleSkills) {
         long start = System.currentTimeMillis();
         TokenUsage totalUsage = new TokenUsage();
         AiChatLog audit = new AiChatLog();
@@ -329,7 +378,8 @@ public class AiChatServiceImpl implements AiChatService {
                         profile,
                         runId,
                         run,
-                        () -> runRegistry.isCancelled(run));
+                        () -> runRegistry.isCancelled(run),
+                        visibleSkills);
                 mergeUsage(totalUsage, toolRun.getUsage());
                 // 阶段 2c-0：用户已请求中断——停止后续校验 / 修复，直接收尾
                 if (runRegistry.isCancelled(run)) {
@@ -511,7 +561,8 @@ public class AiChatServiceImpl implements AiChatService {
             LlmProfile profile,
             String runId,
             AiChatRunRegistry.RunContext run,
-            BooleanSupplier cancelled) {
+            BooleanSupplier cancelled,
+            List<SkillBrief> visibleSkills) {
         AiToolContext context = AiToolContext.create(
                 dataBase,
                 StrUtil.nullToEmpty(request.getSchemaName()),
@@ -522,11 +573,41 @@ public class AiChatServiceImpl implements AiChatService {
         // 阶段 2c-1：把「运行上下文 + 发确认帧通道」注入工具上下文——exec_sql 这类写类工具
         // 据此在执行前下发 confirmRequest 并挂起等待用户拍板（未注入时工具会直接拒绝写操作）
         context.setRunId(runId);
+        // 阶段 4b：在【请求线程】预解析「当前用户可见的 skill / doc 快照」注入上下文。
+        // 工具循环跑在异步线程池，那里租户上下文与 Sa-Token 上下文都已丢失——工具内既不能反查 DB
+        // （会因租户过滤查不到），也不能依赖 StpUtil 做属主判定。快照 + 显式 userId 即为解法。
+        // 注意：这里必须使用【请求线程】预解析并传入的快照，不能在此（异步线程）重新查询——
+        // 否则 Sa-Token / 租户上下文均已丢失，会静默降级为空集合（4b UAT 的 B1 即此表现）。
+        context.setVisibleSkills(visibleSkills);
         // 阶段 2c-2：记录最近一次工具失败原因，随确认请求下发，
         // 使「第 N 次尝试」的确认框能同时显示上次为什么失败（用户知情后再决定是否执行）
         AtomicReference<String> lastToolError = new AtomicReference<>();
-        context.setConfirmRequester((sql, risk) -> requestWriteConfirmation(
-                emitter, runId, run, sql, risk, context.getRepairAttempts().get(), lastToolError.get()));
+        // 阶段 4b：确认通道由 lambda 改为匿名类——既要保留既有 SQL 语义，又要额外支持「非 SQL 的
+        // 通用载荷」（写 skill 文件 / 删除 skill）；lambda 只能实现抽象方法、无法覆写 default 方法。
+        context.setConfirmRequester(new AiToolContext.ConfirmRequester() {
+            @Override
+            public boolean request(String sql, ChangeRisk risk) {
+                return requestWriteConfirmation(
+                        emitter,
+                        runId,
+                        run,
+                        sql,
+                        risk,
+                        context.getRepairAttempts().get(),
+                        lastToolError.get());
+            }
+
+            @Override
+            public boolean request(ConfirmPayload payload) {
+                return requestWriteConfirmation(
+                        emitter,
+                        runId,
+                        run,
+                        payload,
+                        context.getRepairAttempts().get(),
+                        lastToolError.get());
+            }
+        });
         // 阶段 2c-2：装配自动纠错上限（工具据此在失败达上限后停止重试）
         context.setMaxRepairAttempts(Math.max(config.getLlmToolAutoRepairMaxAttempts(), 1));
         return toolLoop.run(
@@ -762,6 +843,32 @@ public class AiChatServiceImpl implements AiChatService {
      *
      * @return true = 用户确认执行；false = 拒绝或超时
      */
+    /**
+     * 阶段 4b：装载「当前用户可见的 skill / doc 快照」——<b>必须在请求线程调用</b>。
+     *
+     * <p>为什么必须在请求线程：工具循环跑在异步线程池，租户上下文（ThreadLocal）与 Sa-Token 上下文
+     * 都已丢失，届时 {@code skillService.listVisible()} 取不到登录用户 / 租户，会抛异常或返回错集。
+     *
+     * <p>失败一律<b>降级为空集合</b>（技能类工具随之"看不见任何资产"）——技能能力异常不应把整个
+     * 对话打挂，这与 2c 以来「工具失败不阻断主流程」的口径一致。
+     */
+    private List<SkillBrief> loadVisibleSkillBriefs() {
+        try {
+            SystemConfiguration config = SystemConfiguration.getInstances();
+            if (!config.isLlmSkillEnable()) {
+                return Collections.emptyList();
+            }
+            List<Skill> skills = skillService.listVisible();
+            if (CollUtil.isEmpty(skills)) {
+                return Collections.emptyList();
+            }
+            return skills.stream().map(SkillBrief::of).filter(Objects::nonNull).collect(Collectors.toList());
+        } catch (Exception e) {
+            log.warn("Load visible skills for tool context failed: {}", e.getMessage());
+            return Collections.emptyList();
+        }
+    }
+
     private boolean requestWriteConfirmation(
             SseEmitter emitter,
             String runId,
@@ -770,14 +877,65 @@ public class AiChatServiceImpl implements AiChatService {
             ChangeRisk risk,
             int attempt,
             String previousError) {
+        return requestWriteConfirmation(emitter, runId, run, ConfirmPayload.ofSql(sql, risk), attempt, previousError);
+    }
+
+    /**
+     * 阶段 4b：<b>通用</b>写操作确认（同时支撑 SQL 与 skill 类写操作）。
+     *
+     * <p>相对 2c 的 SQL 专用版本，这里只做<b>纯增量</b>扩展：旧字段（{@code sql} / {@code sqlType} /
+     * {@code risk}）原样保留，新增 {@code kind} / {@code title} / {@code targetName} /
+     * {@code relativePath} / {@code beforeContent} / {@code afterContent} / {@code requireTypedName}，
+     * 前端按 {@code kind} 分支渲染——因此 <b>SQL 确认链路行为不变</b>。
+     *
+     * <p><b>强化确认</b>：{@code requireTypedName=true} 时，用户必须手动输入目标名称，且服务端会比对
+     * 回投值（见 {@link AiChatRunRegistry#submitConfirm(String, Integer, boolean, String)}）——
+     * 只靠前端禁用按钮挡不住直接调接口的绕过。
+     */
+    private boolean requestWriteConfirmation(
+            SseEmitter emitter,
+            String runId,
+            AiChatRunRegistry.RunContext run,
+            ConfirmPayload confirm,
+            int attempt,
+            String previousError) {
         JSONObject payload = new JSONObject();
         payload.set("runId", runId);
-        payload.set("sql", sql);
-        payload.set("sqlType", risk == null ? "UNKNOWN" : StrUtil.nullToEmpty(risk.getSqlType()));
+        payload.set("kind", StrUtil.blankToDefault(confirm.getKind(), ConfirmPayload.KIND_SQL));
+        payload.set("sql", StrUtil.nullToEmpty(confirm.getSql()));
+        // 阶段 4b：非 SQL 类确认（kind=skill_file / skill_delete）本就没有「语句类型」这一概念，
+        // 不能落成 "UNKNOWN"（前端曾原样渲染成「语句类型: UNKNOWN」，纯噪音）。前端已改为按
+        // kind 分支渲染、不再读该字段；这里再兜一层，避免其它消费方误用。
+        if (ConfirmPayload.KIND_SQL.equals(StrUtil.blankToDefault(confirm.getKind(), ConfirmPayload.KIND_SQL))) {
+            payload.set(
+                    "sqlType",
+                    confirm.getRisk() == null
+                            ? "UNKNOWN"
+                            : StrUtil.nullToEmpty(confirm.getRisk().getSqlType()));
+        }
         payload.set("timeoutSeconds", WRITE_CONFIRM_TIMEOUT_SECONDS);
         // 阶段 2c-1：风险信息随确认框下发（语句类型 / 是否 DDL / 目标对象 / 模型估计影响）
-        if (risk != null) {
-            payload.set("risk", risk.toJson());
+        if (confirm.getRisk() != null) {
+            payload.set("risk", confirm.getRisk().toJson());
+        }
+        // 阶段 4b：skill 类确认的附加字段
+        if (StrUtil.isNotBlank(confirm.getTitle())) {
+            payload.set("title", confirm.getTitle());
+        }
+        if (StrUtil.isNotBlank(confirm.getTargetName())) {
+            payload.set("targetName", confirm.getTargetName());
+        }
+        if (StrUtil.isNotBlank(confirm.getRelativePath())) {
+            payload.set("relativePath", confirm.getRelativePath());
+        }
+        if (confirm.getBeforeContent() != null) {
+            payload.set("beforeContent", confirm.getBeforeContent());
+        }
+        if (confirm.getAfterContent() != null) {
+            payload.set("afterContent", confirm.getAfterContent());
+        }
+        if (confirm.isRequireTypedName()) {
+            payload.set("requireTypedName", true);
         }
         // 阶段 2c-2：告知用户「第 N 次尝试 + 上次为什么失败」——自动纠错会重试，但每次真实写库仍需确认
         if (attempt > 0) {
@@ -789,9 +947,22 @@ public class AiChatServiceImpl implements AiChatService {
         sendJsonFrame(emitter, "confirmRequest", payload);
         Boolean approved = run.awaitConfirm(WRITE_CONFIRM_TIMEOUT_SECONDS);
         if (approved == null) {
-            log.info("Write confirmation timed out, runId={}, risk={}", runId, risk == null ? null : risk.toSummary());
+            log.info(
+                    "Write confirmation timed out, runId={}, kind={}",
+                    runId,
+                    StrUtil.blankToDefault(confirm.getKind(), ConfirmPayload.KIND_SQL));
+            return false;
         }
-        return Boolean.TRUE.equals(approved);
+        if (!Boolean.TRUE.equals(approved)) {
+            return false;
+        }
+        if (confirm.isRequireTypedName()
+                && !StrUtil.equals(
+                        StrUtil.trimToEmpty(run.getConfirmTypedName()), StrUtil.trimToEmpty(confirm.getTargetName()))) {
+            log.info("Typed-name confirmation mismatch, runId={}, expected={}", runId, confirm.getTargetName());
+            return false;
+        }
+        return true;
     }
 
     @Override
@@ -800,7 +971,8 @@ public class AiChatServiceImpl implements AiChatService {
             return false;
         }
         boolean approved = Boolean.TRUE.equals(request.getApprove());
-        return runRegistry.submitConfirm(request.getRunId(), request.getUserId(), approved);
+        // 阶段 4b：把「用户手输的名称」一并投递给等待中的写操作（强化确认用；普通确认传 null）
+        return runRegistry.submitConfirm(request.getRunId(), request.getUserId(), approved, request.getConfirmName());
     }
 
     @Override
@@ -841,6 +1013,9 @@ public class AiChatServiceImpl implements AiChatService {
                 PromptStore.PLACEHOLDER_EDITOR_SQL,
                 (isExplain || isFix || isRewrite) ? "" : buildEditorContext(request));
         params.put(PromptStore.PLACEHOLDER_JOB_CONTEXT, (isFix || isRewrite) ? "" : buildJobContext(request));
+        // 阶段 4b：创建 skill 的行为规范——**按需注入**（仅当用户本次要求新建 skill 时非空）。
+        // 只有 TEXT_TO_SQL 含该占位符；对其它模板多填无害。
+        params.put(PromptStore.PLACEHOLDER_SKILL_RULES, buildSkillRules(request));
 
         // 阶段 2：Craft 仅当「管理员已开启 + 本轮显式请求」时生效，否则一律回落 Ask
         boolean isCraft = !isExplain && !isFix && !isRewrite && isCraftMode(request);
@@ -933,8 +1108,101 @@ public class AiChatServiceImpl implements AiChatService {
      * <p>显式引用是<b>最高优先级</b>上下文：先于表清单注入，且<b>不参与</b>后续字段预算的裁剪判定。
      * 依据：中文问题配英文表名时自动召回基本失效（2026-09-26 UAT 实测），用户手动指定是唯一可靠兜底。
      */
-    private String buildMentionContext(AiChatRequest request, Integer databaseId, String schemaName) {
+    /**
+     * 阶段 4b：本次请求是否需要注入「创建 skill 的行为规范」，需要则返回 {@link PromptStore#SKILL_RULES}。
+     *
+     * <p><b>为什么按需注入</b>：该规则只在「用户要新建 skill」时有意义。常驻有两个副作用——
+     * ① 无关场景（普通取数/咨询）白占上下文预算；② 未开启 skill 工具时（如生产
+     * {@code skillEnable=false}），模型看到「如何创建 skill」的规则却无工具可用，容易发起无效的
+     * 工具调用尝试。
+     *
+     * <p><b>判定故意宽松</b>（出现「skill / 技能」+ 创建类动词即注入）：宁可多注入几十 token，也不要
+     * 漏注入——漏了模型就退回「逐个研读既有 skill」的老习惯，把有限的工具轮次耗在研读上。规则第 2 条
+     * 已把「用户自己指定了参考对象 / 要求参考全部」的例外交给模型按文本处理。
+     */
+    private String buildSkillRules(AiChatRequest request) {
+        String message = StrUtil.nullToEmpty(request == null ? null : request.getMessage());
+        if (StrUtil.isBlank(message)) {
+            return "";
+        }
+        boolean mentionsSkill = StrUtil.containsIgnoreCase(message, "skill") || StrUtil.contains(message, "技能");
+        if (!mentionsSkill) {
+            return "";
+        }
+        boolean createIntent = StrUtil.contains(message, "创建")
+                || StrUtil.contains(message, "新建")
+                || StrUtil.contains(message, "建一个")
+                || StrUtil.contains(message, "建个")
+                || StrUtil.contains(message, "加一个")
+                || StrUtil.containsIgnoreCase(message, "create");
+        return createIntent ? PromptStore.SKILL_RULES : "";
+    }
+
+    /**
+     * 手打引用兜底的匹配模式：{@code @skill/<名>} / {@code @doc/<名>} / {@code @table/<表名>}。
+     *
+     * <p><b>分隔符</b>：2026-10-06 起统一为<b>斜杠</b>——名字本身允许连字符（{@code dw-sql-review}），
+     * 用连字符分隔时 {@code @skill-dw-sql-review} 人与机器都要靠"第一个连字符"切分，可读性差；
+     * 斜杠则天然无歧义，且与 {@code /skills/<名>/SKILL.md} 的路径心智一致。
+     * 但<b>旧连字符写法继续兼容</b>（存量对话与肌肉记忆），故分隔符写成字符类 {@code [-/]}。
+     *
+     * <p>名字字符类要同时覆盖三类输入：skill / doc 名<b>允许连字符</b>（{@code ^[a-z0-9][a-z0-9-]{1,63}$}，
+     * 如 {@code diny-meta-anly} / {@code lpdw-dict}）；表名常含下划线与大写（{@code dinky_task} /
+     * {@code ODS_ORDER}）。故用 {@code [A-Za-z0-9_-]}；<b>不含点号</b>——否则句末
+     * {@code @skill/lpdw-dict。} 会把句号一起吞进名字。
+     *
+     * <p>⚠️ <b>踩过的坑</b>：曾把字符类写成 {@code [A-Za-z0-9_]}（漏了连字符），结果
+     * {@code @doc-lpdw-dict} 被截成 {@code name=lpdw}，表现为"未找到可见的资产"；而当时用
+     * {@code @table-dinky_skill} 做验证，恰好只含下划线，**把这个 bug 掩盖了**。
+     * <b>结论：验证前缀解析时，必须同时用一个含连字符的名字和一个含下划线的名字。</b>
+     *
+     * <p>有前缀约束在，放宽不会误匹配。旧语法 {@code @表名} 不在此兜底（必须由前端登记，否则
+     * 无法确定所属 schema），见 {@link #resolveMentions}。
+     */
+    private static final Pattern TEXT_MENTION_PATTERN =
+            Pattern.compile("@(skill|doc|table)[-/]([A-Za-z0-9_-]{1,64})", Pattern.CASE_INSENSITIVE);
+
+    /**
+     * 解析本次请求的 {@code @} 引用——<b>兼容「点选」与「手打」两种用法</b>（阶段 4b 修复）。
+     *
+     * <p><b>为什么必须兜底</b>：前端的 mentions 只在**从候选浮层点选**时才登记；用户**直接手打**
+     * {@code @skill/xxx}（很自然的用法）不会进入 mentions，后端便完全不知道有引用——表现为
+     * 「AI 看不到正文与 references 清单、只能靠工具去读主文件」，而且服务端**没有任何异常日志**
+     * （因为空集合直接 return ""）。这里从消息文本补提一次，让两条路行为一致。
+     *
+     * <p>只识别 {@code @skill/<名>} 与 {@code @doc/<名>}（含旧写法 {@code @skill/<名>}）：
+     * {@code @表名} 旧语法前端一定会登记
+     * （否则无法确定所属 schema），不在此兜底，避免误判。
+     */
+    private List<AiChatMention> resolveMentions(AiChatRequest request) {
         List<AiChatMention> mentions = request.getMentions();
+        List<AiChatMention> result = mentions == null ? new ArrayList<>() : new ArrayList<>(mentions);
+        String message = StrUtil.nullToEmpty(request.getMessage());
+        if (StrUtil.isBlank(message)) {
+            return result;
+        }
+        Matcher matcher = TEXT_MENTION_PATTERN.matcher(message);
+        while (matcher.find()) {
+            String raw = matcher.group(1).toLowerCase();
+            String type =
+                    "doc".equals(raw) ? MentionType.DOC : "table".equals(raw) ? MentionType.TABLE : MentionType.SKILL;
+            String name = matcher.group(2);
+            boolean exists = result.stream()
+                    .anyMatch(m -> type.equalsIgnoreCase(m.getType()) && name.equalsIgnoreCase(m.getName()));
+            if (exists) {
+                continue;
+            }
+            AiChatMention mention = new AiChatMention();
+            mention.setType(type);
+            mention.setName(name);
+            result.add(mention);
+            log.info("Mention recovered from message text: type={}, name={}", type, name);
+        }
+        return result;
+    }
+
+    private String buildMentionContext(AiChatRequest request, Integer databaseId, String schemaName) {
+        List<AiChatMention> mentions = resolveMentions(request);
         if (CollUtil.isEmpty(mentions)) {
             return "";
         }
@@ -944,15 +1212,17 @@ public class AiChatServiceImpl implements AiChatService {
             if (mention == null) {
                 continue;
             }
-            if ("table".equalsIgnoreCase(mention.getType())) {
+            if (MentionType.TABLE.equalsIgnoreCase(mention.getType())) {
                 String tableSchema = StrUtil.isNotBlank(mention.getSchemaName()) ? mention.getSchemaName() : schemaName;
                 sb.append("- 表 ")
                         .append(tableSchema)
                         .append(".")
                         .append(StrUtil.nullToEmpty(mention.getName()))
                         .append("\n");
-                appendTableDetail(sb, databaseId, tableSchema, mention.getName());
-            } else if ("column".equalsIgnoreCase(mention.getType())) {
+                if (databaseId != null) {
+                    appendTableDetail(sb, databaseId, tableSchema, mention.getName());
+                }
+            } else if (MentionType.COLUMN.equalsIgnoreCase(mention.getType())) {
                 // 阶段 2 前置：字段级引用——只给该字段的类型/注释，不给整表，省预算
                 String tableSchema = StrUtil.isNotBlank(mention.getSchemaName()) ? mention.getSchemaName() : schemaName;
                 String table = StrUtil.nullToEmpty(mention.getName());
@@ -965,9 +1235,11 @@ public class AiChatServiceImpl implements AiChatService {
                         .append(column)
                         .append("\n");
                 appendColumnDetail(sb, databaseId, tableSchema, table, column);
-            } else if ("skill".equalsIgnoreCase(mention.getType())) {
-                // 阶段 4a：@skill-<名>——显式引用时注入该 skill 正文（可见性校验 + 渲染器 + 独立预算）
-                appendSkillDetail(sb, mention.getName());
+            } else if (MentionType.SKILL.equalsIgnoreCase(mention.getType())
+                    || MentionType.DOC.equalsIgnoreCase(mention.getType())) {
+                // 阶段 4a：@skill/<名>；阶段 4b：@doc/<名>（业务背景知识，与 skill 同构）。
+                // 两者走同一条路径：可见性校验 → 按 asset_type 分派渲染器 → 独立预算渲染。
+                appendAssetDetail(sb, mention.getName());
             } else if (StrUtil.isNotBlank(mention.getContent())) {
                 // selection / job：片段正文（仅编辑器文本，不含业务数据行）
                 String content = mention.getContent().trim();
@@ -987,32 +1259,99 @@ public class AiChatServiceImpl implements AiChatService {
     }
 
     /**
-     * 追加显式引用的 skill 正文（阶段 4a）。
+     * 追加显式引用的资产正文（阶段 4a 的 skill；阶段 4b 扩展为 skill + doc）。
      *
-     * <p>三件事：① 按<b>可见性</b>取 skill（不可见 / 不存在则<b>不注入</b>，绝不放行越权读取）；
-     * ② 交给渲染器按 {@code llmSkillMaxChars} 预算渲染（渲染器负责截断与「注入边界声明」）；
-     * ③ 任何异常只记日志，<b>不阻断对话</b>。
+     * <p>三件事：① 按<b>可见性</b>取资产（不可见 / 不存在则<b>不注入</b>，绝不放行越权读取）；
+     * ② 交给<b>按 {@code assetType} 分派</b>的渲染器按 {@code llmSkillMaxChars} 预算渲染
+     * （渲染器负责截断与「注入边界声明」）；③ 任何异常只记日志，<b>不阻断对话</b>。
+     *
+     * <p>分派点即 4a 预留的「缝」（总体计划 §4.8.3-③）——本批新增 doc 正好成为第二个实现，
+     * 让「一套机制、多种知识资产」从口号变成可运行的结构：阶段 5 的语义层渲染器只需再实现一个接口。
      */
-    private void appendSkillDetail(StringBuilder sb, String name) {
+    private void appendAssetDetail(StringBuilder sb, String name) {
         if (StrUtil.isBlank(name)) {
             return;
         }
         try {
             Skill skill = skillService.findVisibleByName(name);
             if (skill == null) {
-                log.info("Skill mention ignored (not visible or not found): {}", name);
+                log.info("Asset mention ignored (not visible or not found): {}", name);
                 return;
             }
             String content = skillService.readContent(skill);
             SkillDoc doc = SkillDocParser.parse(content);
             if (doc == null) {
-                log.info("Skill mention ignored (invalid SKILL.md): {}", name);
+                log.info("Asset mention ignored (invalid main file): {}", name);
                 return;
             }
             int maxChars = SystemConfiguration.getInstances().getLlmSkillMaxChars();
-            sb.append(markdownSkillRenderer.render(doc, maxChars)).append("\n\n");
+            sb.append(rendererFor(skill.getAssetType()).render(doc, maxChars)).append("\n\n");
+            // 阶段 4b 修复（UAT B3）：附上该资产的【文件清单】。read_skill 是按路径读取的，
+            // 而模型无法枚举目录——不给清单它只能"猜"文件名（实测它猜了工具描述里的示例
+            // references/conventions.md，该文件其实不存在）。清单 token 成本极低，
+            // 却是「渐进披露 + 按需读取 references/」能真正落地的前提。
+            sb.append(buildAssetFileList(skill));
         } catch (Exception e) {
-            log.warn("Append skill detail failed: name={}, msg={}", name, e.getMessage());
+            log.warn("Append asset detail failed: name={}, msg={}", name, e.getMessage());
+        }
+    }
+
+    /**
+     * 按 {@code assetType} 取渲染器（阶段 4b：把 4a 只留了接口、未实现的分派真正落地）。
+     *
+     * <p>找不到对应实现时<b>回落</b> Markdown 渲染器并告警——新增资产类型不应把既有引用打断
+     * （与 {@code AiToolRegistry} 的静默覆盖形成对比：这里必须留痕）。
+     */
+    private SkillRenderer rendererFor(String assetType) {
+        String type = StrUtil.blankToDefault(assetType, SkillDocParser.ASSET_TYPE_SKILL);
+        SkillRenderer renderer = skillRenderers.get(type);
+        if (renderer != null) {
+            return renderer;
+        }
+        log.warn("No skill renderer for assetType={}, fallback to markdown renderer", type);
+        return markdownSkillRenderer;
+    }
+
+    /**
+     * 构建资产的「文件清单」片段（阶段 4b 修复：解决模型无法枚举目录、只能瞎猜文件名的问题）。
+     *
+     * <p>只列相对路径、不列内容——真正的按需读取仍由 {@code read_skill} 工具完成，与既定的
+     * 「清单常驻 + 正文按需」渐进披露策略一致。任何异常都降级为返回空串，<b>不影响正文注入</b>。
+     */
+    private String buildAssetFileList(Skill skill) {
+        try {
+            List<SkillFileNode> files = skillService.listFiles(skill.getId());
+            if (CollUtil.isEmpty(files)) {
+                return "";
+            }
+            List<String> paths = new ArrayList<>();
+            collectFilePaths(files, paths);
+            if (paths.isEmpty()) {
+                return "";
+            }
+            StringBuilder sb = new StringBuilder();
+            sb.append("该资产包含以下文件（如需完整内容，可用 read_skill 按相对路径读取）：\n");
+            for (String path : paths) {
+                sb.append("- ").append(path).append("\n");
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            log.warn("Build asset file list failed: name={}, msg={}", skill.getName(), e.getMessage());
+            return "";
+        }
+    }
+
+    /** 递归收集文件相对路径（只列文件；目录本身不是可读目标） */
+    private void collectFilePaths(List<SkillFileNode> nodes, List<String> target) {
+        for (SkillFileNode node : nodes) {
+            if (node == null) {
+                continue;
+            }
+            if (node.isDirectory()) {
+                collectFilePaths(node.getChildren(), target);
+            } else {
+                target.add(node.getRelativePath());
+            }
         }
     }
 
@@ -1020,7 +1359,7 @@ public class AiChatServiceImpl implements AiChatService {
      * 构建「当前用户可见 skill 清单」区块（阶段 4a）。
      *
      * <p><b>渐进披露</b>：清单只含 {@code name — description}（来自 {@code dinky_skill} 单表查询，
-     * <b>不读文件</b>）；正文只在 {@code @skill-<名>} 显式引用时注入（见 {@link #appendSkillDetail}）。
+     * <b>不读文件</b>）；正文只在 {@code @skill/<名>} 显式引用时注入（见 {@link #appendAssetDetail}）。
      *
      * <p>开关关闭 / 无可见 skill / 查询失败时返回空串——<b>任何情况都不阻断对话</b>。
      */
@@ -1034,7 +1373,7 @@ public class AiChatServiceImpl implements AiChatService {
                 return "";
             }
             StringBuilder sb = new StringBuilder();
-            sb.append("## 可用的团队 Skill（如与本次问题相关，可在输入框用 @skill-<名> 引用其完整内容）\n");
+            sb.append("## 可用的团队 Skill（如与本次问题相关，可在输入框用 @skill/<名> 引用其完整内容）\n");
             for (Skill skill : skills) {
                 sb.append("- ").append(skill.getName());
                 if (StrUtil.isNotBlank(skill.getDescription())) {
@@ -1180,25 +1519,32 @@ public class AiChatServiceImpl implements AiChatService {
      * </ul>
      */
     private String buildSchemaContext(AiChatRequest request) {
-        if (request.getDatabaseId() == null) {
-            return "(未绑定数据源，无可用 schema 信息)";
-        }
         Integer databaseId = request.getDatabaseId();
         String schemaName = StrUtil.nullToEmpty(request.getSchemaName());
+        StringBuilder sb = new StringBuilder();
+
+        // 阶段 4b 修复（UAT B3）：@ 引用与 skill 清单【不依赖数据源】，必须放在下面"未绑定数据源"
+        // 的提前返回【之前】注入。否则用户在未选 schema 时提问（例如"这个 skill 有哪些参考信息"，
+        // 这类问题根本不需要数据源）会完全看不到引用内容与清单——该缺陷自 4a 起即存在，只是当时
+        // 多在已绑定数据源的取数场景下使用，未暴露。
+        // 阶段 1a（1.4）：@ 显式引用优先级最高，先于表清单注入
+        sb.append(buildMentionContext(request, databaseId, schemaName));
+
+        // 阶段 4a：注入「当前用户可见 skill 清单」（name + description，渐进披露）。
+        // 只给清单、不给正文——正文由 @skill/<名> 显式引用时才注入（见 appendAssetDetail）；
+        // 内容受 llmSkillMaxChars 独立预算约束，且整体仍受末尾 schemaMaxChars 兜底。
+        sb.append(buildSkillListContext());
+
+        if (databaseId == null) {
+            sb.append("(未绑定数据源，无可用 schema 信息)\n");
+            return sb.toString();
+        }
+
         SystemConfiguration config = SystemConfiguration.getInstances();
         // 阶段 1a：上下文预算改为可配置（原硬编码 24000 / 20000），可按模型窗口与
         // 「准确率 / p95 延迟 / 成本」实测结果调档（见阶段 1 计划 §3.4.5）
         int schemaMaxChars = config.getLlmSchemaMaxChars();
         int columnBudgetChars = config.getLlmColumnBudgetChars();
-        StringBuilder sb = new StringBuilder();
-
-        // 阶段 1a（1.4）：@ 显式引用优先级最高，先于表清单注入
-        sb.append(buildMentionContext(request, databaseId, schemaName));
-
-        // 阶段 4a：注入「当前用户可见 skill 清单」（name + description，渐进披露）。
-        // 只给清单、不给正文——正文由 @skill-<名> 显式引用时才注入（见 appendSkillDetail）；
-        // 内容受 llmSkillMaxChars 独立预算约束，且整体仍受末尾 schemaMaxChars 兜底。
-        sb.append(buildSkillListContext());
 
         if (StrUtil.isNotBlank(request.getTableName())) {
             appendTableDetail(sb, databaseId, schemaName, request.getTableName());
@@ -1282,7 +1628,11 @@ public class AiChatServiceImpl implements AiChatService {
      */
     private void appendColumnDetail(
             StringBuilder target, Integer databaseId, String schemaName, String tableName, String columnName) {
-        if (StrUtil.isBlank(columnName) || StrUtil.isBlank(tableName)) {
+        // 阶段 4b 修复（UAT R6）：未绑定数据源时直接跳过。
+        // @表.字段 引用分支在无 databaseId 时仍会走到这里，而 listColumns 必须依赖数据源——
+        // 不拦会抛异常或做空查询，与「未绑定数据源时 @skill/ / @doc/ 正文仍照常注入」的既有行为
+        // 不一致（同类保护见 buildSchemaContext 的提前返回与 resolveMentions）。
+        if (databaseId == null || StrUtil.isBlank(columnName) || StrUtil.isBlank(tableName)) {
             return;
         }
         try {

@@ -433,10 +433,20 @@ public class SystemConfiguration {
             .defaultValue(false)
             .note(Status.SYS_LLM_SETTINGS_TOOLSAMPLEROWSENABLE_NOTE);
 
-    /** 一次对话最多进行多少轮工具调用（一轮 = 一次完整 LLM 请求） */
+    /**
+     * 一次对话最多进行多少轮工具调用（一轮 = 一次完整 LLM 请求）。
+     *
+     * <p><b>为什么默认值从 3 提到 10</b>（UAT B4 实测）：建一个带 {@code references/} 的 skill 需要
+     * 「探查既有范例（1~3 轮）→ 建主文件（1 轮）→ 逐个写附件文件（1 轮/个）」，3 轮必然不够——实测
+     * 第 3 轮结束时模型仍在请求 {@code write_skill_file}，触发「已达上限」提示，用户被迫把同一件事
+     * 分两次说（第二轮才把 references 建出来）。10 轮可覆盖「建主体 + 3~5 个附件 + 少量修订」。
+     *
+     * <p>代价：SSE 的等待时长按轮数线性放大（超时预算估算见 {@code AiChatServiceImpl#chat}），且
+     * 模型陷入试错时的浪费更大，故不宜再放大。
+     */
     private final Configuration<Integer> llmToolCallMaxRounds = key(Status.SYS_LLM_SETTINGS_TOOLCALLMAXROUNDS)
             .intType()
-            .defaultValue(3)
+            .defaultValue(10)
             .note(Status.SYS_LLM_SETTINGS_TOOLCALLMAXROUNDS_NOTE);
 
     /** 单个工具的执行超时（秒）：元数据查询卡住时不能拖垮整个对话 */
@@ -507,7 +517,7 @@ public class SystemConfiguration {
     /**
      * Skills 能力开关（阶段 4a）。
      *
-     * <p><b>默认关闭</b>：开启后 AI Chat 会注入「当前用户可见 skill 的清单」，并支持 {@code @skill-<名>}
+     * <p><b>默认关闭</b>：开启后 AI Chat 会注入「当前用户可见 skill 的清单」，并支持 {@code @skill/<名>}
      * 显式引用（引用时注入该 skill 正文）。关闭时既不注入清单、也不响应 skill 引用——行为与迭代前
      * 完全一致（等价功能级回滚开关）。
      */
@@ -527,6 +537,30 @@ public class SystemConfiguration {
             .intType()
             .defaultValue(4000)
             .note(Status.SYS_LLM_SETTINGS_SKILLMAXCHARS_NOTE);
+
+    /**
+     * skill <b>只读</b>工具开关（阶段 4b）。
+     *
+     * <p>控制 {@code list_skills} / {@code read_skill} 是否下发给模型。<b>默认开启</b>——它们只读，
+     * 且必须同时满足 {@link #llmSkillEnable}（skill 功能总开关）才生效。
+     */
+    private final Configuration<Boolean> llmToolSkillEnable = key(Status.SYS_LLM_SETTINGS_TOOLSKILLENABLE)
+            .booleanType()
+            .defaultValue(true)
+            .note(Status.SYS_LLM_SETTINGS_TOOLSKILLENABLE_NOTE);
+
+    /**
+     * skill <b>写</b>工具开关（阶段 4b）。
+     *
+     * <p>控制 {@code create_skill} / {@code write_skill_file} / {@code delete_skill} 是否下发给模型。
+     *
+     * <p><b>默认关闭</b>：与 {@code toolExecSqlEnable}（执行类工具）保持同一保守口径——避免「升级即
+     * 获得写权限」。开启后每次写入仍<b>必须</b>经用户二次确认。
+     */
+    private final Configuration<Boolean> llmToolSkillWriteEnable = key(Status.SYS_LLM_SETTINGS_TOOLSKILLWRITEENABLE)
+            .booleanType()
+            .defaultValue(false)
+            .note(Status.SYS_LLM_SETTINGS_TOOLSKILLWRITEENABLE_NOTE);
 
     private final Configuration<Boolean> metricsSysEnable = key(Status.SYS_METRICS_SETTINGS_SYS_ENABLE)
             .booleanType()
@@ -832,7 +866,7 @@ public class SystemConfiguration {
     }
 
     /**
-     * @return 是否开启 Skills 能力（阶段 4a）：开启后注入「可见 skill 清单」并支持 {@code @skill-<名>}，默认关闭。
+     * @return 是否开启 Skills 能力（阶段 4a）：开启后注入「可见 skill 清单」并支持 {@code @skill/<名>}，默认关闭。
      */
     public boolean isLlmSkillEnable() {
         return Asserts.isNull(llmSkillEnable.getValue()) ? llmSkillEnable.getDefaultValue() : llmSkillEnable.getValue();
@@ -843,6 +877,20 @@ public class SystemConfiguration {
         return Asserts.isNull(llmSkillMaxChars.getValue())
                 ? llmSkillMaxChars.getDefaultValue()
                 : llmSkillMaxChars.getValue();
+    }
+
+    /** @return 是否向模型下发 skill <b>只读</b>工具（阶段 4b；需 {@link #isLlmSkillEnable()} 同时为真） */
+    public boolean isLlmToolSkillEnable() {
+        return Asserts.isNull(llmToolSkillEnable.getValue())
+                ? llmToolSkillEnable.getDefaultValue()
+                : llmToolSkillEnable.getValue();
+    }
+
+    /** @return 是否向模型下发 skill <b>写</b>工具（阶段 4b，默认关闭；每次写入仍需用户二次确认） */
+    public boolean isLlmToolSkillWriteEnable() {
+        return Asserts.isNull(llmToolSkillWriteEnable.getValue())
+                ? llmToolSkillWriteEnable.getDefaultValue()
+                : llmToolSkillWriteEnable.getValue();
     }
 
     /** @return 是否开放触碰业务数据行的 sample_rows 工具 */

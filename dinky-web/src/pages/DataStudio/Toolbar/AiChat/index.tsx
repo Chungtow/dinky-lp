@@ -194,6 +194,12 @@ const AiChat = (props: AiChatProps) => {
   const runIdRef = useRef<string>('');
   /** 阶段 2c-0：待用户拍板的写语句执行确认（非空即弹确认框） */
   const [writeConfirm, setWriteConfirm] = useState<AiChatConfirmFrame | null>(null);
+  /**
+   * 阶段 4b：删除类确认（{@code kind=skill_delete}）要求**手输目标名**才能确认（防误删）。
+   * 这里保存输入框内容，与后端下发的 {@code targetName} 完全一致时才允许点「确认执行」
+   * （后端亦会二次校验，不一致按拒绝处理）。
+   */
+  const [confirmTypedName, setConfirmTypedName] = useState<string>('');
   const [mentionOpen, setMentionOpen] = useState<boolean>(false);
   const [mentionQuery, setMentionQuery] = useState<string>('');
   const [mentionIndex, setMentionIndex] = useState<number>(0);
@@ -205,7 +211,7 @@ const AiChat = (props: AiChatProps) => {
    */
   const [columnOptions, setColumnOptions] = useState<AiChatMentionItem[]>([]);
   const columnCacheRef = useRef<Map<string, AiChatMentionItem[]>>(new Map());
-  /** 阶段 4a：团队 Skill 候选（仅管理员开启 skillEnable 时拉取）——输入 {@code @skill-} 时展示 */
+  /** 阶段 4a：团队 Skill 候选（仅管理员开启 skillEnable 时拉取）——输入 {@code @skill/} 时展示 */
   const [skillOptions, setSkillOptions] = useState<AiChatMentionItem[]>([]);
   const [recentMentions, setRecentMentions] = useState<string[]>(() => {
     try {
@@ -286,7 +292,16 @@ const AiChat = (props: AiChatProps) => {
       return;
     }
     listSkills()
-      .then((items) => setSkillOptions(items))
+      .then((items) =>
+        // 阶段 4b：同一次查询同时返回 skill 与 doc（后端按 asset_type 区分），这里映射为候选的
+        // type，使 @skill/ / @doc/ 两个前缀都能命中同一批数据
+        setSkillOptions(
+          items.map((item: any) => ({
+            ...item,
+            type: item.assetType === 'doc' ? 'doc' : 'skill'
+          }))
+        )
+      )
       .catch(() => setSkillOptions([]));
   }, [config?.skillEnable]);
 
@@ -332,12 +347,32 @@ const AiChat = (props: AiChatProps) => {
     if (columnQuery) {
       return columnOptions;
     }
-    // provider 5（阶段 4a）：团队 Skill——输入 @skill- 时只给 skill 候选
-    if (mentionQuery.trim().toLowerCase().startsWith('skill-')) {
-      return skillOptions.map((item) => ({
-        ...item,
-        group: l('datastudio.aiChat.mention.groupSkill')
-      }));
+    // provider 5（阶段 4a 的 skill / 阶段 4b 扩展的 doc）：输入 @skill/ / @doc/ 时只给对应资产候选
+    // 阶段 4b 补：@table/<表名> 与旧语法 @表名 等价，但显式前缀在「表名与 skill 名相同」时
+    // 可消除歧义。此处只影响候选过滤：输入 @table/ 时只给表候选。
+    // 2026-10-06：分隔符由「连字符」统一为「斜杠」（名字本身允许连字符，@skill/dw-sql-review
+    // 比 @skill-dw-sql-review 更易切分）；但仍兼容旧写法 @skill- / @doc- / @table-。
+    const assetQuery = mentionQuery.trim().toLowerCase();
+    const assetPrefix = /^doc[-/]/.test(assetQuery)
+      ? 'doc'
+      : /^skill[-/]/.test(assetQuery)
+        ? 'skill'
+        : /^table[-/]/.test(assetQuery)
+          ? 'table'
+          : '';
+    if (assetPrefix) {
+      // ⚠️ 2026-10-06 修复（UAT 反馈）：候选来源不能一律取 skillOptions——
+      // skillOptions 只装 /api/skill/list 返回的 skill / doc 资产，**根本没有 table**，
+      // 所以 @table/ 恒为空（"输入 @table/ 不出任何表候选"）。
+      // 表候选来自 provider 1（当前 schema 的 tables），即上面的 list；skill / doc 才取 skillOptions。
+      const source = assetPrefix === 'table' ? list : skillOptions;
+      const group =
+        assetPrefix === 'table'
+          ? l('datastudio.aiChat.mention.groupTable')
+          : l('datastudio.aiChat.mention.groupSkill');
+      return source
+        .filter((item) => item.type === assetPrefix)
+        .map((item) => ({ ...item, group }));
     }
     return list;
     // mentionOpen 作为依赖：每次打开浮层都重新读取最新的选中片段
@@ -347,11 +382,19 @@ const AiChat = (props: AiChatProps) => {
   /** 过滤 + 排序：最近用过 > 前缀匹配 > 其余 */
   const filteredMentions = useMemo(() => {
     const q = mentionQuery.trim().toLowerCase();
-    // 阶段 4a：@skill-<名> —— 前缀之后才是 skill 名，且此时只保留 skill 候选
-    if (q.startsWith('skill-')) {
-      const skillKey = q.slice('skill-'.length);
+    // 阶段 4a 的 @skill/<名> / 4b 的 @doc/<名> / 4b 补充的 @table/<表名>——
+    // 前缀之后才是名称，此时只保留对应类型的候选（旧分隔符「-」同样识别）
+    const assetPrefix = /^doc[-/]/.test(q)
+      ? 'doc'
+      : /^skill[-/]/.test(q)
+        ? 'skill'
+        : /^table[-/]/.test(q)
+          ? 'table'
+          : '';
+    if (assetPrefix) {
+      const assetKey = q.slice(assetPrefix.length + 1);
       return mentionCandidates
-        .filter((c) => c.type === 'skill' && c.name?.toLowerCase().includes(skillKey))
+        .filter((c) => c.type === assetPrefix && c.name?.toLowerCase().includes(assetKey))
         .slice(0, 20);
     }
     const matched = q
@@ -384,13 +427,28 @@ const AiChat = (props: AiChatProps) => {
       prev.length > 0
         ? prev.filter((m) => {
             // 字段引用的 token 是 @表名.字段名，只比对表名会误删同名表的其它字段引用；
-            // 阶段 4a：skill 的 token 是 @skill-<名>
+            // 阶段 4a：skill 的 token 是 @skill/<名>（2026-10-06 起），旧写法 @skill-<名> 仍视为引用
             const token =
               m.type === 'column'
                 ? `@${m.name}.${m.columnName}`
                 : m.type === 'skill'
-                  ? `@skill-${m.name}`
-                  : `@${m.name}`;
+                  ? `@skill/${m.name}`
+                  : m.type === 'doc'
+                    ? `@doc/${m.name}`
+                    : `@${m.name}`;
+            // 阶段 4b 补：table 类型有三种合法 token——旧语法 `@表名` 与显式前缀 `@table-表名`
+            // / `@table/表名`，任一仍存在于输入框即视为被引用（否则用前缀选中后会被这里误删）
+            if (m.type === 'table') {
+              return (
+                value.includes(`@${m.name}`) ||
+                value.includes(`@table-${m.name}`) ||
+                value.includes(`@table/${m.name}`)
+              );
+            }
+            if (m.type === 'skill' || m.type === 'doc') {
+              const legacy = `@${m.type}-${m.name}`;
+              return value.includes(token) || value.includes(legacy);
+            }
             return value.includes(token);
           })
         : prev
@@ -411,12 +469,20 @@ const AiChat = (props: AiChatProps) => {
 
   /** 选中候选：把 {@code @query} 替换为 {@code @name}，并记录为已引用 */
   const pickMention = (item: AiChatMentionItem) => {
+    // 阶段 4b 补：以 @table/ 前缀输入时生成 `@table/<表名>`；旧语法（直接 @ 选表）仍生成
+    // `@<表名>`——保证 C2「与迭代前完全一致」这条兼容性红线不被破坏。
+    // 2026-10-06：分隔符统一为斜杠，选中后一律生成新语法；手打旧语法（连字符）后端仍解析。
+    const viaTablePrefix = /^table[-/]/.test(mentionQuery.trim().toLowerCase());
     const token =
       item.type === 'column'
         ? `@${item.name}.${item.columnName}`
         : item.type === 'skill'
-          ? `@skill-${item.name}`
-          : `@${item.name}`;
+          ? `@skill/${item.name}`
+          : item.type === 'doc'
+            ? `@doc/${item.name}`
+            : item.type === 'table' && viaTablePrefix
+              ? `@table/${item.name}`
+              : `@${item.name}`;
     setInputValue(inputValue.replace(/@[^\s@]*$/, `${token} `));
     setMentions((prev) =>
       prev.some(
@@ -448,10 +514,12 @@ const AiChat = (props: AiChatProps) => {
       const end: number = el.selectionEnd ?? 0;
       // 光标贴着 token（选中态除外）：向前找 @token 头，向后吸收残余，保证整块删除
       if (start === end && start > 0) {
-        const head = /@[A-Za-z0-9_.]+$/.exec(inputValue.slice(0, start));
+        // 2026-10-06：字符集补 `-` 与 `/`，否则 @skill/dw-sql-review 这种 token 只能删到分隔符为止，
+        // 退格会变成逐字符删（原子引用体验破损）
+        const head = /@[A-Za-z0-9_./-]+$/.exec(inputValue.slice(0, start));
         // 孤零零一个 @ 保持默认逐字符删除
         if (head && head[0].length > 1) {
-          const tail = /^[A-Za-z0-9_.]*/.exec(inputValue.slice(end))?.[0] ?? '';
+          const tail = /^[A-Za-z0-9_./-]*/.exec(inputValue.slice(end))?.[0] ?? '';
           const cut = start - head[0].length;
           const nextValue =
             inputValue.slice(0, cut) + inputValue.slice(end + tail.length);
@@ -690,12 +758,23 @@ const AiChat = (props: AiChatProps) => {
   /** 阶段 2c-0：回传写语句执行确认结果（确认即执行；拒绝 / 超时则不执行） */
   const handleWriteConfirm = async (approve: boolean) => {
     const current = writeConfirm;
+    // 阶段 4b：删除类确认需带手输名称（后端校验一致才执行）——先取出再清空本地状态
+    const typedName = confirmTypedName;
     setWriteConfirm(null);
+    setConfirmTypedName('');
     if (!current?.runId) {
       return;
     }
-    await confirmAiChat(current.runId, approve);
+    await confirmAiChat(current.runId, approve, typedName || undefined);
   };
+
+  /**
+   * 阶段 4b：本次确认是否为 **skill 类**（写 skill 文件 / 删除 skill）。
+   *
+   * <p>「写确认」这条通道从 2c-0 起是给 SQL 用的；4b 的 skill 写工具复用了同一通道，后端会
+   * 额外下发 {@code kind}。缺省或 {@code kind='sql'} 走原有 SQL 渲染（兼容旧后端）。
+   */
+  const isSkillConfirm = !!writeConfirm?.kind && writeConfirm.kind !== 'sql';
 
   /**
    * 阶段 2b：对编辑区选中片段发起 Fix（基于最近执行报错）/ Rewrite（综合优化）。
@@ -1058,12 +1137,17 @@ const AiChat = (props: AiChatProps) => {
           size={'small'}
           style={{ minWidth: 170 }}
           placeholder={l('datastudio.aiChat.datasource')}
-          value={databaseId}
-          onChange={(value) => setDatasourceId(value)}
+          // 阶段 4b 修复（缺陷 1）：value 与 option 的 id 必须同类型。
+          // 编辑器侧（RunToolbar/SelectDb.tsx 的 convertValue）把 databaseId 以**字符串**回写
+          // tab params，而 options 用的是数字 item.id → antd 严格比较失败后会**回退渲染原始值**，
+          // 表现为「代码编辑区选的是 hive-lpods，AI Chat 面板却显示 21」。这里统一按字符串比较，
+          // 回传时再转回数字，保持 setDatasourceId 的 number 语义不变。
+          value={databaseId === undefined || databaseId === null ? undefined : String(databaseId)}
+          onChange={(value) => setDatasourceId(value === undefined ? undefined : Number(value))}
           optionFilterProp={'label'}
           options={(datasourceList ?? []).map((item: any) => ({
             label: item.name,
-            value: item.id
+            value: String(item.id)
           }))}
         />
         {metaDataAvailable && (
@@ -1455,9 +1539,17 @@ const AiChat = (props: AiChatProps) => {
         onAccept={handleP2bAccept}
         onReject={() => setP2bDiff(null)}
       />
-      {/* 阶段 2c-0：写语句（DML/DDL）执行前的二次确认——后端挂起等待，未确认绝不执行 */}
+      {/*
+        阶段 2c-0：写语句（DML/DDL）执行前的二次确认——后端挂起等待，未确认绝不执行。
+        阶段 4b：本通道被 skill 写工具复用（kind=skill_file / skill_delete），故标题与按钮
+        文案按 kind 调整；内容区的分支渲染见下方。
+      */}
       <Modal
-        title={l('datastudio.aiChat.writeConfirm.title')}
+        title={
+          isSkillConfirm
+            ? writeConfirm?.title ?? l('datastudio.aiChat.confirm.skillTitle')
+            : l('datastudio.aiChat.writeConfirm.title')
+        }
         open={!!writeConfirm}
         maskClosable={false}
         onCancel={() => handleWriteConfirm(false)}
@@ -1466,23 +1558,102 @@ const AiChat = (props: AiChatProps) => {
             <Button onClick={() => handleWriteConfirm(false)}>
               {l('datastudio.aiChat.writeConfirm.reject')}
             </Button>
-            <Button danger type={'primary'} onClick={() => handleWriteConfirm(true)}>
-              {l('datastudio.aiChat.writeConfirm.accept')}
+            <Button
+              danger
+              type={'primary'}
+              // 阶段 4b：删除类确认要求手输名称与后端下发的目标名完全一致才能点击（防误删）
+              disabled={
+                !!writeConfirm?.requireTypedName &&
+                confirmTypedName.trim() !== (writeConfirm?.targetName ?? '')
+              }
+              onClick={() => handleWriteConfirm(true)}
+            >
+              {writeConfirm?.kind === 'skill_delete'
+                ? l('datastudio.aiChat.confirm.deleteAccept')
+                : l('datastudio.aiChat.writeConfirm.accept')}
             </Button>
           </Space>
         }
       >
-        <div style={{ marginBottom: 8 }}>
-          <Alert
-            type={writeConfirm?.sqlType === 'DDL' ? 'error' : 'warning'}
-            showIcon
-            message={
-              writeConfirm?.sqlType === 'DDL'
-                ? l('datastudio.aiChat.writeConfirm.ddlTip')
-                : l('datastudio.aiChat.writeConfirm.dmlTip')
-            }
-          />
-        </div>
+        {/* 阶段 4b：按 kind 分支。此前无分支 → 用 SQL 的字段渲染 skill 载荷，屏幕上就只剩
+            「空白的语句内容 + 语句类型 UNKNOWN」（sqlType 由后端在无 risk 时置为该字面量）。 */}
+        {isSkillConfirm ? (
+          <>
+            <div style={{ marginBottom: 8 }}>
+              <Alert
+                type={writeConfirm?.kind === 'skill_delete' ? 'error' : 'info'}
+                showIcon
+                message={
+                  writeConfirm?.kind === 'skill_delete'
+                    ? l('datastudio.aiChat.confirm.skillDeleteTip')
+                    : l('datastudio.aiChat.confirm.skillFileTip')
+                }
+              />
+            </div>
+            <div style={{ marginBottom: 8, fontSize: 12, lineHeight: '22px' }}>
+              <Typography.Text type={'secondary'}>
+                {writeConfirm?.kind === 'skill_delete'
+                  ? l('datastudio.aiChat.confirm.skillName')
+                  : l('datastudio.aiChat.confirm.skillTarget')}
+              </Typography.Text>
+              <Typography.Text code>{writeConfirm?.targetName ?? '-'}</Typography.Text>
+              {writeConfirm?.kind === 'skill_file' && writeConfirm?.relativePath ? (
+                <>
+                  <Typography.Text type={'secondary'}>
+                    {l('datastudio.aiChat.confirm.skillPath')}
+                  </Typography.Text>
+                  <Typography.Text code>{writeConfirm.relativePath}</Typography.Text>
+                </>
+              ) : null}
+              {writeConfirm?.kind === 'skill_file' && !writeConfirm?.beforeContent ? (
+                <Typography.Text type={'secondary'}>
+                  {l('datastudio.aiChat.confirm.newFileHint')}
+                </Typography.Text>
+              ) : null}
+            </div>
+            {writeConfirm?.kind === 'skill_delete' && writeConfirm?.requireTypedName ? (
+              <div style={{ marginBottom: 8, fontSize: 12 }}>
+                <Typography.Text type={'secondary'}>
+                  {l('datastudio.aiChat.confirm.typeNameHint')}
+                </Typography.Text>
+                <Input
+                  size={'small'}
+                  style={{ width: 240, marginLeft: 8 }}
+                  value={confirmTypedName}
+                  placeholder={writeConfirm?.targetName}
+                  onChange={(e) => setConfirmTypedName(e.target.value)}
+                />
+              </div>
+            ) : null}
+            {writeConfirm?.kind === 'skill_file' ? (
+              <pre
+                style={{
+                  maxHeight: '40vh',
+                  overflow: 'auto',
+                  background: 'rgba(0,0,0,0.04)',
+                  padding: 8,
+                  borderRadius: 4,
+                  margin: 0,
+                  whiteSpace: 'pre-wrap'
+                }}
+              >
+                {writeConfirm?.afterContent ?? ''}
+              </pre>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <div style={{ marginBottom: 8 }}>
+              <Alert
+                type={writeConfirm?.sqlType === 'DDL' ? 'error' : 'warning'}
+                showIcon
+                message={
+                  writeConfirm?.sqlType === 'DDL'
+                    ? l('datastudio.aiChat.writeConfirm.ddlTip')
+                    : l('datastudio.aiChat.writeConfirm.dmlTip')
+                }
+              />
+            </div>
         {/* 阶段 2c-1：变更风险块（语句类型 / 目标对象 / AI 估计影响）——
             「AI 估计」必须显式标注，不得渲染成精确值 */}
         <div style={{ marginBottom: 8, fontSize: 12, lineHeight: '22px' }}>
@@ -1544,7 +1715,9 @@ const AiChat = (props: AiChatProps) => {
           }}
         >
           {writeConfirm?.sql}
-        </pre>
+            </pre>
+          </>
+        )}
       </Modal>
     </div>
   );

@@ -47,4 +47,12 @@ public class AiChatConfirmRequest {
 
     /** 服务端填充的当前用户 id（鉴权：仅创建者可确认/取消） */
     private Integer userId;
+
+    /**
+     * 阶段 4b：<b>强化确认</b>时用户手动输入的目标名称（删除 skill / doc 等破坏性操作用）。
+     *
+     * <p>后端会把它与此前下发确认帧时的目标名比对——<b>不能只靠前端禁用按钮</b>，
+     * 否则绕开 UI 直接调接口就能跳过这道闸。
+     */
+    private String confirmName;
 }
