@@ -734,6 +734,12 @@ export default {
   'pages.skill.create': 'Create Skill',
   'pages.skill.save': 'Save Skill',
   'pages.skill.createTitle': 'Create Skill',
+  // Stage 4b (UAT R2): knowledge doc shares the same table & permission model as skill
+  'pages.skill.createDoc': 'New knowledge doc',
+  'pages.skill.createDocTitle': 'Create knowledge doc',
+  'pages.skill.assetType': 'Type',
+  'pages.skill.typeSkill': 'Skill',
+  'pages.skill.typeDoc': 'Doc',
   'pages.skill.editTitle': 'Edit Skill: ',
   'pages.skill.name': 'Name',
   'pages.skill.nameRequired': 'Please enter a name',

@@ -669,6 +669,13 @@ export default {
   'pages.skill.create': '新建 Skill',
   'pages.skill.save': '保存 Skill',
   'pages.skill.createTitle': '新建 Skill',
+  // 阶段 4b 补（UAT R2）：知识文档（doc）——与 skill 共用一张表与权限模型，
+  // 目录落在 docs/<name>/、主文件为 DOC.md
+  'pages.skill.createDoc': '新建知识文档',
+  'pages.skill.createDocTitle': '新建知识文档',
+  'pages.skill.assetType': '类型',
+  'pages.skill.typeSkill': 'Skill',
+  'pages.skill.typeDoc': '文档',
   'pages.skill.editTitle': '编辑 Skill：',
   'pages.skill.name': '名称',
   'pages.skill.nameRequired': '请输入名称',

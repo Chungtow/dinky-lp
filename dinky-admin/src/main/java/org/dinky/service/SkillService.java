@@ -64,7 +64,21 @@ public interface SkillService extends ISuperService<Skill> {
      *     调用时传 {@code AiToolContext#getUserId()}——那里 Sa-Token 上下文已丢失，不能依赖 {@code StpUtil}
      * @return 新建的 skill
      */
+    /**
+     * 新建资产（默认 {@code asset_type='skill'}）。
+     */
     Skill create(String name, String description, Integer actorId);
+
+    /**
+     * 新建资产（阶段 4b 补：支持 {@code asset_type='doc'}，即业务背景知识文档）。
+     *
+     * <p>两类资产共用 {@code dinky_skill} 表与同一套可见性 / 权限模型，仅目录（{@code skills/} 与
+     * {@code docs/}）和主文件名（{@code SKILL.md} 与 {@code DOC.md}）不同——映射见
+     * {@code SkillDocParser#renderDirName} 与 {@code #renderMainFileName}。
+     *
+     * @param assetType {@code skill} 或 {@code doc}；空值按 {@code skill} 处理（兼容旧调用方）
+     */
+    Skill create(String name, String description, String assetType, Integer actorId);
 
     /**
      * 保存 {@code SKILL.md} 正文（<b>仅属主</b>）：写文件 → 重新解析 frontmatter → 回写

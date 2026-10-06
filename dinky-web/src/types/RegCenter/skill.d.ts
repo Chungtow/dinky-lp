@@ -48,6 +48,11 @@ export type SkillDetail = {
 export type SkillCreateParams = {
   name: string;
   description: string;
+  /**
+   * 阶段 4b 补：资产类型——`skill`（默认）或 `doc`（业务背景知识文档）。
+   * 二者共用后端同一张表与同一套权限模型，仅存放目录（skills/ 与 docs/）和主文件名不同。
+   */
+  assetType?: 'skill' | 'doc';
 };
 
 /** 保存 skill 正文入参 */

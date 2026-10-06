@@ -1614,7 +1614,11 @@ public class AiChatServiceImpl implements AiChatService {
      */
     private void appendColumnDetail(
             StringBuilder target, Integer databaseId, String schemaName, String tableName, String columnName) {
-        if (StrUtil.isBlank(columnName) || StrUtil.isBlank(tableName)) {
+        // 阶段 4b 修复（UAT R6）：未绑定数据源时直接跳过。
+        // @表.字段 引用分支在无 databaseId 时仍会走到这里，而 listColumns 必须依赖数据源——
+        // 不拦会抛异常或做空查询，与「未绑定数据源时 @skill- / @doc- 正文仍照常注入」的既有行为
+        // 不一致（同类保护见 buildSchemaContext 的提前返回与 resolveMentions）。
+        if (databaseId == null || StrUtil.isBlank(columnName) || StrUtil.isBlank(tableName)) {
             return;
         }
         try {

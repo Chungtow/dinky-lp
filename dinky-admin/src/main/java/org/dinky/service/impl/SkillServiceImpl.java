@@ -19,7 +19,6 @@
 
 package org.dinky.service.impl;
 
-import org.dinky.ai.skill.MarkdownSkillRenderer;
 import org.dinky.ai.skill.SkillDoc;
 import org.dinky.ai.skill.SkillDocParser;
 import org.dinky.ai.skill.SkillPathGuard;
@@ -128,9 +127,21 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
     @Override
     @Transactional(rollbackFor = Exception.class)
     public Skill create(String name, String description, Integer actorId) {
+        return create(name, description, SkillDocParser.ASSET_TYPE_SKILL, actorId);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Skill create(String name, String description, String assetType, Integer actorId) {
+        String type = SkillDocParser.ASSET_TYPE_DOC.equalsIgnoreCase(StrUtil.trimToEmpty(assetType))
+                ? SkillDocParser.ASSET_TYPE_DOC
+                : SkillDocParser.ASSET_TYPE_SKILL;
+        boolean isDoc = SkillDocParser.ASSET_TYPE_DOC.equals(type);
+        String label = isDoc ? "知识文档" : "skill";
+
         String skillName = StrUtil.trimToEmpty(name);
         if (!SkillDocParser.NAME_PATTERN.matcher(skillName).matches()) {
-            throw new BusException("skill 名不合法：" + skillName + "（要求 ^[a-z0-9][a-z0-9-]{1,63}$）");
+            throw new BusException(label + " 名不合法：" + skillName + "（要求 ^[a-z0-9][a-z0-9-]{1,63}$）");
         }
         String desc = StrUtil.trimToEmpty(description);
         if (StrUtil.isBlank(desc)) {
@@ -143,25 +154,28 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
         long exists = count(
                 new LambdaQueryWrapper<Skill>().eq(Skill::getName, skillName).eq(Skill::getOwnerId, me));
         if (exists > 0) {
-            throw new BusException("同名 skill 已存在：" + skillName);
+            throw new BusException("同名" + label + "已存在：" + skillName);
         }
 
-        // ① 目录：/skills/<name>/（createFolderOrGet 幂等，父目录不存在会一并创建）
-        TreeNodeDTO skillsDir = resourcesService.createFolderOrGet(-1, SkillDocParser.SKILLS_DIR, "AI Skills 根目录");
-        TreeNodeDTO skillDir =
-                resourcesService.createFolderOrGet(Convert.toInt(skillsDir.getId(), -1), skillName, desc);
+        // ① 目录：/skills/<name>/ 或 /docs/<name>/（两类资产目录分离，故同名不冲突；幂等创建父目录）
+        String rootDir = SkillDocParser.rootDirOf(type);
+        String mainFileName = SkillDocParser.mainFileOf(type);
+        TreeNodeDTO root = resourcesService.createFolderOrGet(-1, rootDir, isDoc ? "AI 知识文档根目录" : "AI Skills 根目录");
+        TreeNodeDTO skillDir = resourcesService.createFolderOrGet(Convert.toInt(root.getId(), -1), skillName, desc);
         String dirFullName = StrUtil.nullToEmpty(Convert.toStr(skillDir.getPath()));
 
-        // ② SKILL.md：先建资源记录，再写内容（writeContent 负责写文件 + 维护 size + 失效缓存）
-        String content = SkillDocParser.buildTemplate(skillName, desc);
+        // ② 主文件（SKILL.md / DOC.md）：先建资源记录，再写内容（writeContent 负责写文件 + 维护 size + 失效缓存）
+        String content = isDoc
+                ? SkillDocParser.buildDocTemplate(skillName, desc)
+                : SkillDocParser.buildTemplate(skillName, desc);
         Resources mainFile = new Resources();
         mainFile.setPid(Convert.toInt(skillDir.getId(), -1));
-        mainFile.setFileName(SkillDocParser.SKILL_MAIN_FILE);
+        mainFile.setFileName(mainFileName);
         mainFile.setIsDirectory(false);
         mainFile.setType(0);
-        mainFile.setFullName(mainFilePath(dirFullName));
+        mainFile.setFullName(mainFilePath(dirFullName, mainFileName));
         mainFile.setSize(0L);
-        mainFile.setDescription("skill 主文件（frontmatter + 正文）");
+        mainFile.setDescription(label + "主文件（frontmatter + 正文）");
         resourcesService.save(mainFile);
         resourcesService.writeContent(mainFile.getId(), content);
 
@@ -175,11 +189,11 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
         skill.setVisibility(VISIBILITY_PRIVATE);
         skill.setEnabled(true);
         skill.setSource(SOURCE_LOCAL);
-        skill.setAssetType(MarkdownSkillRenderer.ASSET_TYPE_SKILL);
+        skill.setAssetType(type);
         skill.setVersion(1);
         skill.setContentHash(SecureUtil.sha256(content));
         save(skill);
-        log.info("Skill created: name={}, dir={}, owner={}", skillName, dirFullName, me);
+        log.info("Asset created: name={}, dir={}, owner={}, assetType={}", skillName, dirFullName, me, type);
         return skill;
     }
 

@@ -94,7 +94,11 @@ public class SkillController {
     @SaCheckPermission(PermissionConstants.REGISTRATION_RESOURCE_UPLOAD)
     public Result<Skill> create(@RequestBody SkillCreateDTO skillCreateDTO) {
         return Result.succeed(skillService.create(
-                skillCreateDTO.getName(), skillCreateDTO.getDescription(), StpUtil.getLoginIdAsInt()));
+                skillCreateDTO.getName(),
+                skillCreateDTO.getDescription(),
+                // 阶段 4b 补（UAT R2）：assetType 为空按 skill 处理，兼容旧前端
+                skillCreateDTO.getAssetType(),
+                StpUtil.getLoginIdAsInt()));
     }
 
     @PostMapping("/save")

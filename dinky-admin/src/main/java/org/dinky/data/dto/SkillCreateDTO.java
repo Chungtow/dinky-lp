@@ -47,4 +47,13 @@ public class SkillCreateDTO implements Serializable {
             example = "数仓 SQL 评审批量规范",
             notes = "一句话说明（会随清单注入模型，用于 @ 候选）")
     private String description;
+
+    @ApiModelProperty(
+            value = "AssetType",
+            dataType = "String",
+            example = "skill",
+            notes = "阶段 4b 补：资产类型——skill（默认）或 doc（业务背景知识文档）。"
+                    + "二者共用 dinky_skill 表与同一套可见性 / 权限模型，仅目录（skills/ 与 docs/）"
+                    + "和主文件名（SKILL.md 与 DOC.md）不同")
+    private String assetType;
 }
