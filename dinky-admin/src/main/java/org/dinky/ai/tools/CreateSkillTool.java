@@ -25,13 +25,17 @@ import org.dinky.ai.AiToolContext;
 import org.dinky.ai.AiToolResult;
 import org.dinky.ai.AiToolSpec;
 import org.dinky.ai.ConfirmPayload;
+import org.dinky.ai.skill.SkillBrief;
 import org.dinky.ai.skill.SkillDocParser;
 import org.dinky.data.exception.BusException;
 import org.dinky.data.model.Skill;
 import org.dinky.data.model.SystemConfiguration;
 import org.dinky.service.SkillService;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 
 import org.springframework.stereotype.Component;
 
@@ -141,6 +145,11 @@ public class CreateSkillTool implements AiTool {
             if (StrUtil.isNotBlank(content)) {
                 skillService.writeFile(created.getId(), SkillDocParser.SKILL_MAIN_FILE, content, context.getUserId());
             }
+            // ③ 阶段 4b 修复：把新建的 skill 立即并入本对话的可见快照。
+            //    否则模型紧接着调 write_skill_file 写 references/ 时会被判「不可见」（快照是对话
+            //    开始时算好的白名单），表现为「skill 创建成功、附件却写不进去」，并在主文件里
+            //    留下指向不存在附件的坏引用。
+            appendToVisibleSkills(context, created);
             return AiToolResult.builder()
                     .success(true)
                     .content("已创建 skill：" + name + "（目录 " + created.getDirFullName() + "）。"
@@ -164,6 +173,44 @@ public class CreateSkillTool implements AiTool {
                     .writeAttempted(true)
                     .build();
         }
+    }
+
+    /**
+     * 阶段 4b 修复：把刚创建的 skill 并入<b>本对话</b>的可见快照。
+     *
+     * <p><b>为什么必须做</b>：{@link AiToolContext#getVisibleSkills()} 是<b>对话开始时</b>由请求线程
+     * 一次性算好的白名单，工具侧只做集合判定、<b>不查库</b>（工具循环跑在异步线程池，租户 /
+     * Sa-Token 上下文已丢失——见 {@code SkillToolSupport} 类注释）。若不在此追加，模型在<b>同一轮</b>
+     * 里紧接着调用 {@code write_skill_file} 写 {@code references/} 时会被判为「未找到可见的 skill」，
+     * 现象是「创建成功、附件却写不进去」，且主文件会留下指向不存在附件的坏引用。
+     *
+     * <p>实现用「复制后整体替换」而非直接 {@code add}：字段默认值是
+     * {@code Collections.emptyList()}（不可变），直接 add 会抛 UnsupportedOperationException。
+     */
+    private void appendToVisibleSkills(AiToolContext context, Skill skill) {
+        if (context == null || skill == null) {
+            return;
+        }
+        List<SkillBrief> current = context.getVisibleSkills();
+        List<SkillBrief> merged = new ArrayList<>(current == null ? Collections.emptyList() : current);
+        boolean exists = false;
+        for (SkillBrief brief : merged) {
+            if (skill.getName().equals(brief.getName())) {
+                exists = true;
+                break;
+            }
+        }
+        if (!exists) {
+            SkillBrief brief = new SkillBrief();
+            brief.setId(skill.getId());
+            brief.setName(skill.getName());
+            brief.setDescription(skill.getDescription());
+            brief.setAssetType(skill.getAssetType());
+            brief.setDirFullName(skill.getDirFullName());
+            merged.add(brief);
+        }
+        context.setVisibleSkills(merged);
+        log.info("Visible skill snapshot extended after create: name={}, total={}", skill.getName(), merged.size());
     }
 
     /** 生成确认框里展示的「将要写入的内容」（模板或模型给的内容） */

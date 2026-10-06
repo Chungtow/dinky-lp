@@ -30,7 +30,9 @@ import org.dinky.data.exception.BusException;
 import org.dinky.data.model.SystemConfiguration;
 import org.dinky.service.SkillService;
 
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 
 import org.springframework.stereotype.Component;
 
@@ -124,6 +126,13 @@ public class DeleteSkillTool implements AiTool {
 
         try {
             skillService.removeSkill(brief.getId(), context.getUserId());
+            // 阶段 4b 修复：删除后同步移出本对话的可见快照（与 create_skill 的追加对称），
+            // 避免模型继续按旧快照 read/write 一个已经被删掉的 skill。
+            if (context.getVisibleSkills() != null) {
+                List<SkillBrief> remaining = new ArrayList<>(context.getVisibleSkills());
+                remaining.removeIf(one -> name.equals(one.getName()));
+                context.setVisibleSkills(remaining);
+            }
             return AiToolResult.builder()
                     .success(true)
                     .content("已删除 " + name + "（目录、文件与元数据均已移除）")
