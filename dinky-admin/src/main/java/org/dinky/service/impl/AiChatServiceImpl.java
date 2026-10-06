@@ -1138,9 +1138,16 @@ public class AiChatServiceImpl implements AiChatService {
         return createIntent ? PromptStore.SKILL_RULES : "";
     }
 
-    /** 手打引用兜底的匹配模式：{@code @skill-<名>} / {@code @doc-<名>}（名字规则同 SkillDocParser） */
+    /**
+     * 手打引用兜底的匹配模式：{@code @skill-<名>} / {@code @doc-<名>} / {@code @table-<表名>}。
+     *
+     * <p>名字字符类比 skill / doc 的命名规则（{@code ^[a-z0-9][a-z0-9-]{1,63}$}）更宽——表名常含
+     * 下划线与大写（{@code dinky_task} / {@code ODS_ORDER}），故统一用 {@code [A-Za-z0-9_]}。
+     * 有前缀约束在，放宽不会误匹配。旧语法 {@code @表名} 不在此兜底（必须由前端登记，否则无法
+     * 确定所属 schema），见 {@link #resolveMentions}。
+     */
     private static final Pattern TEXT_MENTION_PATTERN =
-            Pattern.compile("@(skill|doc)-([a-z0-9][a-z0-9-]{1,63})", Pattern.CASE_INSENSITIVE);
+            Pattern.compile("@(skill|doc|table)-([A-Za-z0-9_]{1,64})", Pattern.CASE_INSENSITIVE);
 
     /**
      * 解析本次请求的 {@code @} 引用——<b>兼容「点选」与「手打」两种用法</b>（阶段 4b 修复）。
@@ -1162,7 +1169,9 @@ public class AiChatServiceImpl implements AiChatService {
         }
         Matcher matcher = TEXT_MENTION_PATTERN.matcher(message);
         while (matcher.find()) {
-            String type = "doc".equalsIgnoreCase(matcher.group(1)) ? MentionType.DOC : MentionType.SKILL;
+            String raw = matcher.group(1).toLowerCase();
+            String type =
+                    "doc".equals(raw) ? MentionType.DOC : "table".equals(raw) ? MentionType.TABLE : MentionType.SKILL;
             String name = matcher.group(2);
             boolean exists = result.stream()
                     .anyMatch(m -> type.equalsIgnoreCase(m.getType()) && name.equalsIgnoreCase(m.getName()));

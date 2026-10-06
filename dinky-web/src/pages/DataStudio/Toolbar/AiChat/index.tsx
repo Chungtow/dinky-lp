@@ -348,11 +348,15 @@ const AiChat = (props: AiChatProps) => {
       return columnOptions;
     }
     // provider 5（阶段 4a 的 skill / 阶段 4b 扩展的 doc）：输入 @skill- / @doc- 时只给对应资产候选
+    // 阶段 4b 补：@table-<表名> 与旧语法 @表名 等价，但显式前缀在「表名与 skill 名相同」时
+    // 可消除歧义。此处只影响候选过滤：输入 @table- 时只给表候选。
     const assetPrefix = mentionQuery.trim().toLowerCase().startsWith('doc-')
       ? 'doc'
       : mentionQuery.trim().toLowerCase().startsWith('skill-')
         ? 'skill'
-        : '';
+        : mentionQuery.trim().toLowerCase().startsWith('table-')
+          ? 'table'
+          : '';
     if (assetPrefix) {
       return skillOptions
         .filter((item) => item.type === assetPrefix)
@@ -369,8 +373,15 @@ const AiChat = (props: AiChatProps) => {
   /** 过滤 + 排序：最近用过 > 前缀匹配 > 其余 */
   const filteredMentions = useMemo(() => {
     const q = mentionQuery.trim().toLowerCase();
-    // 阶段 4a 的 @skill-<名> / 阶段 4b 的 @doc-<名> —— 前缀之后才是名称，且此时只保留对应类型候选
-    const assetPrefix = q.startsWith('doc-') ? 'doc' : q.startsWith('skill-') ? 'skill' : '';
+    // 阶段 4a 的 @skill-<名> / 4b 的 @doc-<名> / 4b 补充的 @table-<表名>——
+    // 前缀之后才是名称，此时只保留对应类型的候选
+    const assetPrefix = q.startsWith('doc-')
+      ? 'doc'
+      : q.startsWith('skill-')
+        ? 'skill'
+        : q.startsWith('table-')
+          ? 'table'
+          : '';
     if (assetPrefix) {
       const assetKey = q.slice(assetPrefix.length + 1);
       return mentionCandidates
@@ -416,6 +427,11 @@ const AiChat = (props: AiChatProps) => {
                   : m.type === 'doc'
                     ? `@doc-${m.name}`
                     : `@${m.name}`;
+            // 阶段 4b 补：table 类型有两种合法 token——旧语法 `@表名` 与显式前缀 `@table-表名`，
+            // 任一仍存在于输入框即视为被引用（否则用 @table- 选中后会被这里误删）
+            if (m.type === 'table') {
+              return value.includes(`@${m.name}`) || value.includes(`@table-${m.name}`);
+            }
             return value.includes(token);
           })
         : prev
@@ -436,6 +452,9 @@ const AiChat = (props: AiChatProps) => {
 
   /** 选中候选：把 {@code @query} 替换为 {@code @name}，并记录为已引用 */
   const pickMention = (item: AiChatMentionItem) => {
+    // 阶段 4b 补：以 @table- 前缀输入时生成 `@table-<表名>`；旧语法（直接 @ 选表）仍生成
+    // `@<表名>`——保证 C2「与迭代前完全一致」这条兼容性红线不被破坏。
+    const viaTablePrefix = mentionQuery.trim().toLowerCase().startsWith('table-');
     const token =
       item.type === 'column'
         ? `@${item.name}.${item.columnName}`
@@ -443,7 +462,9 @@ const AiChat = (props: AiChatProps) => {
           ? `@skill-${item.name}`
           : item.type === 'doc'
             ? `@doc-${item.name}`
-            : `@${item.name}`;
+            : item.type === 'table' && viaTablePrefix
+              ? `@table-${item.name}`
+              : `@${item.name}`;
     setInputValue(inputValue.replace(/@[^\s@]*$/, `${token} `));
     setMentions((prev) =>
       prev.some(
