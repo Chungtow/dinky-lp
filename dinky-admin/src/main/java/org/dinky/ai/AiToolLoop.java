@@ -54,10 +54,26 @@ import lombok.extern.slf4j.Slf4j;
 @RequiredArgsConstructor
 public class AiToolLoop {
 
-    /** 单轮最多执行的工具数（模型可能一次返回多个 tool_calls） */
-    private static final int MAX_CALLS_PER_ROUND = 3;
-    /** 一次对话累计工具调用上限 */
-    private static final int MAX_CALLS_TOTAL = 15;
+    /**
+     * 单轮最多执行的工具数（模型可能一次返回多个 tool_calls）。
+     *
+     * <p><b>为什么从 3 提到 6</b>（UAT B4 实测）：建 skill 时模型会在<b>同一轮</b>返回
+     * {@code list_skills + read_skill×3 + create_skill}（读范例 + 创建），原生 3 个的上限会把
+     * {@code create_skill} 直接截掉，模型只能下一轮重来——白耗一轮，正是"第一轮建不完、必须说
+     * 第二遍"的直接成因之一。放宽到 6 后，「探索 + 建主体」可在一轮内完成，轮数留给真正需要
+     * 串行的「写多个附件文件」。仍设硬上限：单轮调用过多会显著拖长一次 SSE 的等待，且失败回灌
+     * 的噪音更大。
+     */
+    private static final int MAX_CALLS_PER_ROUND = 6;
+    /**
+     * 一次对话累计工具调用上限。
+     *
+     * <p><b>为什么从 15 提到 40</b>：建一个带 {@code references/} 的 skill 典型调用量为
+     * {@code list_skills 1 + read_skill 1~3 + create_skill 1 + write_skill_file 2~5}；若还要按
+     * 用户要求回填表名 / 修订附件，15 很容易触顶，表现为"文件建到一半就停、要用户再说一遍"。
+     * 40 对单条消息足够宽裕，同时仍能挡住模型陷入无限试错。
+     */
+    private static final int MAX_CALLS_TOTAL = 40;
     /** 审计明细里参数与错误的字符上限 */
     private static final int LOG_TEXT_CHARS = 200;
 

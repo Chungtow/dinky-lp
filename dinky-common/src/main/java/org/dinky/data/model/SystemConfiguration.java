@@ -433,10 +433,20 @@ public class SystemConfiguration {
             .defaultValue(false)
             .note(Status.SYS_LLM_SETTINGS_TOOLSAMPLEROWSENABLE_NOTE);
 
-    /** 一次对话最多进行多少轮工具调用（一轮 = 一次完整 LLM 请求） */
+    /**
+     * 一次对话最多进行多少轮工具调用（一轮 = 一次完整 LLM 请求）。
+     *
+     * <p><b>为什么默认值从 3 提到 10</b>（UAT B4 实测）：建一个带 {@code references/} 的 skill 需要
+     * 「探查既有范例（1~3 轮）→ 建主文件（1 轮）→ 逐个写附件文件（1 轮/个）」，3 轮必然不够——实测
+     * 第 3 轮结束时模型仍在请求 {@code write_skill_file}，触发「已达上限」提示，用户被迫把同一件事
+     * 分两次说（第二轮才把 references 建出来）。10 轮可覆盖「建主体 + 3~5 个附件 + 少量修订」。
+     *
+     * <p>代价：SSE 的等待时长按轮数线性放大（超时预算估算见 {@code AiChatServiceImpl#chat}），且
+     * 模型陷入试错时的浪费更大，故不宜再放大。
+     */
     private final Configuration<Integer> llmToolCallMaxRounds = key(Status.SYS_LLM_SETTINGS_TOOLCALLMAXROUNDS)
             .intType()
-            .defaultValue(3)
+            .defaultValue(10)
             .note(Status.SYS_LLM_SETTINGS_TOOLCALLMAXROUNDS_NOTE);
 
     /** 单个工具的执行超时（秒）：元数据查询卡住时不能拖垮整个对话 */
