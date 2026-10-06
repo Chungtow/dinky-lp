@@ -1013,6 +1013,9 @@ public class AiChatServiceImpl implements AiChatService {
                 PromptStore.PLACEHOLDER_EDITOR_SQL,
                 (isExplain || isFix || isRewrite) ? "" : buildEditorContext(request));
         params.put(PromptStore.PLACEHOLDER_JOB_CONTEXT, (isFix || isRewrite) ? "" : buildJobContext(request));
+        // 阶段 4b：创建 skill 的行为规范——**按需注入**（仅当用户本次要求新建 skill 时非空）。
+        // 只有 TEXT_TO_SQL 含该占位符；对其它模板多填无害。
+        params.put(PromptStore.PLACEHOLDER_SKILL_RULES, buildSkillRules(request));
 
         // 阶段 2：Craft 仅当「管理员已开启 + 本轮显式请求」时生效，否则一律回落 Ask
         boolean isCraft = !isExplain && !isFix && !isRewrite && isCraftMode(request);
@@ -1105,6 +1108,36 @@ public class AiChatServiceImpl implements AiChatService {
      * <p>显式引用是<b>最高优先级</b>上下文：先于表清单注入，且<b>不参与</b>后续字段预算的裁剪判定。
      * 依据：中文问题配英文表名时自动召回基本失效（2026-09-26 UAT 实测），用户手动指定是唯一可靠兜底。
      */
+    /**
+     * 阶段 4b：本次请求是否需要注入「创建 skill 的行为规范」，需要则返回 {@link PromptStore#SKILL_RULES}。
+     *
+     * <p><b>为什么按需注入</b>：该规则只在「用户要新建 skill」时有意义。常驻有两个副作用——
+     * ① 无关场景（普通取数/咨询）白占上下文预算；② 未开启 skill 工具时（如生产
+     * {@code skillEnable=false}），模型看到「如何创建 skill」的规则却无工具可用，容易发起无效的
+     * 工具调用尝试。
+     *
+     * <p><b>判定故意宽松</b>（出现「skill / 技能」+ 创建类动词即注入）：宁可多注入几十 token，也不要
+     * 漏注入——漏了模型就退回「逐个研读既有 skill」的老习惯，把有限的工具轮次耗在研读上。规则第 2 条
+     * 已把「用户自己指定了参考对象 / 要求参考全部」的例外交给模型按文本处理。
+     */
+    private String buildSkillRules(AiChatRequest request) {
+        String message = StrUtil.nullToEmpty(request == null ? null : request.getMessage());
+        if (StrUtil.isBlank(message)) {
+            return "";
+        }
+        boolean mentionsSkill = StrUtil.containsIgnoreCase(message, "skill") || StrUtil.contains(message, "技能");
+        if (!mentionsSkill) {
+            return "";
+        }
+        boolean createIntent = StrUtil.contains(message, "创建")
+                || StrUtil.contains(message, "新建")
+                || StrUtil.contains(message, "建一个")
+                || StrUtil.contains(message, "建个")
+                || StrUtil.contains(message, "加一个")
+                || StrUtil.containsIgnoreCase(message, "create");
+        return createIntent ? PromptStore.SKILL_RULES : "";
+    }
+
     /** 手打引用兜底的匹配模式：{@code @skill-<名>} / {@code @doc-<名>}（名字规则同 SkillDocParser） */
     private static final Pattern TEXT_MENTION_PATTERN =
             Pattern.compile("@(skill|doc)-([a-z0-9][a-z0-9-]{1,63})", Pattern.CASE_INSENSITIVE);

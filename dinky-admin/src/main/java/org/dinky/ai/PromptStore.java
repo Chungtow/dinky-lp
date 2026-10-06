@@ -48,6 +48,32 @@ public final class PromptStore {
     public static final String PLACEHOLDER_ATTEMPT = "{{attempt}}";
     /** 阶段 2c-2：自动纠错上限（用于 {@link #TOOL_REPAIR}） */
     public static final String PLACEHOLDER_MAX_ATTEMPTS = "{{maxAttempts}}";
+    /**
+     * 阶段 4b：「创建 skill 的行为规范」区块占位符（用于 {@link #TEXT_TO_SQL}）。
+     *
+     * <p><b>按需注入</b>——仅当用户本次明确要求新建 skill 时由 {@code AiChatServiceImpl#buildSkillRules}
+     * 填入 {@link #SKILL_RULES}，其余场景注入空串。为什么条件注入而非常驻：① 规则只对创建场景有意义，
+     * 常驻白占上下文预算；② 未开启 skill 工具时（如生产 {@code skillEnable=false}），模型看到「如何创建
+     * skill」却无工具可用，容易产生无效的工具调用尝试。
+     */
+    public static final String PLACEHOLDER_SKILL_RULES = "{{skillRules}}";
+
+    /**
+     * 创建 skill 的行为规范（按需注入，见 {@link #PLACEHOLDER_SKILL_RULES}）。
+     *
+     * <p>第 1 条的动机：模型的默认习惯是「先逐个研读既有 skill 再动手」，UAT 实测一次创建会读 3 个
+     * 范例，在工具轮次有限时会把「建主体 + 写附件」挤到下一轮甚至触顶；第 3、4 条同样来自 UAT——
+     * 只建主文件不写附件、或在主文件里引用从未写成功的附件，都会产出坏资产（如 lpdw-monitor）。
+     */
+    public static final String SKILL_RULES = "\n"
+            + "## 创建 skill（本次请求相关）\n"
+            + "1. **最多参考 1 个**既有 skill 作为格式范例，然后直接创建，**不要逐个研读**现有 skill。\n"
+            + "2. 例外：若用户**显式指定**了参考对象（如「参考 xxx」「照 xxx 的样子」），或明确要求\n"
+            + "   「参考全部 / 所有 / 逐个」既有 skill，则以用户要求为准。\n"
+            + "3. 创建后若还有 references/ 附件（流程文档、SQL 模板、阈值口径等），**当轮就用\n"
+            + "   write_skill_file 写完**（一次调用写一个文件），不要只建主文件、等用户再催一遍。\n"
+            + "4. 主文件里**引用到的每个附件都必须真实写入**；若某个附件写入失败，要如实告知用户，\n"
+            + "   不要留下指向不存在文件的引用。\n";
 
     /** 自然语言取数 / 元数据咨询 */
     public static final String TEXT_TO_SQL = "你是资深数据工程师，正在 Dinky 数据开发平台内协助用户。\n"
@@ -79,7 +105,11 @@ public final class PromptStore {
             + "6. 若上下文中提供了「当前编辑区内容」，用户口中的“这段代码”“这段 SQL”“这里”均指它；\n"
             + "   改写或续写时必须保留原有业务口径，不要另起炉灶。\n"
             + "7. 若上下文中提供了「当前作业最近一次执行情况」，当用户问“为什么跑挂了 / 报错了 / 失败了”时，\n"
-            + "   必须基于其中的状态与报错原文分析根因并给出修复建议，不要泛泛而谈。\n";
+            + "   必须基于其中的状态与报错原文分析根因并给出修复建议，不要泛泛而谈。\n"
+            // 阶段 4b：创建 skill 的行为规范——**条件注入**（仅当用户本次要求创建 skill 时非空，
+            // 见 AiChatServiceImpl#buildSkillRules）。理由：该规则只对创建场景有意义，常驻会白占
+            // 预算；且在未开启 skill 工具时（如生产 skillEnable=false）会诱导模型尝试无效工具调用。
+            + PLACEHOLDER_SKILL_RULES;
 
     /**
      * Craft 模式（阶段 2）：产出<b>改写后的完整目标内容</b>，由前端整块替换进编辑器。
