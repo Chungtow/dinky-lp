@@ -903,11 +903,16 @@ public class AiChatServiceImpl implements AiChatService {
         payload.set("runId", runId);
         payload.set("kind", StrUtil.blankToDefault(confirm.getKind(), ConfirmPayload.KIND_SQL));
         payload.set("sql", StrUtil.nullToEmpty(confirm.getSql()));
-        payload.set(
-                "sqlType",
-                confirm.getRisk() == null
-                        ? "UNKNOWN"
-                        : StrUtil.nullToEmpty(confirm.getRisk().getSqlType()));
+        // 阶段 4b：非 SQL 类确认（kind=skill_file / skill_delete）本就没有「语句类型」这一概念，
+        // 不能落成 "UNKNOWN"（前端曾原样渲染成「语句类型: UNKNOWN」，纯噪音）。前端已改为按
+        // kind 分支渲染、不再读该字段；这里再兜一层，避免其它消费方误用。
+        if (ConfirmPayload.KIND_SQL.equals(StrUtil.blankToDefault(confirm.getKind(), ConfirmPayload.KIND_SQL))) {
+            payload.set(
+                    "sqlType",
+                    confirm.getRisk() == null
+                            ? "UNKNOWN"
+                            : StrUtil.nullToEmpty(confirm.getRisk().getSqlType()));
+        }
         payload.set("timeoutSeconds", WRITE_CONFIRM_TIMEOUT_SECONDS);
         // 阶段 2c-1：风险信息随确认框下发（语句类型 / 是否 DDL / 目标对象 / 模型估计影响）
         if (confirm.getRisk() != null) {

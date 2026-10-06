@@ -194,6 +194,12 @@ const AiChat = (props: AiChatProps) => {
   const runIdRef = useRef<string>('');
   /** 阶段 2c-0：待用户拍板的写语句执行确认（非空即弹确认框） */
   const [writeConfirm, setWriteConfirm] = useState<AiChatConfirmFrame | null>(null);
+  /**
+   * 阶段 4b：删除类确认（{@code kind=skill_delete}）要求**手输目标名**才能确认（防误删）。
+   * 这里保存输入框内容，与后端下发的 {@code targetName} 完全一致时才允许点「确认执行」
+   * （后端亦会二次校验，不一致按拒绝处理）。
+   */
+  const [confirmTypedName, setConfirmTypedName] = useState<string>('');
   const [mentionOpen, setMentionOpen] = useState<boolean>(false);
   const [mentionQuery, setMentionQuery] = useState<string>('');
   const [mentionIndex, setMentionIndex] = useState<number>(0);
@@ -711,12 +717,23 @@ const AiChat = (props: AiChatProps) => {
   /** 阶段 2c-0：回传写语句执行确认结果（确认即执行；拒绝 / 超时则不执行） */
   const handleWriteConfirm = async (approve: boolean) => {
     const current = writeConfirm;
+    // 阶段 4b：删除类确认需带手输名称（后端校验一致才执行）——先取出再清空本地状态
+    const typedName = confirmTypedName;
     setWriteConfirm(null);
+    setConfirmTypedName('');
     if (!current?.runId) {
       return;
     }
-    await confirmAiChat(current.runId, approve);
+    await confirmAiChat(current.runId, approve, typedName || undefined);
   };
+
+  /**
+   * 阶段 4b：本次确认是否为 **skill 类**（写 skill 文件 / 删除 skill）。
+   *
+   * <p>「写确认」这条通道从 2c-0 起是给 SQL 用的；4b 的 skill 写工具复用了同一通道，后端会
+   * 额外下发 {@code kind}。缺省或 {@code kind='sql'} 走原有 SQL 渲染（兼容旧后端）。
+   */
+  const isSkillConfirm = !!writeConfirm?.kind && writeConfirm.kind !== 'sql';
 
   /**
    * 阶段 2b：对编辑区选中片段发起 Fix（基于最近执行报错）/ Rewrite（综合优化）。
@@ -1079,12 +1096,17 @@ const AiChat = (props: AiChatProps) => {
           size={'small'}
           style={{ minWidth: 170 }}
           placeholder={l('datastudio.aiChat.datasource')}
-          value={databaseId}
-          onChange={(value) => setDatasourceId(value)}
+          // 阶段 4b 修复（缺陷 1）：value 与 option 的 id 必须同类型。
+          // 编辑器侧（RunToolbar/SelectDb.tsx 的 convertValue）把 databaseId 以**字符串**回写
+          // tab params，而 options 用的是数字 item.id → antd 严格比较失败后会**回退渲染原始值**，
+          // 表现为「代码编辑区选的是 hive-lpods，AI Chat 面板却显示 21」。这里统一按字符串比较，
+          // 回传时再转回数字，保持 setDatasourceId 的 number 语义不变。
+          value={databaseId === undefined || databaseId === null ? undefined : String(databaseId)}
+          onChange={(value) => setDatasourceId(value === undefined ? undefined : Number(value))}
           optionFilterProp={'label'}
           options={(datasourceList ?? []).map((item: any) => ({
             label: item.name,
-            value: item.id
+            value: String(item.id)
           }))}
         />
         {metaDataAvailable && (
@@ -1476,9 +1498,17 @@ const AiChat = (props: AiChatProps) => {
         onAccept={handleP2bAccept}
         onReject={() => setP2bDiff(null)}
       />
-      {/* 阶段 2c-0：写语句（DML/DDL）执行前的二次确认——后端挂起等待，未确认绝不执行 */}
+      {/*
+        阶段 2c-0：写语句（DML/DDL）执行前的二次确认——后端挂起等待，未确认绝不执行。
+        阶段 4b：本通道被 skill 写工具复用（kind=skill_file / skill_delete），故标题与按钮
+        文案按 kind 调整；内容区的分支渲染见下方。
+      */}
       <Modal
-        title={l('datastudio.aiChat.writeConfirm.title')}
+        title={
+          isSkillConfirm
+            ? writeConfirm?.title ?? l('datastudio.aiChat.confirm.skillTitle')
+            : l('datastudio.aiChat.writeConfirm.title')
+        }
         open={!!writeConfirm}
         maskClosable={false}
         onCancel={() => handleWriteConfirm(false)}
@@ -1487,23 +1517,102 @@ const AiChat = (props: AiChatProps) => {
             <Button onClick={() => handleWriteConfirm(false)}>
               {l('datastudio.aiChat.writeConfirm.reject')}
             </Button>
-            <Button danger type={'primary'} onClick={() => handleWriteConfirm(true)}>
-              {l('datastudio.aiChat.writeConfirm.accept')}
+            <Button
+              danger
+              type={'primary'}
+              // 阶段 4b：删除类确认要求手输名称与后端下发的目标名完全一致才能点击（防误删）
+              disabled={
+                !!writeConfirm?.requireTypedName &&
+                confirmTypedName.trim() !== (writeConfirm?.targetName ?? '')
+              }
+              onClick={() => handleWriteConfirm(true)}
+            >
+              {writeConfirm?.kind === 'skill_delete'
+                ? l('datastudio.aiChat.confirm.deleteAccept')
+                : l('datastudio.aiChat.writeConfirm.accept')}
             </Button>
           </Space>
         }
       >
-        <div style={{ marginBottom: 8 }}>
-          <Alert
-            type={writeConfirm?.sqlType === 'DDL' ? 'error' : 'warning'}
-            showIcon
-            message={
-              writeConfirm?.sqlType === 'DDL'
-                ? l('datastudio.aiChat.writeConfirm.ddlTip')
-                : l('datastudio.aiChat.writeConfirm.dmlTip')
-            }
-          />
-        </div>
+        {/* 阶段 4b：按 kind 分支。此前无分支 → 用 SQL 的字段渲染 skill 载荷，屏幕上就只剩
+            「空白的语句内容 + 语句类型 UNKNOWN」（sqlType 由后端在无 risk 时置为该字面量）。 */}
+        {isSkillConfirm ? (
+          <>
+            <div style={{ marginBottom: 8 }}>
+              <Alert
+                type={writeConfirm?.kind === 'skill_delete' ? 'error' : 'info'}
+                showIcon
+                message={
+                  writeConfirm?.kind === 'skill_delete'
+                    ? l('datastudio.aiChat.confirm.skillDeleteTip')
+                    : l('datastudio.aiChat.confirm.skillFileTip')
+                }
+              />
+            </div>
+            <div style={{ marginBottom: 8, fontSize: 12, lineHeight: '22px' }}>
+              <Typography.Text type={'secondary'}>
+                {writeConfirm?.kind === 'skill_delete'
+                  ? l('datastudio.aiChat.confirm.skillName')
+                  : l('datastudio.aiChat.confirm.skillTarget')}
+              </Typography.Text>
+              <Typography.Text code>{writeConfirm?.targetName ?? '-'}</Typography.Text>
+              {writeConfirm?.kind === 'skill_file' && writeConfirm?.relativePath ? (
+                <>
+                  <Typography.Text type={'secondary'}>
+                    {l('datastudio.aiChat.confirm.skillPath')}
+                  </Typography.Text>
+                  <Typography.Text code>{writeConfirm.relativePath}</Typography.Text>
+                </>
+              ) : null}
+              {writeConfirm?.kind === 'skill_file' && !writeConfirm?.beforeContent ? (
+                <Typography.Text type={'secondary'}>
+                  {l('datastudio.aiChat.confirm.newFileHint')}
+                </Typography.Text>
+              ) : null}
+            </div>
+            {writeConfirm?.kind === 'skill_delete' && writeConfirm?.requireTypedName ? (
+              <div style={{ marginBottom: 8, fontSize: 12 }}>
+                <Typography.Text type={'secondary'}>
+                  {l('datastudio.aiChat.confirm.typeNameHint')}
+                </Typography.Text>
+                <Input
+                  size={'small'}
+                  style={{ width: 240, marginLeft: 8 }}
+                  value={confirmTypedName}
+                  placeholder={writeConfirm?.targetName}
+                  onChange={(e) => setConfirmTypedName(e.target.value)}
+                />
+              </div>
+            ) : null}
+            {writeConfirm?.kind === 'skill_file' ? (
+              <pre
+                style={{
+                  maxHeight: '40vh',
+                  overflow: 'auto',
+                  background: 'rgba(0,0,0,0.04)',
+                  padding: 8,
+                  borderRadius: 4,
+                  margin: 0,
+                  whiteSpace: 'pre-wrap'
+                }}
+              >
+                {writeConfirm?.afterContent ?? ''}
+              </pre>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <div style={{ marginBottom: 8 }}>
+              <Alert
+                type={writeConfirm?.sqlType === 'DDL' ? 'error' : 'warning'}
+                showIcon
+                message={
+                  writeConfirm?.sqlType === 'DDL'
+                    ? l('datastudio.aiChat.writeConfirm.ddlTip')
+                    : l('datastudio.aiChat.writeConfirm.dmlTip')
+                }
+              />
+            </div>
         {/* 阶段 2c-1：变更风险块（语句类型 / 目标对象 / AI 估计影响）——
             「AI 估计」必须显式标注，不得渲染成精确值 */}
         <div style={{ marginBottom: 8, fontSize: 12, lineHeight: '22px' }}>
@@ -1565,7 +1674,9 @@ const AiChat = (props: AiChatProps) => {
           }}
         >
           {writeConfirm?.sql}
-        </pre>
+            </pre>
+          </>
+        )}
       </Modal>
     </div>
   );

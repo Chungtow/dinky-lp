@@ -83,9 +83,29 @@ export type AiChatChangeRisk = {
  */
 export type AiChatConfirmFrame = {
   runId: string;
-  /** 待执行的写语句原文 */
+  /**
+   * 确认类型（阶段 4b）：{@code sql} = 写语句；{@code skill_file} = 写 skill 文件；
+   * {@code skill_delete} = 删除 skill。**缺省按 sql 处理**（兼容旧后端）。
+   *
+   * <p>阶段 4b 起「写确认」通道被 skill 写工具复用，前端必须按 kind 分支渲染——
+   * 否则会拿 SQL 的字段去渲染 skill 载荷，表现为「内容空白 + 语句类型 UNKNOWN」。
+   */
+  kind?: 'sql' | 'skill_file' | 'skill_delete' | string;
+  /** 确认框标题（kind 非 sql 时由后端下发，如「将写入 skill xxx 的文件 yyy」） */
+  title?: string;
+  /** 操作目标名（kind=skill_* 时为 skill 名） */
+  targetName?: string;
+  /** 目标相对路径（kind=skill_file，如 SKILL.md / references/x.md） */
+  relativePath?: string;
+  /** 变更前内容（kind=skill_file；新建文件时为空） */
+  beforeContent?: string;
+  /** 变更后内容（kind=skill_file，供用户核对将写入什么） */
+  afterContent?: string;
+  /** 是否要求手输目标名才能确认（kind=skill_delete，防误删） */
+  requireTypedName?: boolean;
+  /** 待执行的写语句原文（kind=sql 时使用） */
   sql: string;
-  /** 语句类型：DML / DDL */
+  /** 语句类型：DML / DDL（kind=sql 时使用） */
   sqlType: string;
   /** 确认等待超时（秒），超时按拒绝 */
   timeoutSeconds?: number;
@@ -284,13 +304,21 @@ export const listSkills = async (): Promise<AiChatMentionItem[]> => {
  *
  * <p>与对话同为 POST + JSON；返回 HTTP 是否成功即可——runId 失效等业务失败由后端按「拒绝/超时」处理。
  */
-export const confirmAiChat = async (runId: string, approve: boolean): Promise<boolean> => {
+export const confirmAiChat = async (
+  runId: string,
+  approve: boolean,
+  /**
+   * 阶段 4b：删除类确认（{@code kind=skill_delete}）要求**手输目标名**才能确认（防误删），
+   * 后端会校验其与目标名一致，不一致按拒绝处理。其它确认类型无需传（undefined 不会进 JSON）。
+   */
+  confirmName?: string
+): Promise<boolean> => {
   try {
     const res = await fetch(API_CONSTANTS.AI_CHAT_CONFIRM, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ runId, approve })
+      body: JSON.stringify({ runId, approve, confirmName })
     });
     return res.ok;
   } catch (e) {

@@ -661,6 +661,18 @@ export default {
   'datastudio.aiChat.writeConfirm.retryPrefix': 'Attempt ',
   'datastudio.aiChat.writeConfirm.retrySuffix': ' (auto-repair retry)',
   'datastudio.aiChat.writeConfirm.previousError': 'Last failure: ',
+  // Stage 4b: the write-confirm channel is reused by skill write tools
+  'datastudio.aiChat.confirm.skillTitle': 'AI requests to write a skill file (needs your confirmation)',
+  'datastudio.aiChat.confirm.skillFileTip':
+    'It will be written into this skill directly. You can view and edit it later under Data Studio → Skills. Check the target and content first.',
+  'datastudio.aiChat.confirm.skillDeleteTip':
+    'This will DELETE the whole skill and all its files, irreversibly. Type the skill name to continue.',
+  'datastudio.aiChat.confirm.skillTarget': 'Target skill: ',
+  'datastudio.aiChat.confirm.skillName': 'Skill to delete: ',
+  'datastudio.aiChat.confirm.skillPath': ' File: ',
+  'datastudio.aiChat.confirm.newFileHint': ' (new file)',
+  'datastudio.aiChat.confirm.typeNameHint': 'Type the skill name to confirm deletion: ',
+  'datastudio.aiChat.confirm.deleteAccept': 'Confirm delete',
   'datastudio.aiChat.inserted': 'Inserted at the cursor of the editor',
   'datastudio.aiChat.run': 'Run',
   'datastudio.aiChat.copySuccess': 'Copied to clipboard',

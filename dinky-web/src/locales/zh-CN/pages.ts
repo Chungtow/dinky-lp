@@ -596,6 +596,19 @@ export default {
   'datastudio.aiChat.writeConfirm.retryPrefix': '第',
   'datastudio.aiChat.writeConfirm.retrySuffix': '次尝试（自动纠错重试）',
   'datastudio.aiChat.writeConfirm.previousError': '上次失败：',
+  // 阶段 4b：写确认通道被 skill 写工具复用，以下为 skill 类确认的文案
+  // （SQL 类确认继续沿用上面的 writeConfirm.* 一套）
+  'datastudio.aiChat.confirm.skillTitle': 'AI 请求写入 Skill 文件（需你确认）',
+  'datastudio.aiChat.confirm.skillFileTip':
+    '确认后将直接写入该 skill 的文件，可在「数据开发 → Skills」中查看与再次编辑。请先核对目标与内容。',
+  'datastudio.aiChat.confirm.skillDeleteTip':
+    '该操作会【删除整个 skill】及其全部文件，不可恢复。请确认目标无误后，输入 skill 名以继续。',
+  'datastudio.aiChat.confirm.skillTarget': '目标 Skill：',
+  'datastudio.aiChat.confirm.skillName': '待删除 Skill：',
+  'datastudio.aiChat.confirm.skillPath': ' 文件：',
+  'datastudio.aiChat.confirm.newFileHint': '（新建文件）',
+  'datastudio.aiChat.confirm.typeNameHint': '请输入 skill 名以确认删除：',
+  'datastudio.aiChat.confirm.deleteAccept': '确认删除',
   'datastudio.aiChat.inserted': '已插入到编辑器光标处',
   'datastudio.aiChat.run': '执行',
   'datastudio.aiChat.copySuccess': '已复制到剪贴板',
