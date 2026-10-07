@@ -44,11 +44,16 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
 public class HiveDriver extends AbstractJdbcDriver implements Driver {
 
     @Override
@@ -169,9 +174,40 @@ public class HiveDriver extends AbstractJdbcDriver implements Driver {
         return columns;
     }
 
+    /**
+     * 解析结果集中目标列的实际列名：优先使用 {@code preferred}，否则回退 {@code aliases}（大小写不敏感）。
+     *
+     * <p>Spark ThriftServer 与 HiveServer2 的 SHOW 语句返回列名不同：{@code show databases} 在
+     * HiveServer2 返回 {@code database_name}、在 Spark ThriftServer 返回 {@code namespace}；
+     * {@code show tables} 在 HiveServer2 返回 {@code tab_name}、在 Spark ThriftServer 返回
+     * {@code tableName}。直接按列名取值会抛 {@code SQLException: Could not find ...}，故此处做动态解析。
+     *
+     * @return 实际列名；全部未命中时返回 {@code null}（由调用方记录日志并降级返回空）
+     */
+    private String resolveColumn(ResultSetMetaData metaData, String preferred, String... aliases) throws SQLException {
+        Set<String> labels = new LinkedHashSet<>();
+        for (int i = 1; i <= metaData.getColumnCount(); i++) {
+            labels.add(metaData.getColumnLabel(i).toLowerCase());
+        }
+        if (labels.contains(preferred.toLowerCase())) {
+            return preferred;
+        }
+        for (String alias : aliases) {
+            if (labels.contains(alias.toLowerCase())) {
+                return alias;
+            }
+        }
+        return null;
+    }
+
     @Override
     public List<Table> listTables(String schemaName) {
         List<Table> tableList = new ArrayList<>();
+        // 空库名会拼出非法的 use 语句（Spark ThriftServer 上同样失败），直接返回并告警
+        if (StringUtils.isBlank(schemaName)) {
+            log.warn("HiveDriver.listTables skipped: schemaName is blank");
+            return tableList;
+        }
         PreparedStatement preparedStatement = null;
         ResultSet results = null;
         IDBQuery dbQuery = getDBQuery();
@@ -185,8 +221,17 @@ public class HiveDriver extends AbstractJdbcDriver implements Driver {
             for (int i = 1; i <= metaData.getColumnCount(); i++) {
                 columnList.add(metaData.getColumnLabel(i));
             }
+            // 表名列表：HiveServer2 为 tab_name，Spark ThriftServer 为 tableName（大小写不敏感回退）
+            String tableNameColumn = resolveColumn(metaData, dbQuery.tableName(), "tableName", "tablename");
+            if (Asserts.isNullString(tableNameColumn)) {
+                log.error(
+                        "HiveDriver.listTables failed: table name column not found, schema={}, columns={}",
+                        schemaName,
+                        columnList);
+                return tableList;
+            }
             while (results.next()) {
-                String tableName = results.getString(dbQuery.tableName());
+                String tableName = results.getString(tableNameColumn);
                 if (Asserts.isNotNullString(tableName)) {
                     Table tableInfo = new Table();
                     tableInfo.setName(tableName);
@@ -207,7 +252,7 @@ public class HiveDriver extends AbstractJdbcDriver implements Driver {
                 }
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("HiveDriver.listTables failed, schema={}", schemaName, e);
         } finally {
             close(preparedStatement, results);
         }
@@ -229,18 +274,34 @@ public class HiveDriver extends AbstractJdbcDriver implements Driver {
         try {
             preparedStatement = conn.get().prepareStatement(schemasSql);
             results = preparedStatement.executeQuery();
+            ResultSetMetaData metaData = results.getMetaData();
+            // 库名列表：HiveServer2 为 database_name，Spark ThriftServer 为 namespace（大小写不敏感回退）
+            String schemaNameColumn = resolveColumn(metaData, getDBQuery().schemaName(), "namespace", "Database");
+            if (Asserts.isNullString(schemaNameColumn)) {
+                List<String> columnList = new ArrayList<>();
+                for (int i = 1; i <= metaData.getColumnCount(); i++) {
+                    columnList.add(metaData.getColumnLabel(i));
+                }
+                log.error("HiveDriver.listSchemas failed: schema name column not found, columns={}", columnList);
+                return schemas;
+            }
             while (results.next()) {
-                String schemaName = results.getString(getDBQuery().schemaName());
+                String schemaName = results.getString(schemaNameColumn);
                 if (Asserts.isNotNullString(schemaName)) {
                     Schema schema = new Schema(schemaName);
-                    if (execute(String.format(HiveConstant.USE_DB, schemaName))) {
-                        schema.setTables(listTables(schema.getName()));
+                    // 单个库读取失败不应导致整体为空：记录告警后跳过该库
+                    try {
+                        if (execute(String.format(HiveConstant.USE_DB, schemaName))) {
+                            schema.setTables(listTables(schema.getName()));
+                        }
+                    } catch (Exception e) {
+                        log.warn("HiveDriver.listTables failed for schema={}, skipped", schemaName, e);
                     }
                     schemas.add(schema);
                 }
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("HiveDriver.listSchemas failed", e);
         } finally {
             close(preparedStatement, results);
         }
@@ -287,7 +348,7 @@ public class HiveDriver extends AbstractJdbcDriver implements Driver {
                 columns.add(field);
             }
         } catch (SQLException e) {
-            e.printStackTrace();
+            log.error("HiveDriver.listColumns failed, schema={}, table={}", schemaName, tableName, e);
         } finally {
             close(preparedStatement, results);
         }
@@ -309,7 +370,8 @@ public class HiveDriver extends AbstractJdbcDriver implements Driver {
                         .append("\n");
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error(
+                    "HiveDriver.getCreateTableSql failed, schema={}, table={}", table.getSchema(), table.getName(), e);
         } finally {
             close(preparedStatement, results);
         }
