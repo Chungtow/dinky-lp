@@ -686,6 +686,10 @@ export default {
   'datastudio.aiChat.noMetaDataContext': 'No datasource context available for the current job',
   'datastudio.aiChat.bindGuide':
     'No datasource bound: select one in Catalog, or open a job with a datasource',
+  'datastudio.aiChat.flinkContextLoaded':
+    'FlinkSQL context loaded (cluster / env / catalogs / parameter rules / name registry) — you can ask or generate SQL directly',
+  'datastudio.aiChat.flinkContextDegraded':
+    'FlinkSQL context degraded: catalog enumeration failed (usually an unreachable catalog factory in the env). Other sections (cluster / rules / registry) are still available',
   'datastudio.aiChat.needSavedTask': 'Please save the job as a task first',
   'datastudio.aiChat.copyFailed': 'Copy failed, please select and copy manually',
   'datastudio.aiChat.showReasoning': 'Show reasoning',
@@ -1432,6 +1436,8 @@ export default {
   'sys.setting.ldap.tooltip': 'Unified authentication service LDAP docking configuration',
   'sys.setting.llm': 'LLM Config',
   'sys.setting.llm.tooltip': 'AI model service configuration',
+  'sys.setting.kafka': 'Kafka Config',
+  'sys.setting.kafka.tooltip': 'Platform-level Kafka connection facts (bootstrap servers etc.); AI Chat uses them as the authoritative value for FlinkSQL',
   'sys.setting.maven': 'Maven Configuration',
   'sys.setting.maven.tooltip': 'The main parameters of Maven compilation',
   'sys.setting.metrics': 'Metrics Configuration',

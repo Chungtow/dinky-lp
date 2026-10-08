@@ -622,6 +622,10 @@ export default {
   'datastudio.aiChat.noMetaDataContext': '当前作业无可用数据源上下文',
   'datastudio.aiChat.bindGuide':
     '未绑定数据源：请在左侧 Catalog 选中数据源，或打开一个已绑定数据源的作业',
+  'datastudio.aiChat.flinkContextLoaded':
+    '已加载 FlinkSQL 上下文（集群 / 环境(env) / Catalog / 参数规则 / 命名名册），可直接提问或生成 SQL',
+  'datastudio.aiChat.flinkContextDegraded':
+    'FlinkSQL 上下文已降级：Catalog 枚举失败（多数是 env 里注册的 catalog 工厂类不可达）。其余上下文（集群 / 规则 / 名册）仍可用',
   'datastudio.aiChat.needSavedTask': '请先将作业保存为任务后再执行',
   'datastudio.aiChat.copyFailed': '复制失败，请手动选中后复制',
   'datastudio.aiChat.showReasoning': '查看思考过程',
@@ -1346,6 +1350,8 @@ export default {
   'sys.setting.ldap': 'LDAP 配置',
   'sys.setting.llm': 'LLM 配置',
   'sys.setting.llm.tooltip': 'AI 大模型服务配置',
+  'sys.setting.kafka': 'Kafka 配置',
+  'sys.setting.kafka.tooltip': 'Kafka 接入地址等平台级连接事实；AI Chat 生成 / 解读 FlinkSQL 时取此处的权威值',
   'sys.setting.ldap.tooltip': 'LDAP统一认证配置',
   'sys.setting.maven': 'Maven 配置',
   'sys.setting.maven.tooltip': 'Maven 编译的主要参数',

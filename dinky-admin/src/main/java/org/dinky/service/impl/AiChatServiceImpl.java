@@ -31,6 +31,7 @@ import org.dinky.ai.ConfirmPayload;
 import org.dinky.ai.LlmClient;
 import org.dinky.ai.LlmProfile;
 import org.dinky.ai.LlmProfileResolver;
+import org.dinky.ai.context.FlinkContextProvider;
 import org.dinky.ai.PromptStore;
 import org.dinky.ai.SqlVerifier;
 import org.dinky.ai.TableSelector;
@@ -151,6 +152,9 @@ public class AiChatServiceImpl implements AiChatService {
     private static final int WRITE_CONFIRM_TIMEOUT_SECONDS = AiChatRunRegistry.CONFIRM_TIMEOUT_SECONDS;
 
     private final DataBaseService dataBaseService;
+
+    /** P0：FlinkSQL 作业上下文装配器（只读；仅 FlinkSQL 方言产出内容）。 */
+    private final FlinkContextProvider flinkContextProvider;
     private final LlmClient llmClient;
     private final SqlVerifier sqlVerifier;
     private final AiChatRateLimiter rateLimiter;
@@ -224,11 +228,22 @@ public class AiChatServiceImpl implements AiChatService {
             log.warn("Build schema context before stream failed", e);
         }
         final String schemaContext = built;
+        // P0：FlinkSQL 上下文也必须在请求线程构建——内部要按 taskId 反查作业 / 集群 / env（同样依赖租户上下文），
+        // 且 catalog 枚举依赖登录态；放到异步线程会因上下文丢失而查不到。
+        String builtFlinkContext = "";
+        try {
+            if (request != null) {
+                builtFlinkContext = flinkContextProvider.build(request.getTaskId());
+            }
+        } catch (Exception e) {
+            log.warn("Build flink context before stream failed", e);
+        }
+        final String flinkContext = builtFlinkContext;
         // 阶段 4b 修复：可见 skill / doc 快照也必须在这里（请求线程）算好——工具循环跑在异步线程，
         // 那里 Sa-Token 与租户上下文都已丢失，loadVisibleSkillBriefs() 会取不到登录用户而抛异常、
         // 降级为空集合（表现为 list_skills 恒为空，AI 据此断言"当前账号没有 skill"）。
         final List<SkillBrief> visibleSkills = loadVisibleSkillBriefs();
-        chatExecutor.execute(() -> doChat(request, emitter, dataBase, schemaContext, visibleSkills));
+        chatExecutor.execute(() -> doChat(request, emitter, dataBase, schemaContext, flinkContext, visibleSkills));
         return emitter;
     }
 
@@ -285,6 +300,7 @@ public class AiChatServiceImpl implements AiChatService {
             SseEmitter emitter,
             DataBase dataBase,
             String prebuiltSchemaContext,
+            String prebuiltFlinkContext,
             List<SkillBrief> visibleSkills) {
         long start = System.currentTimeMillis();
         TokenUsage totalUsage = new TokenUsage();
@@ -363,7 +379,7 @@ public class AiChatServiceImpl implements AiChatService {
 
             String schemaContext =
                     StrUtil.isNotEmpty(prebuiltSchemaContext) ? prebuiltSchemaContext : buildSchemaContext(request);
-            List<AiChatMessage> messages = buildMessages(request, schemaContext);
+            List<AiChatMessage> messages = buildMessages(request, schemaContext, prebuiltFlinkContext);
 
             StringBuilder answer = new StringBuilder();
             AiToolRunResult toolRun = null;
@@ -984,7 +1000,7 @@ public class AiChatServiceImpl implements AiChatService {
     }
 
     /** 组装发送给大模型的消息：system（首轮含 schema）+ 历史 + 本轮 user */
-    private List<AiChatMessage> buildMessages(AiChatRequest request, String schemaContext) {
+    private List<AiChatMessage> buildMessages(AiChatRequest request, String schemaContext, String flinkContext) {
         String action = StrUtil.blankToDefault(request.getAction(), ACTION_TEXT_TO_SQL)
                 .trim()
                 .toUpperCase();
@@ -999,8 +1015,13 @@ public class AiChatServiceImpl implements AiChatService {
         // —— 有选中则针对选中片段，无选中回退全文（阶段 2b 体验优化：解释也遵循选中优先）
         String selectedOrFull = StrUtil.blankToDefault(request.getSelectedSql(), request.getSql());
 
-        Map<String, String> params = new HashMap<>(4);
+        Map<String, String> params = new HashMap<>(8);
         params.put(PromptStore.PLACEHOLDER_SCHEMA, firstTurn ? schemaContext : "(schema 已在首轮提供，请沿用)");
+        // P0：FlinkSQL 上下文与 schema 同策略（仅首轮注入，后续轮次由会话历史承载）。
+        // 非 FlinkSQL 方言恒为空串 → 既有 prompt 逐字节不变。
+        params.put(
+                PromptStore.PLACEHOLDER_FLINK_CONTEXT,
+                firstTurn ? StrUtil.nullToEmpty(flinkContext) : "(FlinkSQL 上下文已在首轮提供，请沿用)");
         params.put(PromptStore.PLACEHOLDER_DIALECT, StrUtil.blankToDefault(request.getDialect(), "SQL"));
         params.put(
                 PromptStore.PLACEHOLDER_SQL,
@@ -1536,7 +1557,12 @@ public class AiChatServiceImpl implements AiChatService {
         sb.append(buildSkillListContext());
 
         if (databaseId == null) {
-            sb.append("(未绑定数据源，无可用 schema 信息)\n");
+            // P0：FlinkSQL 作业本就没有数据源，它的库表来自 Flink Catalog —— 该信息由独立的
+            // {{flinkContext}} 区块提供（见 PromptStore.PLACEHOLDER_FLINK_CONTEXT），
+            // 因此这里不再输出「未绑定数据源」的误导文案；Sql / SparkSQL 保持原行为不变。
+            if (!flinkContextProvider.supports(request.getDialect())) {
+                sb.append("(未绑定数据源，无可用 schema 信息)\n");
+            }
             return sb.toString();
         }
 
