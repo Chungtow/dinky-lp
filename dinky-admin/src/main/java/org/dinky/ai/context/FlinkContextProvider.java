@@ -17,38 +17,18 @@
  *
  */
 
-/*
- *
- *  Licensed to the Apache Software Foundation (ASF) under one or more
- *  contributor license agreements.  See the NOTICE file distributed with
- *  this work for additional information regarding copyright ownership.
- *  The ASF licenses this file to You under the Apache License, Version 2.0
- *  (the "License"); you may not use this file except in compliance with
- *  the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- *  Unless required by applicable law or agreed to in writing, software
- *  distributed under the License is distributed on an "AS IS" BASIS,
- *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *  See the License for the specific language governing permissions and
- *  limitations under the License.
- *
- */
-
 package org.dinky.ai.context;
 
 import org.dinky.config.Dialect;
 import org.dinky.data.dto.StudioMetaStoreDTO;
 import org.dinky.data.dto.TaskDTO;
+import org.dinky.data.ext.ConfigItem;
 import org.dinky.data.model.Catalog;
 import org.dinky.data.model.ClusterInstance;
 import org.dinky.data.model.DataBase;
 import org.dinky.data.model.Schema;
 import org.dinky.data.model.SystemConfiguration;
 import org.dinky.data.model.Table;
-import org.dinky.data.ext.ConfigItem;
-import org.dinky.data.model.ext.TaskExtConfig;
 import org.dinky.metadata.driver.Driver;
 import org.dinky.service.ClusterInstanceService;
 import org.dinky.service.DataBaseService;
@@ -59,13 +39,6 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Component;
@@ -99,9 +72,6 @@ import lombok.extern.slf4j.Slf4j;
 @Component
 @RequiredArgsConstructor
 public class FlinkContextProvider {
-
-    /** catalog 枚举的软超时：冷启动首次构建 TableEnvironment 较慢，超时后降级（缓存命中后即恢复）。 */
-    private static final long CATALOG_TIMEOUT_MS = 8_000L;
 
     /** 最多列出的 Doris 数据源个数（每个数据源查一次库清单）。 */
     private static final int MAX_DORIS_SOURCES = 5;
@@ -180,8 +150,12 @@ public class FlinkContextProvider {
 
     private void appendJobBinding(StringBuilder sb, TaskDTO task) {
         sb.append("\n### 当前作业\n");
-        sb.append("- 作业: task ").append(task.getId()).append(" `").append(trim(task.getName(), 60))
-                .append("` | 方言 ").append(task.getDialect());
+        sb.append("- 作业: task ")
+                .append(task.getId())
+                .append(" `")
+                .append(trim(task.getName(), 60))
+                .append("` | 方言 ")
+                .append(task.getDialect());
         if (task.getType() != null) {
             sb.append(" | 运行模式 ").append(task.getType());
         }
@@ -196,10 +170,15 @@ public class FlinkContextProvider {
         Integer envId = task.getEnvId();
         if (envId != null && envId > 0) {
             String envName = safeTaskName(envId);
-            sb.append("- FlinkSQL 环境(env): `").append(envName).append("` (envId=").append(envId)
+            sb.append("- FlinkSQL 环境(env): `")
+                    .append(envName)
+                    .append("` (envId=")
+                    .append(envId)
                     .append(") —— 该环境语句会前置拼接到作业 SQL（注册 catalog / 设置等）\n");
         } else {
-            sb.append("- FlinkSQL 环境(env): **未绑定**（envId=").append(envId == null ? "null" : envId).append("）\n");
+            sb.append("- FlinkSQL 环境(env): **未绑定**（envId=")
+                    .append(envId == null ? "null" : envId)
+                    .append("）\n");
         }
         sb.append("- 表名口径: ")
                 .append("未绑 env 时**必须使用全限定名** `catalog.database.table`（`default_catalog.default_database.xxx`）；")
@@ -254,10 +233,10 @@ public class FlinkContextProvider {
     // ==================== 2. Flink Catalog ====================
 
     private void appendCatalogSection(StringBuilder sb, TaskDTO task) {
-        sb.append("\n### Flink Catalog（经「env 回放」枚举，仅反映快照时刻状态）\n");
+        sb.append("\n### Flink Catalog（经「env 回放」枚举，仅反映快照时刻状态；在请求线程内直接执行）\n");
         StudioMetaStoreDTO dto = toMetaStoreDTO(task);
         try {
-            List<Catalog> catalogs = callWithTimeout("catalogs", () -> studioService.getMSCatalogs(dto));
+            List<Catalog> catalogs = studioService.getMSCatalogs(dto);
             if (catalogs == null || catalogs.isEmpty()) {
                 sb.append("- 未枚举到任何 catalog（Flink 至少应有 default_catalog；请检查集群与 env 语句）\n");
                 return;
@@ -266,18 +245,27 @@ public class FlinkContextProvider {
                 List<String> databases = catalog.getSchemas() == null
                         ? new ArrayList<>()
                         : catalog.getSchemas().stream().map(Schema::getName).collect(Collectors.toList());
-                sb.append("- catalog `").append(catalog.getName()).append("`: ")
-                        .append(joinLimit(databases)).append('\n');
+                sb.append("- catalog `")
+                        .append(catalog.getName())
+                        .append("`: ")
+                        .append(joinLimit(databases))
+                        .append('\n');
             }
             appendDefaultTables(sb, dto, catalogs);
-        } catch (TimeoutException e) {
-            sb.append("- **枚举超时**（>").append(CATALOG_TIMEOUT_MS / 1000)
-                    .append("s），本次已降级；表清单可能不完整，可稍后重试（结果会被缓存）\n");
-            log.warn("FlinkContext: catalog enumeration timeout for task {}", task.getId());
         } catch (Exception e) {
             sb.append("- **枚举失败**：").append(classifyCatalogFailure(e)).append('\n');
             log.warn("FlinkContext: catalog enumeration failed for task {}", task.getId(), e);
         }
+    }
+
+    /** 复制一份元数据查询 DTO（appendDefaultTables 需要改 catalog/database 后再查一次）。 */
+    private StudioMetaStoreDTO copyOf(StudioMetaStoreDTO src) {
+        StudioMetaStoreDTO dto = new StudioMetaStoreDTO();
+        dto.setDialect(src.getDialect());
+        dto.setEnvId(src.getEnvId());
+        dto.setFragment(src.isFragment());
+        dto.setStatement(src.getStatement());
+        return dto;
     }
 
     private void appendDefaultTables(StringBuilder sb, StudioMetaStoreDTO dto, List<Catalog> catalogs) {
@@ -285,16 +273,23 @@ public class FlinkContextProvider {
         if (!hasDefault) {
             return;
         }
-        StudioMetaStoreDTO tableDto = toMetaStoreDTO(dto);
+        StudioMetaStoreDTO tableDto = copyOf(dto);
         tableDto.setCatalog(DEFAULT_CATALOG);
         tableDto.setDatabase(DEFAULT_DATABASE);
         try {
-            Schema schema = callWithTimeout("default-tables", () -> studioService.getMSSchemaInfo(tableDto));
-            if (schema != null && schema.getTables() != null && !schema.getTables().isEmpty()) {
+            Schema schema = studioService.getMSSchemaInfo(tableDto);
+            if (schema != null
+                    && schema.getTables() != null
+                    && !schema.getTables().isEmpty()) {
                 List<String> tables =
                         schema.getTables().stream().map(Table::getName).collect(Collectors.toList());
-                sb.append("- `").append(DEFAULT_CATALOG).append('.').append(DEFAULT_DATABASE).append("` 下的表: ")
-                        .append(joinLimit(tables)).append('\n');
+                sb.append("- `")
+                        .append(DEFAULT_CATALOG)
+                        .append('.')
+                        .append(DEFAULT_DATABASE)
+                        .append("` 下的表: ")
+                        .append(joinLimit(tables))
+                        .append('\n');
             }
         } catch (Exception e) {
             // 表清单属补充信息，失败静默（catalog / 库清单已给出）
@@ -320,6 +315,9 @@ public class FlinkContextProvider {
         }
         String message = root.getMessage() == null ? root.getClass().getSimpleName() : root.getMessage();
         String lower = message.toLowerCase();
+        if (lower.contains("notwebcontext") || lower.contains("not web context")) {
+            return "上下文丢失（NotWebContextException）：catalog 枚举必须在 HTTP 请求线程内直接执行，本次已降级。 原始信息: " + trim(message, 200);
+        }
         if (lower.contains("could not find") || lower.contains("factory") || lower.contains("no factory")) {
             return "catalog 工厂类不可达（如 `dinky-catalog-*.jar` 不在 Dinky JVM classpath），已降级为仅提供集群与作业信息。"
                     + " 建议检查 env 语句里的 `CREATE CATALOG` 类型与 extends 目录。原始信息: " + trim(message, 200);
@@ -335,7 +333,8 @@ public class FlinkContextProvider {
     private void appendExternalResources(StringBuilder sb) {
         sb.append("\n### 外部资源清单\n");
         SystemConfiguration config = SystemConfiguration.getInstances();
-        sb.append("- Kafka 接入地址: `").append(config.getKafkaBootstrapServers())
+        sb.append("- Kafka 接入地址: `")
+                .append(config.getKafkaBootstrapServers())
                 .append("`（来源：配置中心-全局配置-Kafka 配置；**Flink 侧必须用 INTERNAL listener 29092**，不是 EXTERNAL 29094）\n");
         sb.append("- Kafka 约定建议: scan.startup.mode=")
                 .append(config.getKafkaDefaultScanStartupMode())
@@ -361,7 +360,8 @@ public class FlinkContextProvider {
                 sb.append("  - `").append(db.getName()).append("`: ");
                 try {
                     Driver driver = Driver.build(db.getDriverConfig());
-                    sb.append(joinLimit(driver.listSchemas()));
+                    sb.append(joinLimit(
+                            driver.listSchemas().stream().map(Schema::getName).collect(Collectors.toList())));
                 } catch (Exception e) {
                     sb.append("(库清单获取失败: ").append(trim(e.getMessage(), 80)).append(")");
                 }
@@ -392,147 +392,6 @@ public class FlinkContextProvider {
                     if (values.isEmpty()) {
                         continue;
                     }
-                    sb.append("- ").append(NameRegistryService.Snapshot.kindLabel(kind)).append(": ")
-                            .append(joinLimit(values)).append('\n');
-                }
-            }
-            sb.append("- 口径: 只统计 `dinky_task` 中**本租户**的 `FlinkSql` / `FlinkSqlEnv` 作业")
-                    .append("（当前 ").append(snapshot == null ? 0 : snapshot.getTaskCount())
-                    .append(" 个）；`jobs/` 目录不在统计范围\n");
-        } catch (Exception e) {
-            log.warn("FlinkContext: name registry failed", e);
-            sb.append("- （名册获取失败，已降级）\n");
-        }
-    }
-
-    // ==================== 工具方法 ====================
-
-    private <T> T callWithTimeout(String name, Callable<T> callable) throws Exception {
-        ExecutorService pool = Executors.newSingleThreadExecutor(r -> {
-            Thread thread = new Thread(r, "ai-flink-context-" + name);
-            thread.setDaemon(true);
-            return thread;
-        });
-        try {
-            Future<T> future = pool.submit(callable);
-            return future.get(CATALOG_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-        } finally {
-            pool.shutdownNow();
-        }
-    }
-
-    private static String joinLimit(List<String> items) {
-        if (items == null || items.isEmpty()) {
-            return "(无)";
-        }
-        if (items.size() <= MAX_ITEMS_PER_LINE) {
-            return String.join(", ", items);
-        }
-        return String.join(", ", items.subList(0, MAX_ITEMS_PER_LINE)) + " …(共 " + items.size() + " 个)";
-    }
-
-    private static String trim(String value, int max) {
-        if (value == null) {
-            return "";
-        }
-        return value.length() <= max ? value : value.substring(0, max) + "…";
-    }
-
-    /** 口令类字段掩码：绝不把密码送进 prompt。 */
-    private static String mask(String key, String value) {
-        if (key == null) {
-            return value;
-        }
-        String lower = key.toLowerCase();
-        if (lower.contains("password") || lower.contains("secret") || lower.contains("key")) {
-            return "***";
-        }
-        return value;
-    }
-
-    /** 静态规则红线：全部沉淀自本项目既有交付的实测结论（参数放置 / 命名唯一性 / Doris 约束 / 时区）。 */
-    private static final String RULES =
-            """
-            ### 参数放置规则（写错位置会静默失效，必须遵守）
-            - 走 SQL `SET` 有效: `execution.checkpointing.*`（**min-pause 除外**）、`restart-strategy.*`、`table.exec.*`、`parallelism.default`、`pipeline.name`
-            - **只能放「任务自定义配置」**: `execution.checkpointing.min-pause`（SQL SET 实测无效；须用 Flink 1.17 新 key）
-            - **必须写在 `CREATE TABLE ... WITH(...)`**: connector 全部参数、`sink.parallelism`
-            - **禁止进 env**: `pipeline.name`（作业唯一标识，进 env 会让同一批作业同名）
-            - Standalone 模式下 `flink-conf.yaml` / 集群配置模板 **均不在作业链路上**（已实测），客户端参数只有 SET 与自定义配置两个通道
-            ### 命名唯一性（同一 Kafka topic 多作业共用 group.id 会瓜分分区、数据偏小）
-            - 必须逐作业唯一: `pipeline.name`、`properties.group.id`、`sink.label-prefix`
-            ### Doris 写入约束
-            - 物理表必须**先建好**；Flink 侧 `CREATE TABLE` 只是逻辑映射，不会建表
-            - 回撤流（聚合 / Top-N / JOIN）写入必须 `PRIMARY KEY(...) NOT ENFORCED` + 显式 `sink.parallelism`
-            - 一天的聚合结果用 `UNIQUE KEY(stat_date)` + Merge-on-Write 覆盖
-            ### 时区口径
-            - canal `servertime` 已是北京时间挂钟字符串：按 STRING 原样截取，**禁止 TIMESTAMP 解析**（会偏 8 小时）
-            - 作业基线含 `SET 'table.local-time-zone' = 'Asia/Shanghai'`
-            """;
-
-    /** 供 {@link TaskExtConfig} 兜底（避免未使用的 import）。 */
-    @SuppressWarnings("unused")
-    private static Map<String, String> noop(TaskExtConfig config) {
-        return null;
-    }
-}
-
-    // ==================== 3. 外部资源清单 ====================
-
-    private void appendExternalResources(StringBuilder sb) {
-        sb.append("\n### 外部资源清单\n");
-        SystemConfiguration config = SystemConfiguration.getInstances();
-        sb.append("- Kafka 接入地址: `")
-                .append(config.getKafkaBootstrapServers())
-                .append("`（来源：配置中心-全局配置-Kafka 配置；**Flink 侧必须用 INTERNAL listener 29092**，不是 EXTERNAL 29094）\n");
-        sb.append("- Kafka 约定建议: scan.startup.mode=")
-                .append(config.getKafkaDefaultScanStartupMode())
-                .append("；group.id 前缀=")
-                .append(config.getKafkaConsumerGroupPrefix())
-                .append('\n');
-        try {
-            List<DataBase> databases = dataBaseService.listEnabledAll();
-            if (databases == null || databases.isEmpty()) {
-                return;
-            }
-            List<DataBase> doris = databases.stream()
-                    .filter(db -> db.getType() != null && "Doris".equalsIgnoreCase(db.getType()))
-                    .limit(MAX_DORIS_SOURCES)
-                    .collect(Collectors.toList());
-            if (doris.isEmpty()) {
-                sb.append("- 未配置 Doris 数据源（无法列出已知的 Doris 库表）\n");
-                return;
-            }
-            sb.append("- Doris 数据源（sink 侧候选，**物理表必须先建好**，Flink 侧只能写逻辑映射表）:\n");
-            for (DataBase db : doris) {
-                sb.append("  - `").append(db.getName()).append("`: ");
-                try {
-                    Driver driver = Driver.build(db.getDriverConfig());
-                    sb.append(joinLimit(driver.listSchemas()));
-                } catch (Exception e) {
-                    sb.append("(库清单获取失败: ").append(trim(e.getMessage(), 80)).append(")");
-                }
-                sb.append('\n');
-            }
-        } catch (Exception e) {
-            log.debug("FlinkContext: list external resources failed", e);
-        }
-    }
-
-    // ==================== 4. 命名名册 ====================
-
-    private void appendRegistry(StringBuilder sb) {
-        sb.append("\n### 已占用名册（生成新作业前必须避开）\n");
-        try {
-            NameRegistryService.Snapshot snapshot = nameRegistryService.getSnapshot();
-            if (snapshot == null || snapshot.isEmpty()) {
-                sb.append("- （本租户内未统计到已占用值）\n");
-            } else {
-                for (String kind : NameRegistryService.Snapshot.kinds()) {
-                    List<String> values = snapshot.get(kind);
-                    if (values.isEmpty()) {
-                        continue;
-                    }
                     sb.append("- ")
                             .append(NameRegistryService.Snapshot.kindLabel(kind))
                             .append(": ")
@@ -540,7 +399,8 @@ public class FlinkContextProvider {
                             .append('\n');
                 }
             }
-            sb.append("- 口径: 只统计 `dinky_task` 中**本租户**的 `FlinkSql` / `FlinkSqlEnv` 作业（当前 ")
+            sb.append("- 口径: 只统计 `dinky_task` 中**本租户**的 `FlinkSql` / `FlinkSqlEnv` 作业")
+                    .append("（当前 ")
                     .append(snapshot == null ? 0 : snapshot.getTaskCount())
                     .append(" 个）；`jobs/` 目录不在统计范围\n");
         } catch (Exception e) {
@@ -551,20 +411,6 @@ public class FlinkContextProvider {
 
     // ==================== 工具方法 ====================
 
-    private <T> T callWithTimeout(String name, Callable<T> callable) throws Exception {
-        ExecutorService pool = Executors.newSingleThreadExecutor(r -> {
-            Thread thread = new Thread(r, "ai-flink-context-" + name);
-            thread.setDaemon(true);
-            return thread;
-        });
-        try {
-            Future<T> future = pool.submit(callable);
-            return future.get(CATALOG_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-        } finally {
-            pool.shutdownNow();
-        }
-    }
-
     private static String joinLimit(List<String> items) {
         if (items == null || items.isEmpty()) {
             return "(无)";
@@ -595,20 +441,21 @@ public class FlinkContextProvider {
     }
 
     /** 静态规则红线：全部沉淀自本项目既有交付的实测结论（参数放置 / 命名唯一性 / Doris 约束 / 时区）。 */
-    private static final String RULES =
-            "\n### 参数放置规则（写错位置会静默失效，必须遵守）\n"
-                    + "- 走 SQL `SET` 有效: `execution.checkpointing.*`（**min-pause 除外**）、`restart-strategy.*`、`table.exec.*`、`parallelism.default`、`pipeline.name`\n"
-                    + "- **只能放「任务自定义配置」**: `execution.checkpointing.min-pause`（SQL SET 实测无效；须用 Flink 1.17 新 key）\n"
-                    + "- **必须写在 `CREATE TABLE ... WITH(...)`**: connector 全部参数、`sink.parallelism`\n"
-                    + "- **禁止进 env**: `pipeline.name`（作业唯一标识，进 env 会让同一批作业同名）\n"
-                    + "- Standalone 下 `flink-conf.yaml` 与集群配置模板**均不在作业链路上**（已实测）；客户端参数只有 SET 与自定义配置两个通道\n"
-                    + "\n### 命名唯一性（同一 Kafka topic 多作业共用 group.id 会瓜分分区、数据偏小）\n"
-                    + "- 必须逐作业唯一: `pipeline.name`、`properties.group.id`、`sink.label-prefix`\n"
-                    + "\n### Doris 写入约束\n"
-                    + "- 物理表**必须先建好**；Flink 侧 `CREATE TABLE` 只是逻辑映射，不会建表\n"
-                    + "- 回撤流（聚合 / Top-N / JOIN）写入必须 `PRIMARY KEY(...) NOT ENFORCED` + 显式 `sink.parallelism`\n"
-                    + "- 按天聚合结果用 `UNIQUE KEY(stat_date)` + Merge-on-Write 覆盖\n"
-                    + "\n### 时区口径\n"
-                    + "- canal `servertime` 已是北京时间挂钟字符串：按 STRING 原样截取，**禁止 TIMESTAMP 解析**（会偏 8 小时）\n"
-                    + "- 作业基线含 `SET 'table.local-time-zone' = 'Asia/Shanghai'`\n";
+    private static final String RULES = "\n### 参数放置规则（写错位置会静默失效，必须遵守）\n"
+            + "- 走 SQL `SET` 有效: `execution.checkpointing.*`（**min-pause 除外**）、`restart-strategy.*`、`table.exec.*`、"
+            + "`parallelism.default`、`pipeline.name`\n"
+            + "- **只能放「任务自定义配置」**: `execution.checkpointing.min-pause`（SQL SET 实测无效；须用 Flink 1.17 新 key）\n"
+            + "- **必须写在 `CREATE TABLE ... WITH(...)`**: connector 全部参数、`sink.parallelism`\n"
+            + "- **禁止进 env**: `pipeline.name`（作业唯一标识，进 env 会让同一批作业同名）\n"
+            + "- Standalone 模式下 `flink-conf.yaml` 与集群配置模板**均不在作业链路上**（已实测）；"
+            + "客户端参数只有 SET 与自定义配置两个通道\n"
+            + "\n### 命名唯一性（同一 Kafka topic 多作业共用 group.id 会瓜分分区、数据偏小）\n"
+            + "- 必须逐作业唯一: `pipeline.name`、`properties.group.id`、`sink.label-prefix`\n"
+            + "\n### Doris 写入约束\n"
+            + "- 物理表**必须先建好**；Flink 侧 `CREATE TABLE` 只是逻辑映射，不会建表\n"
+            + "- 回撤流（聚合 / Top-N / JOIN）写入必须 `PRIMARY KEY(...) NOT ENFORCED` + 显式 `sink.parallelism`\n"
+            + "- 按天聚合结果用 `UNIQUE KEY(stat_date)` + Merge-on-Write 覆盖\n"
+            + "\n### 时区口径\n"
+            + "- canal `servertime` 已是北京时间挂钟字符串：按 STRING 原样截取，**禁止 TIMESTAMP 解析**（会偏 8 小时）\n"
+            + "- 作业基线含 `SET 'table.local-time-zone' = 'Asia/Shanghai'`\n";
 }

@@ -46,6 +46,7 @@ public final class PromptStore {
      * 保证既有 Sql / SparkSQL 链路的 prompt 逐字节不变。
      */
     public static final String PLACEHOLDER_FLINK_CONTEXT = "{{flinkContext}}";
+
     public static final String PLACEHOLDER_DIALECT = "{{dialect}}";
     public static final String PLACEHOLDER_SQL = "{{sql}}";
     public static final String PLACEHOLDER_ERROR = "{{error}}";

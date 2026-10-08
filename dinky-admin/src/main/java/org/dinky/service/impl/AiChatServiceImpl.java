@@ -31,11 +31,11 @@ import org.dinky.ai.ConfirmPayload;
 import org.dinky.ai.LlmClient;
 import org.dinky.ai.LlmProfile;
 import org.dinky.ai.LlmProfileResolver;
-import org.dinky.ai.context.FlinkContextProvider;
 import org.dinky.ai.PromptStore;
 import org.dinky.ai.SqlVerifier;
 import org.dinky.ai.TableSelector;
 import org.dinky.ai.TokenUsage;
+import org.dinky.ai.context.FlinkContextProvider;
 import org.dinky.ai.mention.MentionType;
 import org.dinky.ai.skill.MarkdownSkillRenderer;
 import org.dinky.ai.skill.SkillBrief;
@@ -155,6 +155,7 @@ public class AiChatServiceImpl implements AiChatService {
 
     /** P0：FlinkSQL 作业上下文装配器（只读；仅 FlinkSQL 方言产出内容）。 */
     private final FlinkContextProvider flinkContextProvider;
+
     private final LlmClient llmClient;
     private final SqlVerifier sqlVerifier;
     private final AiChatRateLimiter rateLimiter;
