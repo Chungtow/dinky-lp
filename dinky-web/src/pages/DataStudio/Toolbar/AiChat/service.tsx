@@ -164,7 +164,24 @@ export type AiChatConfig = {
  * <p>type 预留 knowledge：后续「语料包」能力可直接复用本结构，前端无需改协议。
  */
 export type AiChatMentionItem = {
-  type: 'table' | 'job' | 'selection' | 'knowledge' | 'column' | 'skill' | 'doc';
+  /**
+   * 引用类型。
+   *
+   * <p>P1 新增：{@code source}（跨数据源全限定引用，名字存储为 {@code 数据源/库/表}
+   * 路径）、{@code topic}（零连接版 Kafka topic）、{@code env}（FlinkSQL 环境任务）。
+   * 与后端 {@code MentionType} 逐一对应。
+   */
+  type:
+    | 'table'
+    | 'job'
+    | 'selection'
+    | 'knowledge'
+    | 'column'
+    | 'skill'
+    | 'doc'
+    | 'source'
+    | 'topic'
+    | 'env';
   schemaName?: string;
   name: string;
   /**
@@ -289,6 +306,21 @@ export const getAiChatConfig = async (): Promise<AiChatConfig> => {
  * <p>仅在管理员开启 {@code sys.llm.settings.skillEnable} 时调用；description 只用于候选展示，
  * 提交给后端时按 name 定位（正文由后端按可见性读取后注入）。
  */
+/**
+ * P1：FlinkSQL 环境任务清单（{@code @env/} 候选来源）。
+ *
+ * <p>复用既有的 {@code /api/task/listFlinkSQLEnv}（DataStudio 的「FlinkSQL 环境」下拉同源），
+ * 不新增后端接口。失败时返回空数组（不阻断输入框）。
+ */
+export const listFlinkSqlEnvs = async (): Promise<{ id: number; name: string }[]> => {
+  try {
+    const res: any = await queryDataByParams(API_CONSTANTS.LIST_FLINK_SQL_ENV);
+    return res ?? [];
+  } catch (e) {
+    return [];
+  }
+};
+
 export const listSkills = async (): Promise<AiChatMentionItem[]> => {
   const res: any = await getData(API_CONSTANTS.SKILL_LIST);
   const rows = res?.data ?? res ?? [];

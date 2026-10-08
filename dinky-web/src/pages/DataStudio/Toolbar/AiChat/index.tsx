@@ -42,6 +42,7 @@ import {
   cancelAiChat,
   confirmAiChat,
   getAiChatConfig,
+  listFlinkSqlEnvs,
   listSkills,
   listTableColumns,
   reportCraftWrite
@@ -221,6 +222,15 @@ const AiChat = (props: AiChatProps) => {
   const columnCacheRef = useRef<Map<string, AiChatMentionItem[]>>(new Map());
   /** 阶段 4a：团队 Skill 候选（仅管理员开启 skillEnable 时拉取）——输入 {@code @skill/} 时展示 */
   const [skillOptions, setSkillOptions] = useState<AiChatMentionItem[]>([]);
+  // P1：跨源引用（@source/ / @env/）的候选与懒加载缓存。
+  // @source/ 是四级渐进披露（数据源 → 库 → 表），只在用户逐层往下敲时才拉下一层，
+  // 避免"刚敲 @source/ 就把全部数据源的全部库表都拉下来"。
+  const [dataSources, setDataSources] = useState<any[]>([]);
+  const [envOptions, setEnvOptions] = useState<AiChatMentionItem[]>([]);
+  /** 数据源名 → 该数据源的 schemas（含 tables）缓存 */
+  const sourceTreeRef = useRef<Map<string, any[]>>(new Map());
+  /** 缓存写入后触发候选重算（ref 本身不会触发重渲染） */
+  const [sourceTreeTick, setSourceTreeTick] = useState<number>(0);
   const [recentMentions, setRecentMentions] = useState<string[]>(() => {
     try {
       return JSON.parse(localStorage.getItem(RECENT_MENTION_KEY) ?? '[]');
@@ -255,6 +265,24 @@ const AiChat = (props: AiChatProps) => {
   const columnQuery = useMemo(() => {
     const m = /^([A-Za-z0-9_]+)\.([A-Za-z0-9_]*)$/.exec(mentionQuery.trim());
     return m ? { table: m[1], keyword: m[2] ?? '' } : null;
+  }, [mentionQuery]);
+
+  /**
+   * P1：解析 {@code @source/} 的层级查询。
+   *
+   * <p>为什么区分 trailing（尾随斜杠）：{@code @source/ds/db} 表示"正在输入库名"（该层筛选），
+   * 而 {@code @source/ds/db/} 表示"库已选定，要看表列表"（下一层）——两者字符串接近但语义不同。
+   */
+  const sourceQuery = useMemo(() => {
+    const m = /^source[-/]([^\s]*)$/.exec(mentionQuery.trim().toLowerCase());
+    if (!m) {
+      return null;
+    }
+    const raw = m[1] ?? '';
+    return {
+      trailing: raw.endsWith('/'),
+      parts: raw.split('/').filter((part) => part !== '')
+    };
   }, [mentionQuery]);
 
   useEffect(() => {
@@ -313,6 +341,67 @@ const AiChat = (props: AiChatProps) => {
       .catch(() => setSkillOptions([]));
   }, [config?.skillEnable]);
 
+  // P1：{@code @source/} 第一层候选——数据源清单（首次用到时才拉，且只拉一次）
+  useEffect(() => {
+    if (!sourceQuery || dataSources.length > 0) {
+      return;
+    }
+    getDataSourceList()
+      .then((list: any[]) => setDataSources(list ?? []))
+      .catch(() => setDataSources([]));
+  }, [sourceQuery, dataSources.length]);
+
+  // P1：{@code @source/<数据源>/...} 第二/三层候选——按数据源名懒加载并缓存其 schemas。
+  // 复用数据源面板同一个接口（showDataSourceTable）：一次拉取同时返回库与表，因此一个数据源只需请求一次。
+  useEffect(() => {
+    if (!sourceQuery || sourceQuery.parts.length < 1) {
+      return;
+    }
+    const dsName = sourceQuery.parts[0];
+    if (!dsName || sourceTreeRef.current.has(dsName)) {
+      return;
+    }
+    const ds = dataSources.find((item: any) => item.name === dsName);
+    if (!ds) {
+      return;
+    }
+    let cancelled = false;
+    showDataSourceTable(ds.id)
+      .then((res: any[]) => {
+        if (cancelled) {
+          return;
+        }
+        sourceTreeRef.current.set(dsName, res ?? []);
+        setSourceTreeTick((tick) => tick + 1);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          sourceTreeRef.current.set(dsName, []);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceQuery, dataSources]);
+
+  // P1：{@code @env/} 候选——FlinkSQL 环境任务清单（与右侧「FlinkSQL 环境」下拉同源）
+  useEffect(() => {
+    if (!/^env[-/]/.test(mentionQuery.trim().toLowerCase()) || envOptions.length > 0) {
+      return;
+    }
+    listFlinkSqlEnvs()
+      .then((list) =>
+        setEnvOptions(
+          (list ?? []).map((env: any) => ({
+            type: 'env' as const,
+            name: env.name,
+            group: l('datastudio.aiChat.mention.groupEnv')
+          }))
+        )
+      )
+      .catch(() => setEnvOptions([]));
+  }, [mentionQuery, envOptions.length]);
+
   const mentionCandidates = useMemo(() => {
     const list: (AiChatMentionItem & { group: string })[] = [];
     // provider 1：当前 schema 下的表
@@ -355,6 +444,59 @@ const AiChat = (props: AiChatProps) => {
     if (columnQuery) {
       return columnOptions;
     }
+    // provider 6（P1）：@source/ 跨数据源引用——逐层懒加载：数据源 → 库 → 表。
+    // 名字存的是"路径"（ds / ds/db / ds/db/tbl），与后端 AiChatMention.name 及（手打时）的文本一致。
+    if (sourceQuery) {
+      const tree: any[] = sourceTreeRef.current.get(sourceQuery.parts[0]) ?? [];
+      // 第一层：数据源名（或在数据源名上筛选）
+      if (sourceQuery.parts.length <= 1 && !sourceQuery.trailing) {
+        const keyword = sourceQuery.parts[0] ?? '';
+        return dataSources
+          .filter((ds: any) => !keyword || `${ds.name}`.toLowerCase().includes(keyword))
+          .map((ds: any) => ({
+            type: 'source' as const,
+            name: ds.name,
+            group: l('datastudio.aiChat.mention.groupSource')
+          }))
+          .slice(0, 20);
+      }
+      // 第二层：库名（ds/ 或在库名上筛选）
+      if (
+        (sourceQuery.trailing && sourceQuery.parts.length === 1) ||
+        (!sourceQuery.trailing && sourceQuery.parts.length === 2)
+      ) {
+        const keyword = sourceQuery.trailing ? '' : sourceQuery.parts[1];
+        return tree
+          .filter((schema: any) => !keyword || `${schema.name}`.toLowerCase().includes(keyword))
+          .map((schema: any) => ({
+            type: 'source' as const,
+            name: `${sourceQuery.parts[0]}/${schema.name}`,
+            group: l('datastudio.aiChat.mention.groupSourceDb')
+          }))
+          .slice(0, 30);
+      }
+      // 第三层：表名（ds/db/ 或在表名上筛选）
+      if (
+        (sourceQuery.trailing && sourceQuery.parts.length === 2) ||
+        (!sourceQuery.trailing && sourceQuery.parts.length === 3)
+      ) {
+        const schema = tree.find((item: any) => item.name === sourceQuery.parts[1]);
+        const keyword = sourceQuery.trailing ? '' : sourceQuery.parts[2];
+        return (schema?.tables ?? [])
+          .filter((table: any) => !keyword || `${table.name}`.toLowerCase().includes(keyword))
+          .map((table: any) => ({
+            type: 'source' as const,
+            name: `${sourceQuery.parts[0]}/${sourceQuery.parts[1]}/${table.name}`,
+            group: l('datastudio.aiChat.mention.groupSourceTable')
+          }))
+          .slice(0, 50);
+      }
+      return [];
+    }
+    // provider 7（P1）：@env/ 环境任务（@topic/ 为手打用法，不提供候选）
+    if (/^env[-/]/.test(mentionQuery.trim().toLowerCase())) {
+      return envOptions;
+    }
     // provider 5（阶段 4a 的 skill / 阶段 4b 扩展的 doc）：输入 @skill/ / @doc/ 时只给对应资产候选
     // 阶段 4b 补：@table/<表名> 与旧语法 @表名 等价，但显式前缀在「表名与 skill 名相同」时
     // 可消除歧义。此处只影响候选过滤：输入 @table/ 时只给表候选。
@@ -385,7 +527,8 @@ const AiChat = (props: AiChatProps) => {
     return list;
     // mentionOpen 作为依赖：每次打开浮层都重新读取最新的选中片段
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [schemas, schemaName, tabs, activeTab, tabParams?.taskId, mentionOpen, mentionQuery, skillOptions]);
+  }, [schemas, schemaName, tabs, activeTab, tabParams?.taskId, mentionOpen, mentionQuery, skillOptions,
+      sourceQuery, dataSources, envOptions, sourceTreeTick]);
 
   /** 过滤 + 排序：最近用过 > 前缀匹配 > 其余 */
   const filteredMentions = useMemo(() => {
@@ -398,8 +541,19 @@ const AiChat = (props: AiChatProps) => {
         ? 'skill'
         : /^table[-/]/.test(q)
           ? 'table'
-          : '';
+          : /^source[-/]/.test(q)
+            ? 'source'
+            : /^topic[-/]/.test(q)
+              ? 'topic'
+              : /^env[-/]/.test(q)
+                ? 'env'
+                : '';
     if (assetPrefix) {
+      if (assetPrefix === 'source') {
+        // P1：@source/ 的候选已在 mentionCandidates 里按「层级 + 该层关键字」算好，
+        // 而名字是路径（ds/db/tbl）——再拿整串 query 过滤一次只会把候选全过滤掉。
+        return mentionCandidates.slice(0, 20);
+      }
       const assetKey = q.slice(assetPrefix.length + 1);
       return mentionCandidates
         .filter((c) => c.type === assetPrefix && c.name?.toLowerCase().includes(assetKey))
@@ -426,6 +580,32 @@ const AiChat = (props: AiChatProps) => {
       .slice(0, 20);
   }, [mentionCandidates, mentionQuery, recentMentions]);
 
+  /**
+   * P1：mention → 输入框 token。
+   *
+   * <p><b>为什么抽成函数</b>：token 规则原本在「候选选中 / onChange 清理 / 退格整块删除」
+   * 三处各写了一遍；新增三类引用（source / topic / env）若继续复制，任何一处漏改都会表现为
+   * 「chip 与文本不同步」（删了文本而 chip 不消失）。
+   */
+  const mentionToken = (m: AiChatMentionItem): string => {
+    switch (m.type) {
+      case 'column':
+        return `@${m.name}.${m.columnName}`;
+      case 'skill':
+        return `@skill/${m.name}`;
+      case 'doc':
+        return `@doc/${m.name}`;
+      case 'source':
+        return `@source/${m.name}`;
+      case 'topic':
+        return `@topic/${m.name}`;
+      case 'env':
+        return `@env/${m.name}`;
+      default:
+        return `@${m.name}`;
+    }
+  };
+
   /** 输入框变化：解析光标前的 {@code @query}（要求 @ 前为空白或行首） */
   const handleInputChange = (e: any) => {
     const value: string = e.target.value ?? '';
@@ -436,14 +616,7 @@ const AiChat = (props: AiChatProps) => {
         ? prev.filter((m) => {
             // 字段引用的 token 是 @表名.字段名，只比对表名会误删同名表的其它字段引用；
             // 阶段 4a：skill 的 token 是 @skill/<名>（2026-10-06 起），旧写法 @skill-<名> 仍视为引用
-            const token =
-              m.type === 'column'
-                ? `@${m.name}.${m.columnName}`
-                : m.type === 'skill'
-                  ? `@skill/${m.name}`
-                  : m.type === 'doc'
-                    ? `@doc/${m.name}`
-                    : `@${m.name}`;
+            const token = mentionToken(m);
             // 阶段 4b 补：table 类型有三种合法 token——旧语法 `@表名` 与显式前缀 `@table-表名`
             // / `@table/表名`，任一仍存在于输入框即视为被引用（否则用前缀选中后会被这里误删）
             if (m.type === 'table') {
@@ -482,15 +655,7 @@ const AiChat = (props: AiChatProps) => {
     // 2026-10-06：分隔符统一为斜杠，选中后一律生成新语法；手打旧语法（连字符）后端仍解析。
     const viaTablePrefix = /^table[-/]/.test(mentionQuery.trim().toLowerCase());
     const token =
-      item.type === 'column'
-        ? `@${item.name}.${item.columnName}`
-        : item.type === 'skill'
-          ? `@skill/${item.name}`
-          : item.type === 'doc'
-            ? `@doc/${item.name}`
-            : item.type === 'table' && viaTablePrefix
-              ? `@table/${item.name}`
-              : `@${item.name}`;
+      item.type === 'table' && viaTablePrefix ? `@table/${item.name}` : mentionToken(item);
     setInputValue(inputValue.replace(/@[^\s@]*$/, `${token} `));
     setMentions((prev) =>
       prev.some(
@@ -535,11 +700,7 @@ const AiChat = (props: AiChatProps) => {
           setInputValue(nextValue);
           // 与 onChange 的同步清理保持一致：token 没了，对应 chips 一并移除
           setMentions((prev) =>
-            prev.filter((m) => {
-              const token =
-                m.type === 'column' ? `@${m.name}.${m.columnName}` : `@${m.name}`;
-              return nextValue.includes(token);
-            })
+            prev.filter((m) => nextValue.includes(mentionToken(m)))
           );
           setMentionOpen(false);
           setMentionQuery('');
@@ -1375,6 +1536,11 @@ const AiChat = (props: AiChatProps) => {
                 {metaDataAvailable
                   ? l('datastudio.aiChat.mention.noMatch')
                   : l('datastudio.aiChat.mention.noDataSource')}
+                {/* P1：跨源引用的用法提示——@topic/ 没有候选（靠手打），
+                    @source/ 也有层级要求，空结果时给一句用法比只显示"无匹配项"有用 */}
+                {/^(source|topic|env)[-/]/.test(mentionQuery.trim().toLowerCase()) ? (
+                  <div style={{ marginTop: 4 }}>{l('datastudio.aiChat.mention.sourceUsage')}</div>
+                ) : null}
               </div>
             ) : (
               filteredMentions.map((item, index) => (

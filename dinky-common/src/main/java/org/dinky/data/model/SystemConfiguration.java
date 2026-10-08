@@ -575,6 +575,42 @@ public class SystemConfiguration {
             .note(Status.SYS_LLM_SETTINGS_FLINKCONTEXTMAXCHARS_NOTE);
 
     /**
+     * 跨数据源引用开关（P1）。
+     *
+     * <p>开启后：① 用户可用 {@code @source/<数据源>[/<库>[/<表>[.<字段>]]]}（四级渐进披露），
+     * {@code @topic/<名>}、{@code @env/<名>}；② 模型可调 {@code describe_source} 与 {@code check_name_conflict} 两个只读工具。
+     * 关闭后识别到这些引用也不展开（给出"功能未开启"提示，而非静默失效）。
+     *
+     * <p>为什么需要开关：它会把<b>其它数据源的元数据</b>带入对话（仍限本租户、且不含数据行），
+     * 属"能力扩展"而非"默认超集"，故交给管理员可逆。
+     */
+    private final Configuration<Boolean> llmMentionSourceEnable = key(Status.SYS_LLM_SETTINGS_MENTIONSOURCEENABLE)
+            .booleanType()
+            .defaultValue(true)
+            .note(Status.SYS_LLM_SETTINGS_MENTIONSOURCEENABLE_NOTE);
+
+    /**
+     * 单次对话最多展开几个 {@code @source/} 引用（P1）。
+     *
+     * <p>现网一个库可有上百张表，不限量会把上下文预算一次吃光；超出部分不展开并明确提示。
+     */
+    private final Configuration<Integer> llmMentionSourceMaxExpansions =
+            key(Status.SYS_LLM_SETTINGS_MENTIONSOURCEMAXEXPANSIONS)
+                    .intType()
+                    .defaultValue(3)
+                    .note(Status.SYS_LLM_SETTINGS_MENTIONSOURCEMAXEXPANSIONS_NOTE);
+
+    /**
+     * 单条 {@code @} 引用展开的字符上限（P1）。
+     *
+     * <p>作用于 {@code @source/} / {@code @topic/} / {@code @env/} 的每一条；总量仍由 {@code llmSchemaMaxChars} 兜底。
+     */
+    private final Configuration<Integer> llmSourceExpandMaxChars = key(Status.SYS_LLM_SETTINGS_SOURCEEXPANDMAXCHARS)
+            .intType()
+            .defaultValue(8000)
+            .note(Status.SYS_LLM_SETTINGS_SOURCEEXPANDMAXCHARS_NOTE);
+
+    /**
      * Kafka 接入地址（P0）。
      *
      * <p><b>定位</b>：这是 AI Chat 生成 / 解读 FlinkSQL 时的<b>权威取值来源</b>与漂移校验基准；它
@@ -1008,6 +1044,27 @@ public class SystemConfiguration {
         return Asserts.isNull(llmFlinkContextMaxChars.getValue())
                 ? llmFlinkContextMaxChars.getDefaultValue()
                 : llmFlinkContextMaxChars.getValue();
+    }
+
+    /** @return 是否开启跨数据源引用（{@code @source/} / {@code @topic/} / {@code @env/} 与相关工具，P1） */
+    public boolean isLlmMentionSourceEnable() {
+        return Asserts.isNull(llmMentionSourceEnable.getValue())
+                ? llmMentionSourceEnable.getDefaultValue()
+                : llmMentionSourceEnable.getValue();
+    }
+
+    /** @return 单次对话最多展开的 {@code @source/} 个数（P1） */
+    public int getLlmMentionSourceMaxExpansions() {
+        return Asserts.isNull(llmMentionSourceMaxExpansions.getValue())
+                ? llmMentionSourceMaxExpansions.getDefaultValue()
+                : llmMentionSourceMaxExpansions.getValue();
+    }
+
+    /** @return 单条 {@code @} 引用展开的字符上限（P1） */
+    public int getLlmSourceExpandMaxChars() {
+        return Asserts.isNull(llmSourceExpandMaxChars.getValue())
+                ? llmSourceExpandMaxChars.getDefaultValue()
+                : llmSourceExpandMaxChars.getValue();
     }
 
     /**

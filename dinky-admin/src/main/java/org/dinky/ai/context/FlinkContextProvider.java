@@ -309,8 +309,13 @@ public class FlinkContextProvider {
         return dto;
     }
 
-    /** 把底层异常翻译成「可读原因」，替代过去的「未绑定数据源」误导性文案。 */
-    private String classifyCatalogFailure(Exception e) {
+    /**
+     * 把底层异常翻译成「可读原因」，替代过去的「未绑定数据源」误导性文案。
+     *
+     * <p>P1 起同时供 {@code EnvRefRenderer} 复用（{@code @env/} 的枚举走同一条回放链路，
+     * 失败原因必须与 catalog 区块一致），故从 private 改为 public static。
+     */
+    public static String classifyCatalogFailure(Exception e) {
         Throwable root = e;
         while (root.getCause() != null && root.getCause() != root) {
             root = root.getCause();
