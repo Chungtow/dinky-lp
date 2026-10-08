@@ -128,11 +128,10 @@ public class FlinkContextProvider {
             return "";
         }
 
+        String snapshot = LocalDateTime.now().format(TS);
         StringBuilder sb = new StringBuilder(1024);
-        sb.append("## FlinkSQL 运行环境（自动注入 · 快照 ")
-                .append(LocalDateTime.now().format(TS))
-                .append("）\n");
-        appendJobBinding(sb, task);
+        sb.append("## FlinkSQL 运行环境（AI 自动注入，仅供本次回答使用）\n");
+        appendJobBinding(sb, task, snapshot);
         appendCatalogSection(sb, task);
         appendExternalResources(sb);
         appendRules(sb);
@@ -148,8 +147,11 @@ public class FlinkContextProvider {
 
     // ==================== 1. 作业绑定 ====================
 
-    private void appendJobBinding(StringBuilder sb, TaskDTO task) {
+    private void appendJobBinding(StringBuilder sb, TaskDTO task, String snapshot) {
         sb.append("\n### 当前作业\n");
+        // 快照单独成行（而不是只写在标题括号里）：既让模型意识到「这是某时刻状态、可能已变」，
+        // 也便于按「上下文口径」要求在回答依据里复述，从而对用户可见、可审计。
+        sb.append("- 上下文快照时间: ").append(snapshot).append("（以下所有事实均为该时刻快照；catalog / 名册 / 资源清单可能随后变化）\n");
         sb.append("- 作业: task ")
                 .append(task.getId())
                 .append(" `")
@@ -455,6 +457,9 @@ public class FlinkContextProvider {
             + "- 物理表**必须先建好**；Flink 侧 `CREATE TABLE` 只是逻辑映射，不会建表\n"
             + "- 回撤流（聚合 / Top-N / JOIN）写入必须 `PRIMARY KEY(...) NOT ENFORCED` + 显式 `sink.parallelism`\n"
             + "- 按天聚合结果用 `UNIQUE KEY(stat_date)` + Merge-on-Write 覆盖\n"
+            + "\n### 上下文口径\n"
+            + "- 本区块是**某一时刻的快照**（见「上下文快照时间」）：catalog / 名册 / 资源清单可能已变化\n"
+            + "- 当回答依赖上述快照事实时，请在「依据」中注明该快照时间，便于用户判断是否需要刷新\n"
             + "\n### 时区口径\n"
             + "- canal `servertime` 已是北京时间挂钟字符串：按 STRING 原样截取，**禁止 TIMESTAMP 解析**（会偏 8 小时）\n"
             + "- 作业基线含 `SET 'table.local-time-zone' = 'Asia/Shanghai'`\n";
