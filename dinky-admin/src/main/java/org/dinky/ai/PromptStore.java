@@ -37,6 +37,16 @@ public final class PromptStore {
     private PromptStore() {}
 
     public static final String PLACEHOLDER_SCHEMA = "{{schema}}";
+    /**
+     * FlinkSQL 上下文区块（P0 只读）。
+     *
+     * <p><b>与 {@link #PLACEHOLDER_SCHEMA} 的关系</b>：schema 由「数据源 id + schema 名」驱动，而 FlinkSQL
+     * 作业没有数据源，其上下文来自「作业绑定 + Flink Catalog + 外部资源 + 规则红线 + 命名名册」的组合，
+     * 因此走独立占位符、独立预算（{@code llmFlinkContextMaxChars}）。**非 FlinkSQL 方言一律传空串**，
+     * 保证既有 Sql / SparkSQL 链路的 prompt 逐字节不变。
+     */
+    public static final String PLACEHOLDER_FLINK_CONTEXT = "{{flinkContext}}";
+
     public static final String PLACEHOLDER_DIALECT = "{{dialect}}";
     public static final String PLACEHOLDER_SQL = "{{sql}}";
     public static final String PLACEHOLDER_ERROR = "{{error}}";
@@ -81,6 +91,7 @@ public final class PromptStore {
             + "## 你拿到的数据库元数据（只有表名/字段/类型/注释/外键等元数据，不含任何业务数据行）\n"
             + PLACEHOLDER_SCHEMA
             + "\n"
+            + PLACEHOLDER_FLINK_CONTEXT
             + PLACEHOLDER_EDITOR_SQL
             + PLACEHOLDER_JOB_CONTEXT
             + "## 回答问题的方式\n"

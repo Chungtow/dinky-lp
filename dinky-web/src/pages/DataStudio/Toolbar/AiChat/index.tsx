@@ -18,7 +18,7 @@
  */
 
 import { executeSql } from '@/pages/DataStudio/service';
-import { isSql } from '@/pages/DataStudio/utils';
+import { hasFlinkContext, isSql } from '@/pages/DataStudio/utils';
 import { DataStudioActionType } from '@/pages/DataStudio/data.d';
 import { mapDispatchToProps } from '@/pages/DataStudio/DvaFunction';
 import {
@@ -115,6 +115,14 @@ const AiChat = (props: AiChatProps) => {
   const [datasourceList, setDatasourceList] = useState<any[]>([]);
   const currentSql: string = tabParams?.statement ?? '';
   const metaDataAvailable = Boolean(databaseId) && isSql(dialect?.toLowerCase());
+  /**
+   * P0：FlinkSQL 上下文可用性（与 metaDataAvailable 正交）。
+   *
+   * <p>FlinkSQL 作业没有数据源，schema 来自 Flink Catalog，由后端 `{{flinkContext}}` 区块承载；
+   * 因此这里**不能**靠放开 isSql 来判定，否则会把「未绑定数据源」的误导文案重新引出来。
+   * 该标志只用于：① 抑制误导性告警；② 展示「已加载 FlinkSQL 上下文」提示。
+   */
+  const flinkContextAvailable = hasFlinkContext(dialect?.toLowerCase());
 
   useEffect(() => {
     getAiChatConfig()
@@ -1119,11 +1127,19 @@ const AiChat = (props: AiChatProps) => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: 8 }}>
       <Space direction={'vertical'} size={4} style={{ width: '100%' }}>
-        {!metaDataAvailable && (
+        {!metaDataAvailable && !flinkContextAvailable && (
           <Alert
             type={'warning'}
             showIcon
             message={l('datastudio.aiChat.bindGuide')}
+          />
+        )}
+        {/* P0：FlinkSQL 有其专属上下文（无数据源也要给出「已加载」的正确预期，而不是「请绑定数据源」） */}
+        {flinkContextAvailable && (
+          <Alert
+            type={'info'}
+            showIcon
+            message={l('datastudio.aiChat.flinkContextLoaded')}
           />
         )}
         {/*

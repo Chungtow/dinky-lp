@@ -562,6 +562,67 @@ public class SystemConfiguration {
             .defaultValue(false)
             .note(Status.SYS_LLM_SETTINGS_TOOLSKILLWRITEENABLE_NOTE);
 
+    /**
+     * FlinkSQL 上下文注入预算（字符，P0）。
+     *
+     * <p>FlinkSQL 作业的上下文由「作业绑定 + Flink Catalog + 外部资源清单 + 参数放置规则 + 命名名册」组成，
+     * 与 Sql/SparkSQL 的「单数据源 schema」模型不同，故走<b>独立预算</b>，不与 {@code llmSchemaMaxChars} /
+     * {@code llmColumnBudgetChars} 相互挤占。属防爆上限，不是省 token 的手段。
+     */
+    private final Configuration<Integer> llmFlinkContextMaxChars = key(Status.SYS_LLM_SETTINGS_FLINKCONTEXTMAXCHARS)
+            .intType()
+            .defaultValue(6000)
+            .note(Status.SYS_LLM_SETTINGS_FLINKCONTEXTMAXCHARS_NOTE);
+
+    /**
+     * Kafka 接入地址（P0）。
+     *
+     * <p><b>定位</b>：这是 AI Chat 生成 / 解读 FlinkSQL 时的<b>权威取值来源</b>与漂移校验基准；它
+     * <b>不会</b>自动注入到作业 DDL —— connector options 只能写在 {@code CREATE TABLE ... WITH(...)} 里。
+     * 必须使用 Flink 侧可达的 <b>INTERNAL</b> listener（29092），不是 EXTERNAL 的 29094。
+     */
+    private final Configuration<String> kafkaBootstrapServers = key(Status.SYS_KAFKA_SETTINGS_BOOTSTRAPSERVERS)
+            .stringType()
+            .defaultValue("kafka03:29092,kafka04:29092,kafka05:29092")
+            .note(Status.SYS_KAFKA_SETTINGS_BOOTSTRAPSERVERS_NOTE);
+
+    private final Configuration<String> kafkaSecurityProtocol = key(Status.SYS_KAFKA_SETTINGS_SECURITYPROTOCOL)
+            .stringType()
+            .defaultValue("PLAINTEXT")
+            .note(Status.SYS_KAFKA_SETTINGS_SECURITYPROTOCOL_NOTE);
+
+    private final Configuration<String> kafkaSaslMechanism = key(Status.SYS_KAFKA_SETTINGS_SASLMECHANISM)
+            .stringType()
+            .defaultValue("")
+            .note(Status.SYS_KAFKA_SETTINGS_SASLMECHANISM_NOTE);
+
+    private final Configuration<String> kafkaSaslUsername = key(Status.SYS_KAFKA_SETTINGS_SASLUSERNAME)
+            .stringType()
+            .defaultValue("")
+            .note(Status.SYS_KAFKA_SETTINGS_SASLUSERNAME_NOTE);
+
+    private final Configuration<String> kafkaSaslPassword = key(Status.SYS_KAFKA_SETTINGS_SASLPASSWORD)
+            .stringType()
+            .defaultValue("")
+            .desensitizedHandler(DesensitizedUtil::password)
+            .note(Status.SYS_KAFKA_SETTINGS_SASLPASSWORD_NOTE);
+
+    private final Configuration<String> kafkaDefaultScanStartupMode =
+            key(Status.SYS_KAFKA_SETTINGS_DEFAULTSCANSTARTUPMODE)
+                    .stringType()
+                    .defaultValue("latest-offset")
+                    .note(Status.SYS_KAFKA_SETTINGS_DEFAULTSCANSTARTUPMODE_NOTE);
+
+    private final Configuration<String> kafkaConsumerGroupPrefix = key(Status.SYS_KAFKA_SETTINGS_CONSUMERGROUPPREFIX)
+            .stringType()
+            .defaultValue("traccar_")
+            .note(Status.SYS_KAFKA_SETTINGS_CONSUMERGROUPPREFIX_NOTE);
+
+    private final Configuration<Boolean> kafkaTopicMetadataEnable = key(Status.SYS_KAFKA_SETTINGS_TOPICMETADATAENABLE)
+            .booleanType()
+            .defaultValue(true)
+            .note(Status.SYS_KAFKA_SETTINGS_TOPICMETADATAENABLE_NOTE);
+
     private final Configuration<Boolean> metricsSysEnable = key(Status.SYS_METRICS_SETTINGS_SYS_ENABLE)
             .booleanType()
             .defaultValue(false)
@@ -940,6 +1001,75 @@ public class SystemConfiguration {
         return Asserts.isNull(llmToolThinkingEnabled.getValue())
                 ? llmToolThinkingEnabled.getDefaultValue()
                 : llmToolThinkingEnabled.getValue();
+    }
+
+    /** @return FlinkSQL 上下文区块的字符预算上限（P0） */
+    public int getLlmFlinkContextMaxChars() {
+        return Asserts.isNull(llmFlinkContextMaxChars.getValue())
+                ? llmFlinkContextMaxChars.getDefaultValue()
+                : llmFlinkContextMaxChars.getValue();
+    }
+
+    /**
+     * @return Kafka 接入地址（bootstrap.servers），AI Chat 生成 / 解读 FlinkSQL 的权威取值来源。
+     *     <p>P0 只把它作为<b>上下文事实与校验基准</b>注入 prompt，不会改写作业 DDL。
+     */
+    public String getKafkaBootstrapServers() {
+        return Asserts.isNullString(kafkaBootstrapServers.getValue())
+                ? kafkaBootstrapServers.getDefaultValue()
+                : kafkaBootstrapServers.getValue();
+    }
+
+    /** @return Kafka security.protocol */
+    public String getKafkaSecurityProtocol() {
+        return Asserts.isNullString(kafkaSecurityProtocol.getValue())
+                ? kafkaSecurityProtocol.getDefaultValue()
+                : kafkaSecurityProtocol.getValue();
+    }
+
+    /** @return Kafka sasl.mechanism */
+    public String getKafkaSaslMechanism() {
+        return Asserts.isNullString(kafkaSaslMechanism.getValue())
+                ? kafkaSaslMechanism.getDefaultValue()
+                : kafkaSaslMechanism.getValue();
+    }
+
+    /** @return Kafka sasl.jaas.config 用户名 */
+    public String getKafkaSaslUsername() {
+        return Asserts.isNullString(kafkaSaslUsername.getValue())
+                ? kafkaSaslUsername.getDefaultValue()
+                : kafkaSaslUsername.getValue();
+    }
+
+    /**
+     * @return Kafka sasl.jaas.config 密码。
+     *     <p>⚠️ <b>禁止注入 prompt</b>：仅用于后续（P1）连接 broker；接口层已脱敏。
+     */
+    public String getKafkaSaslPassword() {
+        return Asserts.isNullString(kafkaSaslPassword.getValue())
+                ? kafkaSaslPassword.getDefaultValue()
+                : kafkaSaslPassword.getValue();
+    }
+
+    /** @return 生成 FlinkSQL 时 scan.startup.mode 的建议值（latest-offset / earliest-offset） */
+    public String getKafkaDefaultScanStartupMode() {
+        return Asserts.isNullString(kafkaDefaultScanStartupMode.getValue())
+                ? kafkaDefaultScanStartupMode.getDefaultValue()
+                : kafkaDefaultScanStartupMode.getValue();
+    }
+
+    /** @return 生成 properties.group.id 的命名前缀建议 */
+    public String getKafkaConsumerGroupPrefix() {
+        return Asserts.isNullString(kafkaConsumerGroupPrefix.getValue())
+                ? kafkaConsumerGroupPrefix.getDefaultValue()
+                : kafkaConsumerGroupPrefix.getValue();
+    }
+
+    /** @return 是否允许 AI 读取 Kafka topic 元数据（P1 预留，P0 不连接 broker） */
+    public boolean isKafkaTopicMetadataEnable() {
+        return Asserts.isNull(kafkaTopicMetadataEnable.getValue())
+                ? kafkaTopicMetadataEnable.getDefaultValue()
+                : kafkaTopicMetadataEnable.getValue();
     }
 
     public int GetJobIdWaitValue() {

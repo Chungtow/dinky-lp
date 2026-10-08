@@ -28,7 +28,7 @@ import {
   ResourceIcon
 } from '@/components/Icons/CustomIcons';
 import { TagAlignCenter } from '@/components/StyledComponents';
-import { RobotOutlined } from '@ant-design/icons';
+import { ApiOutlined, RobotOutlined } from '@ant-design/icons';
 import { AuthorizedObject, useAccess } from '@/hooks/useAccess';
 import { SettingConfigKeyEnum } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/constants';
 import { DSConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/DSConfig';
@@ -38,6 +38,7 @@ import { LdapConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/
 import { MavenConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/MavenConfig';
 import { MetricsConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/MetricsConfig';
 import { LLMConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/LLMConfig';
+import { KafkaConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/KafkaConfig';
 import { ResourcesConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/ResourcesConfig';
 import { handleOption, queryDataByParams } from '@/services/BusinessCrud';
 import { RESPONSE_CODE } from '@/services/constants';
@@ -63,7 +64,8 @@ const SettingOverView = () => {
     ldap: [],
     metrics: [],
     resource: [],
-    llm: []
+    llm: [],
+    kafka: []
   });
 
   const fetchData = async () => {
@@ -108,7 +110,8 @@ const SettingOverView = () => {
       ldap: ldapConfig,
       metrics: metricsConfig,
       resource: resourceConfig,
-      llm: llmConfig
+      llm: llmConfig,
+      kafka: kafkaConfig
     } = data;
 
     return [
@@ -247,6 +250,23 @@ const SettingOverView = () => {
           />
         ),
         path: PermissionConstants.SETTING_GLOBAL_LLM
+      },
+      {
+        key: SettingConfigKeyEnum.KAFKA,
+        label: (
+          <TagAlignCenter>
+            <ApiOutlined />
+            {l('sys.setting.kafka')}
+          </TagAlignCenter>
+        ),
+        children: (
+          <KafkaConfig
+            auth={PermissionConstants.SETTING_GLOBAL_KAFKA_EDIT}
+            onSave={handleSaveSubmit}
+            data={kafkaConfig}
+          />
+        ),
+        path: PermissionConstants.SETTING_GLOBAL_KAFKA
       }
     ];
   };

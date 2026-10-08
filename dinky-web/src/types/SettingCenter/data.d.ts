@@ -77,6 +77,8 @@ export type Settings = {
   metrics: BaseConfigProperties[];
   resource: BaseConfigProperties[];
   llm: BaseConfigProperties[];
+  /** P0：Kafka 配置分组（AI Chat 生成 / 解读 FlinkSQL 时的权威接入地址来源） */
+  kafka: BaseConfigProperties[];
 };
 
 export type BaseConfigProperties = {
