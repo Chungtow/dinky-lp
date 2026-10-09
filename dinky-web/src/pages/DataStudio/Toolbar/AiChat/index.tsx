@@ -43,6 +43,7 @@ import {
   confirmAiChat,
   getAiChatConfig,
   listFlinkSqlEnvs,
+  listMentionTopics,
   listSkills,
   listTableColumns,
   reportCraftWrite
@@ -227,6 +228,8 @@ const AiChat = (props: AiChatProps) => {
   // 避免"刚敲 @source/ 就把全部数据源的全部库表都拉下来"。
   const [dataSources, setDataSources] = useState<any[]>([]);
   const [envOptions, setEnvOptions] = useState<AiChatMentionItem[]>([]);
+  /** P1-A：{@code @topic/} 候选（名册版：仅含已被作业使用的 topic，不连 Kafka） */
+  const [topicOptions, setTopicOptions] = useState<AiChatMentionItem[]>([]);
   /** 数据源名 → 该数据源的 schemas（含 tables）缓存 */
   const sourceTreeRef = useRef<Map<string, any[]>>(new Map());
   /** 缓存写入后触发候选重算（ref 本身不会触发重渲染） */
@@ -402,6 +405,24 @@ const AiChat = (props: AiChatProps) => {
       .catch(() => setEnvOptions([]));
   }, [mentionQuery, envOptions.length]);
 
+  // P1-A：{@code @topic/} 候选——首次用到时拉一次（名册接口，不计入 @source/ 的展开上限）
+  useEffect(() => {
+    if (!/^topic[-/]/.test(mentionQuery.trim().toLowerCase()) || topicOptions.length > 0) {
+      return;
+    }
+    listMentionTopics()
+      .then((names) =>
+        setTopicOptions(
+          (names ?? []).map((name: string) => ({
+            type: 'topic' as const,
+            name,
+            group: l('datastudio.aiChat.mention.groupTopic')
+          }))
+        )
+      )
+      .catch(() => setTopicOptions([]));
+  }, [mentionQuery, topicOptions.length]);
+
   const mentionCandidates = useMemo(() => {
     const list: (AiChatMentionItem & { group: string })[] = [];
     // provider 1：当前 schema 下的表
@@ -493,9 +514,14 @@ const AiChat = (props: AiChatProps) => {
       }
       return [];
     }
-    // provider 7（P1）：@env/ 环境任务（@topic/ 为手打用法，不提供候选）
+    // provider 7（P1）：@env/ 环境任务
     if (/^env[-/]/.test(mentionQuery.trim().toLowerCase())) {
       return envOptions;
+    }
+    // provider 8（P1-A）：@topic/ 候选——名册里"已被作业使用"的 topic（零连接 Kafka）。
+    // 平台里存在但无任何作业消费的 topic ，需等批次 2 的 list_topics（AdminClient）。
+    if (/^topic[-/]/.test(mentionQuery.trim().toLowerCase())) {
+      return topicOptions;
     }
     // provider 5（阶段 4a 的 skill / 阶段 4b 扩展的 doc）：输入 @skill/ / @doc/ 时只给对应资产候选
     // 阶段 4b 补：@table/<表名> 与旧语法 @表名 等价，但显式前缀在「表名与 skill 名相同」时
@@ -528,7 +554,7 @@ const AiChat = (props: AiChatProps) => {
     // mentionOpen 作为依赖：每次打开浮层都重新读取最新的选中片段
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [schemas, schemaName, tabs, activeTab, tabParams?.taskId, mentionOpen, mentionQuery, skillOptions,
-      sourceQuery, dataSources, envOptions, sourceTreeTick]);
+      sourceQuery, dataSources, envOptions, topicOptions, sourceTreeTick]);
 
   /** 过滤 + 排序：最近用过 > 前缀匹配 > 其余 */
   const filteredMentions = useMemo(() => {
@@ -1536,8 +1562,8 @@ const AiChat = (props: AiChatProps) => {
                 {metaDataAvailable
                   ? l('datastudio.aiChat.mention.noMatch')
                   : l('datastudio.aiChat.mention.noDataSource')}
-                {/* P1：跨源引用的用法提示——@topic/ 没有候选（靠手打），
-                    @source/ 也有层级要求，空结果时给一句用法比只显示"无匹配项"有用 */}
+                {/* P1：跨源引用的用法提示——@source/ 有层级要求（且受展开上限），
+                    @topic/ 候选只含已被作业使用的 topic，空结果时给一句用法比只显示"无匹配项"有用 */}
                 {/^(source|topic|env)[-/]/.test(mentionQuery.trim().toLowerCase()) ? (
                   <div style={{ marginTop: 4 }}>{l('datastudio.aiChat.mention.sourceUsage')}</div>
                 ) : null}

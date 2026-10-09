@@ -312,6 +312,22 @@ export const getAiChatConfig = async (): Promise<AiChatConfig> => {
  * <p>复用既有的 {@code /api/task/listFlinkSQLEnv}（DataStudio 的「FlinkSQL 环境」下拉同源），
  * 不新增后端接口。失败时返回空数组（不阻断输入框）。
  */
+/**
+ * P1-A：{@code @topic/} 候选（**名册版**）。
+ *
+ * <p>后端取值全部来自命名名册（本租户 `FlinkSql`/`FlinkSqlEnv` 作业的 DDL），
+ * **不连接 Kafka**——因此候选只含"已被作业使用"的 topic；
+ * "平台里存在但没任何作业消费"的 topic 需等批次 2 的 {@code list_topics}。
+ */
+export const listMentionTopics = async (): Promise<string[]> => {
+  try {
+    const res: any = await getData(API_CONSTANTS.AI_CHAT_MENTION_TOPICS);
+    return res ?? [];
+  } catch (e) {
+    return [];
+  }
+};
+
 export const listFlinkSqlEnvs = async (): Promise<{ id: number; name: string }[]> => {
   try {
     const res: any = await queryDataByParams(API_CONSTANTS.LIST_FLINK_SQL_ENV);

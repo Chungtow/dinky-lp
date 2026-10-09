@@ -722,6 +722,7 @@ export default {
   'datastudio.aiChat.mention.groupSourceDb': 'Database (cross-source)',
   'datastudio.aiChat.mention.groupSourceTable': 'Table (cross-source)',
   'datastudio.aiChat.mention.groupEnv': 'FlinkSQL env',
+  'datastudio.aiChat.mention.groupTopic': 'Topic (used by jobs)',
   'datastudio.aiChat.mention.sourceUsage': 'Cross-source usage: @source/<datasource>/<db>/<table>[.<column>]; @topic/<topic>; @env/<env name>',
   'pages.skill.listTitle': 'Skills',
   'pages.skill.fileManage': 'Files',

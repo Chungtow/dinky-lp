@@ -193,6 +193,8 @@ export enum API_CONSTANTS {
   AI_CHAT_WRITE_AUDIT = '/api/aiChat/write-audit',
   AI_CHAT_CONFIRM = '/api/aiChat/confirm',
   AI_CHAT_CANCEL = '/api/aiChat/cancel',
+  /** P1-A：{@code @topic/} 候选（名册版，零连接 Kafka） */
+  AI_CHAT_MENTION_TOPICS = '/api/aiChat/mentionTopics',
 
   /** --------------------------------------------  skill（阶段 4a）  ------------------------------------------------------- */
   SKILL_LIST = '/api/skill/list',
