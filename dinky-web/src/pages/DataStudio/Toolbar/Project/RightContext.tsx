@@ -40,6 +40,7 @@ import { DataStudioState } from '@/pages/DataStudio/model';
 import { UserBaseInfo } from '@/types/AuthCenter/data.d';
 import FolderModal from '@/pages/DataStudio/Toolbar/Project/FolderModal';
 import JobModal from '@/pages/DataStudio/Toolbar/Project/JobModal';
+import DataXQuickSyncModal from '@/pages/DataStudio/Toolbar/Project/DataXQuickSyncModal';
 import { assert } from '@/pages/DataStudio/utils';
 import { FOLDER_RIGHT_MENU, JOB_RIGHT_MENU } from '@/pages/DataStudio/Toolbar/Project/constants';
 import JobImportModal from '@/pages/DataStudio/Toolbar/Project/JobImportModal';
@@ -133,6 +134,13 @@ export const useRightContext = (props: RightContextProps) => {
    */
   const handleCreateTask = () => {
     setProjectState((prevState) => ({ ...prevState, isCreateTask: true }));
+    handleContextCancel();
+  };
+  /**
+   * one-click datax sync handle
+   */
+  const handleDataXQuickSync = () => {
+    setProjectState((prevState) => ({ ...prevState, isDataXSync: true }));
     handleContextCancel();
   };
   /**
@@ -323,6 +331,9 @@ export const useRightContext = (props: RightContextProps) => {
       case 'createTask':
         handleCreateTask();
         break;
+      case 'dataXQuickSync':
+        handleDataXQuickSync();
+        break;
       case 'delete':
         await handleDeleteSubmit();
         break;
@@ -401,6 +412,22 @@ export const useRightContext = (props: RightContextProps) => {
             }))
           }
           onSubmit={handleSubmit}
+        />
+        {/*  one-click datax sync  */}
+        <DataXQuickSyncModal
+          visible={projectState.isDataXSync}
+          parentId={Number(selectKeys[0])}
+          parentName={projectState.rightClickedNode?.name}
+          onCancel={() =>
+            setProjectState((prevState) => ({
+              ...prevState,
+              isDataXSync: false,
+              value: {}
+            }))
+          }
+          onSuccess={async () => {
+            await refresh();
+          }}
         />
         {/*  edit task  */}
         {Object.keys(projectState.value).length > 0 && (

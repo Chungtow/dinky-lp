@@ -212,7 +212,8 @@ const DataXVisualEditor = (props: DataXVisualEditorProps) => {
         return next;
       });
       if (detail.fileType === 'parquet') {
-        message.warning('目标表为 Parquet 格式，开源 DataX hdfswriter 不支持写入，请改用 orc/text 表');
+        // 本集群 DataX 为 fork 版（hdfswriter 支持 ORC/PARQUET/TEXT），此处仅提示，不再阻断
+        message.info('目标表为 Parquet 格式，本集群 fork 版 hdfswriter 支持写入；如同步异常请改用 orc/text 表');
       }
       return;
     }

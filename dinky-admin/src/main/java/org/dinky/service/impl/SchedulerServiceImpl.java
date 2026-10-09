@@ -294,7 +294,8 @@ public class SchedulerServiceImpl implements SchedulerService {
         sb.append("    content = config['job']['content'][0]\n");
         sb.append("    writer_params = content['writer']['parameter']\n");
         sb.append("    hdfs_path = writer_params['path']\n");
-        sb.append("    table_dir = hdfs_path.rsplit('/pt=', 1)[0]\n");
+        sb.append("    last_seg = hdfs_path.rstrip('/').rsplit('/', 1)[-1]\n");
+        sb.append("    table_dir = hdfs_path.rsplit('/', 1)[0] if '=' in last_seg else hdfs_path\n");
         sb.append("    hadoop_home = os.environ.get('HADOOP_HOME', '/opt/bigdata/hadoop/latest')\n");
         sb.append("    hdfs = os.path.join(hadoop_home, 'bin', 'hdfs')\n");
         sb.append("    subprocess.run([hdfs, 'dfs', '-mkdir', '-p', table_dir], check=True)\n");
