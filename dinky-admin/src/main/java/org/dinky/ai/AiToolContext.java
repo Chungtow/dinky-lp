@@ -19,6 +19,7 @@
 
 package org.dinky.ai;
 
+import org.dinky.ai.context.RequestSnapshot;
 import org.dinky.ai.skill.SkillBrief;
 import org.dinky.data.model.DataBase;
 
@@ -68,6 +69,16 @@ public class AiToolContext {
      * <p>默认为<b>空列表</b>而非 {@code null}：工具侧可直接遍历，无需判空。
      */
     private List<SkillBrief> visibleSkills = Collections.emptyList();
+
+    /**
+     * P1：请求线程预解析的上下文快照（本租户启用中的数据源索引 + 命名名册）。
+     *
+     * <p>与 {@link #visibleSkills} 同理：工具循环跑在异步线程，按 id / 按名反查数据库会因租户上下文
+     * 丢失而失败或给出错误结果，故一律在请求线程算好（见 {@link RequestSnapshot}）。
+     *
+     * <p>默认为空快照：工具侧据此给出"快照不可用"的明确提示，而非静默给出空结果。
+     */
+    private RequestSnapshot requestSnapshot = RequestSnapshot.empty();
 
     /** 单个工具的超时秒数 */
     private int timeoutSeconds;

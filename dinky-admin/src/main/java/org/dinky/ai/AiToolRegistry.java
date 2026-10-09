@@ -69,8 +69,18 @@ public class AiToolRegistry {
 
     /** 本次下发给模型的工具声明列表 */
     /** 阶段 4b：不依赖数据源的工具名（未绑定数据源时仍下发）。 */
-    private static final java.util.List<String> DATA_BASE_FREE_TOOL_NAMES =
-            java.util.Arrays.asList("list_skills", "read_skill", "create_skill", "write_skill_file", "delete_skill");
+    private static final java.util.List<String> DATA_BASE_FREE_TOOL_NAMES = java.util.Arrays.asList(
+            "list_skills",
+            "read_skill",
+            "create_skill",
+            "write_skill_file",
+            "delete_skill",
+            // P1：这两个工具不看"当前绑定的数据源"，而用请求线程预解析的快照
+            // （本租户启用中的数据源索引 + 命名名册）。
+            // 而 FlinkSQL 作业本就没有数据源（P0 结论）——若不在此列出，
+            // 它们在 FlinkSQL 对话里将永远不会下发给模型（则 @source/ 与工具两条路都不可用）。
+            "describe_source",
+            "check_name_conflict");
 
     /**
      * 阶段 4b：按「是否绑定数据源」过滤后的工具清单。

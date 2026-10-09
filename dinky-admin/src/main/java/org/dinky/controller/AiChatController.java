@@ -19,12 +19,15 @@
 
 package org.dinky.controller;
 
+import org.dinky.ai.context.NameRegistryService;
 import org.dinky.data.dto.AiChatConfirmRequest;
 import org.dinky.data.dto.AiChatRequest;
 import org.dinky.data.dto.AiChatWriteAuditRequest;
 import org.dinky.data.result.Result;
 import org.dinky.data.vo.AiChatConfig;
 import org.dinky.service.AiChatService;
+
+import java.util.List;
 
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -57,6 +60,9 @@ public class AiChatController {
 
     private final AiChatService aiChatService;
 
+    /** P1-A：{@code @topic/} 候选来自命名名册（零连接 Kafka） */
+    private final NameRegistryService nameRegistryService;
+
     /**
      * 发起对话，流式返回（SSE）。
      *
@@ -86,6 +92,29 @@ public class AiChatController {
     @ApiOperation("Query AI Chat Config")
     public Result<AiChatConfig> getConfig() {
         return Result.succeed(aiChatService.getConfig());
+    }
+
+    /**
+     * 查询 {@code @topic/} 的候选列表（P1-A · 名册版）。
+     *
+     * <p><b>为什么需要这个接口</b>：前端「{@code @} 候选浮层」只能拿到它已知的数据（当前面板数据源的库表、
+     * 已打开的作业、skill 资产…），而 topic 清单只存在于服务端的名册里。不给接口就只能靠手打，
+     * 用户体验上就是“输入 {@code @topic/} 什么都不出”。
+     *
+     * <p><b>为什么还是零连接</b>：取值全部来自命名名册（{@code dinky_task} 里本租户
+     * {@code FlinkSql}/{@code FlinkSqlEnv} 作业的 DDL），不提交任何 Kafka 请求。因此候选只覆盖
+     * <b>已被作业使用</b>的 topic；“平台里存在但无任何作业消费”的 topic 需等批次 2 的
+     * AdminClient（{@code list_topics}）。
+     *
+     * <p>这里故意<b>不做</b> {@code mentionSourceEnable} 开关门控：该开关的口径是“{@code @source/} +
+     * {@code describe_source} / {@code check_name_conflict}”，而 {@code @topic/} 在批次 1 一直可用（同其渲染器）。
+     *
+     * @return 已占用（即已被作业引用）的 topic 名清单（本租户）
+     */
+    @GetMapping("/mentionTopics")
+    @ApiOperation("List topic candidates for @topic mentions (from name registry, no Kafka connection)")
+    public Result<List<String>> listMentionTopics() {
+        return Result.succeed(nameRegistryService.getSnapshot().get("kafkaTopic"));
     }
 
     /**

@@ -87,6 +87,19 @@ public class NameRegistryService {
                                 "\\b" + keyRegex + "\\s*=\\s*'?([A-Za-z0-9_.\\-]+)'?", Pattern.CASE_INSENSITIVE)));
     }
 
+    /**
+     * canal-json 血缘抽取（P1）：{@code 'canal-json.database.include'} / {@code 'canal-json.table.include'}。
+     *
+     * <p><b>为什么不进上面那份"名册"</b>：名册输出的是"必须逐作业唯一的名字"（pipeline.name / group.id /
+     * label-prefix …），而这两个是"作业消费的源位置"，不是需要避让的名字；混进名册既污染 P0 的输出口径，
+     * 也会让模型误以为它们是"已占用名"。它们只在 {@code @topic/} 的"topic → 源库表"血缘里使用。
+     */
+    private static final Pattern CANAL_DATABASE =
+            Pattern.compile("'canal-json\\.database\\.include'\\s*=\\s*'([^']+)'", Pattern.CASE_INSENSITIVE);
+
+    private static final Pattern CANAL_TABLE =
+            Pattern.compile("'canal-json\\.table\\.include'\\s*=\\s*'([^']+)'", Pattern.CASE_INSENSITIVE);
+
     private static final long TTL_MS = 60_000L;
 
     private final TaskService taskService;
@@ -118,6 +131,7 @@ public class NameRegistryService {
     private Snapshot load() {
         Map<String, Set<String>> collected = new LinkedHashMap<>();
         KIND_LABEL.keySet().forEach(kind -> collected.put(kind, new LinkedHashSet<>()));
+        List<TaskLink> links = new ArrayList<>();
         int taskCount = 0;
         try {
             List<Task> tasks = taskService.list(new LambdaQueryWrapper<Task>()
@@ -130,22 +144,44 @@ public class NameRegistryService {
                         continue;
                     }
                     taskCount++;
+                    Map<String, String> taskValues = new LinkedHashMap<>();
                     for (Map.Entry<String, List<Pattern>> entry : PATTERNS.entrySet()) {
                         String value = extract(statement, entry.getValue());
                         if (value != null && !value.isEmpty()) {
                             collected.get(entry.getKey()).add(value);
+                            taskValues.put(entry.getKey(), value);
                         }
+                    }
+                    // P1：canal 血缘（不参与名册输出，只用于 @topic/ 的 topic ↔ 源库表映射）
+                    taskValues.put("canalDatabase", extract(statement, CANAL_DATABASE));
+                    taskValues.put("canalTable", extract(statement, CANAL_TABLE));
+                    if (taskValues.get("kafkaTopic") != null
+                            || taskValues.get("canalDatabase") != null
+                            || taskValues.get("canalTable") != null) {
+                        links.add(new TaskLink(
+                                task.getId(),
+                                task.getName(),
+                                taskValues.get("kafkaTopic"),
+                                taskValues.get("kafkaGroupId"),
+                                taskValues.get("canalDatabase"),
+                                taskValues.get("canalTable")));
                     }
                 }
             }
         } catch (Exception e) {
             // 名册属"锦上添花"上下文：失败不阻塞 AI 请求
             log.warn("Build name registry failed, return empty snapshot", e);
-            return new Snapshot(taskCount, Collections.emptyMap());
+            return new Snapshot(taskCount, Collections.emptyMap(), Collections.emptyList());
         }
         Map<String, List<String>> result = new LinkedHashMap<>();
         collected.forEach((kind, values) -> result.put(kind, new ArrayList<>(values)));
-        return new Snapshot(taskCount, result);
+        return new Snapshot(taskCount, result, links);
+    }
+
+    /** 单模式抽取（P1 的 canal 血缘不需要"引号形态 + 裸值形态"两套模式） */
+    private static String extract(String statement, Pattern pattern) {
+        Matcher matcher = pattern.matcher(statement);
+        return matcher.find() ? matcher.group(1) : null;
     }
 
     private static String extract(String statement, List<Pattern> patterns) {
@@ -168,9 +204,53 @@ public class NameRegistryService {
         /** 种类 → 已占用的值（去重、保序）。 */
         private final Map<String, List<String>> valuesByKind;
 
-        public Snapshot(int taskCount, Map<String, List<String>> valuesByKind) {
+        /**
+         * P1：逐作业的血缘快照（topic ↔ canal 源库表 ↔ group.id）。
+         *
+         * <p>与 {@code valuesByKind} 的区别：后者是"按种类去重的名字集合"（适合回答"这个名字被占用了吗"），
+         * 这里保留<b>作业维度的对应关系</b>——{@code @topic/<名>} 要回答的是"该 topic 被哪些作业消费、
+         * 对应哪张源表、已用了哪些 group.id"，去重后就答不出来了。
+         */
+        private final List<TaskLink> taskLinks;
+
+        public Snapshot(int taskCount, Map<String, List<String>> valuesByKind, List<TaskLink> taskLinks) {
             this.taskCount = taskCount;
             this.valuesByKind = valuesByKind;
+            this.taskLinks = taskLinks == null ? Collections.emptyList() : taskLinks;
+        }
+
+        /** P1：消费该 topic 的作业血缘（忽略大小写；无匹配返回空列表）。 */
+        public List<TaskLink> linksOfTopic(String topic) {
+            List<TaskLink> matched = new ArrayList<>();
+            if (topic == null) {
+                return matched;
+            }
+            for (TaskLink link : taskLinks) {
+                if (link.getTopic() != null && link.getTopic().equalsIgnoreCase(topic)) {
+                    matched.add(link);
+                }
+            }
+            return matched;
+        }
+
+        /**
+         * P1：判断某个名字是否已被占用（供 {@code check_name_conflict} 工具）。
+         *
+         * @param kind 名册种类（见 {@link #kinds()}）
+         * @param value 待检查的名字
+         * @return 冲突的已占用值（通常 0 或 1 个；仅大小写不同的同名会给出多个）
+         */
+        public List<String> conflictsOf(String kind, String value) {
+            List<String> conflicts = new ArrayList<>();
+            if (kind == null || value == null || value.isEmpty()) {
+                return conflicts;
+            }
+            for (String occupied : get(kind)) {
+                if (occupied != null && occupied.equalsIgnoreCase(value.trim())) {
+                    conflicts.add(occupied);
+                }
+            }
+            return conflicts;
         }
 
         public boolean isEmpty() {
@@ -200,6 +280,41 @@ public class NameRegistryService {
 
         public static Collection<String> kinds() {
             return KIND_LABEL.keySet();
+        }
+    }
+
+    /** P1：单个作业的血缘（topic ↔ canal 源库表 ↔ group.id）。 */
+    @Getter
+    public static class TaskLink {
+
+        private final Integer taskId;
+        private final String taskName;
+        private final String topic;
+        private final String kafkaGroupId;
+        private final String canalDatabase;
+        private final String canalTable;
+
+        public TaskLink(
+                Integer taskId,
+                String taskName,
+                String topic,
+                String kafkaGroupId,
+                String canalDatabase,
+                String canalTable) {
+            this.taskId = taskId;
+            this.taskName = taskName;
+            this.topic = topic;
+            this.kafkaGroupId = kafkaGroupId;
+            this.canalDatabase = canalDatabase;
+            this.canalTable = canalTable;
+        }
+
+        /** 血缘展示串 {@code 源库.源表}；无血缘信息时返回 {@code null}。 */
+        public String sourceTablePath() {
+            if (canalDatabase == null || canalTable == null) {
+                return null;
+            }
+            return canalDatabase + "." + canalTable;
         }
     }
 

@@ -36,7 +36,12 @@ import org.dinky.ai.SqlVerifier;
 import org.dinky.ai.TableSelector;
 import org.dinky.ai.TokenUsage;
 import org.dinky.ai.context.FlinkContextProvider;
+import org.dinky.ai.context.NameRegistryService;
+import org.dinky.ai.context.RequestSnapshot;
+import org.dinky.ai.mention.EnvRefRenderer;
 import org.dinky.ai.mention.MentionType;
+import org.dinky.ai.mention.SourceRefRenderer;
+import org.dinky.ai.mention.TopicRefRenderer;
 import org.dinky.ai.skill.MarkdownSkillRenderer;
 import org.dinky.ai.skill.SkillBrief;
 import org.dinky.ai.skill.SkillDoc;
@@ -156,6 +161,18 @@ public class AiChatServiceImpl implements AiChatService {
     /** P0：FlinkSQL 作业上下文装配器（只读；仅 FlinkSQL 方言产出内容）。 */
     private final FlinkContextProvider flinkContextProvider;
 
+    /** P1：{@code @source/} 引用的渲染器（跨数据源库表 + Flink DDL 骨架） */
+    private final SourceRefRenderer sourceRefRenderer;
+
+    /** P1：{@code @topic/} 引用的渲染器（零连接版：名册血缘 + MySQL 源表字段） */
+    private final TopicRefRenderer topicRefRenderer;
+
+    /** P1：{@code @env/} 引用的渲染器（只给枚举结果，不注入 env 原文） */
+    private final EnvRefRenderer envRefRenderer;
+
+    /** P1：命名名册（为工具快照提供 topic 血缘与名字占用检查） */
+    private final NameRegistryService nameRegistryService;
+
     private final LlmClient llmClient;
     private final SqlVerifier sqlVerifier;
     private final AiChatRateLimiter rateLimiter;
@@ -219,11 +236,14 @@ public class AiChatServiceImpl implements AiChatService {
         // 数据源必须在请求线程中解析：对话跑在异步线程，此时租户上下文（ThreadLocal）已丢失，
         // 再按 id 查询会因租户过滤而查不到数据源（此前表现为"数据源不存在"）。
         DataBase dataBase = resolveDataBase(request);
+        // P1：跨数据源引用（@source/ @topic/）与工具所需的快照（数据源索引 + 命名名册）必须在请求线程解析——
+        // 工具循环与渲染都可能落到异步线程，那里租户上下文已丢失（见 RequestSnapshot 头注释）。
+        final RequestSnapshot requestSnapshot = buildRequestSnapshot();
         // schema 也在请求线程构建：元数据接口内部按 id 反查数据源，同样依赖租户上下文
         String built = null;
         try {
             if (request != null) {
-                built = buildSchemaContext(request);
+                built = buildSchemaContext(request, requestSnapshot);
             }
         } catch (Exception e) {
             log.warn("Build schema context before stream failed", e);
@@ -244,8 +264,25 @@ public class AiChatServiceImpl implements AiChatService {
         // 那里 Sa-Token 与租户上下文都已丢失，loadVisibleSkillBriefs() 会取不到登录用户而抛异常、
         // 降级为空集合（表现为 list_skills 恒为空，AI 据此断言"当前账号没有 skill"）。
         final List<SkillBrief> visibleSkills = loadVisibleSkillBriefs();
-        chatExecutor.execute(() -> doChat(request, emitter, dataBase, schemaContext, flinkContext, visibleSkills));
+        chatExecutor.execute(
+                () -> doChat(request, emitter, dataBase, schemaContext, flinkContext, visibleSkills, requestSnapshot));
         return emitter;
+    }
+
+    /**
+     * P1：请求线程预解析上下文快照（本租户启用中的数据源索引 + 命名名册）。
+     *
+     * <p>{@code @source/} 的渲染走的是请求线程（路径在 {@code chat} 里就已经完成），但{@code describe_source} /
+     * {@code check_name_conflict} 两个工具跑在异步线程，那里按名查库会因租户过滤而"查不到"，
+     * 故一律在此算好快照并随请求传入。失败降级为空快照（工具侧会给出明确提示，不静默）。
+     */
+    private RequestSnapshot buildRequestSnapshot() {
+        try {
+            return RequestSnapshot.of(dataBaseService.listEnabledAll(), nameRegistryService.getSnapshot());
+        } catch (Exception e) {
+            log.warn("Build request snapshot failed", e);
+            return RequestSnapshot.empty();
+        }
     }
 
     /** 解析当前作业绑定的数据源（失败时返回 null，由 SqlVerifier 给出明确提示） */
@@ -302,7 +339,8 @@ public class AiChatServiceImpl implements AiChatService {
             DataBase dataBase,
             String prebuiltSchemaContext,
             String prebuiltFlinkContext,
-            List<SkillBrief> visibleSkills) {
+            List<SkillBrief> visibleSkills,
+            RequestSnapshot requestSnapshot) {
         long start = System.currentTimeMillis();
         TokenUsage totalUsage = new TokenUsage();
         AiChatLog audit = new AiChatLog();
@@ -378,8 +416,9 @@ public class AiChatServiceImpl implements AiChatService {
                 return;
             }
 
-            String schemaContext =
-                    StrUtil.isNotEmpty(prebuiltSchemaContext) ? prebuiltSchemaContext : buildSchemaContext(request);
+            String schemaContext = StrUtil.isNotEmpty(prebuiltSchemaContext)
+                    ? prebuiltSchemaContext
+                    : buildSchemaContext(request, requestSnapshot);
             List<AiChatMessage> messages = buildMessages(request, schemaContext, prebuiltFlinkContext);
 
             StringBuilder answer = new StringBuilder();
@@ -396,7 +435,8 @@ public class AiChatServiceImpl implements AiChatService {
                         runId,
                         run,
                         () -> runRegistry.isCancelled(run),
-                        visibleSkills);
+                        visibleSkills,
+                        requestSnapshot);
                 mergeUsage(totalUsage, toolRun.getUsage());
                 // 阶段 2c-0：用户已请求中断——停止后续校验 / 修复，直接收尾
                 if (runRegistry.isCancelled(run)) {
@@ -579,7 +619,8 @@ public class AiChatServiceImpl implements AiChatService {
             String runId,
             AiChatRunRegistry.RunContext run,
             BooleanSupplier cancelled,
-            List<SkillBrief> visibleSkills) {
+            List<SkillBrief> visibleSkills,
+            RequestSnapshot requestSnapshot) {
         AiToolContext context = AiToolContext.create(
                 dataBase,
                 StrUtil.nullToEmpty(request.getSchemaName()),
@@ -596,6 +637,9 @@ public class AiChatServiceImpl implements AiChatService {
         // 注意：这里必须使用【请求线程】预解析并传入的快照，不能在此（异步线程）重新查询——
         // 否则 Sa-Token / 租户上下文均已丢失，会静默降级为空集合（4b UAT 的 B1 即此表现）。
         context.setVisibleSkills(visibleSkills);
+        // P1：跨数据源引用与命名检查所需的快照（数据源索引 + 命名名册）——
+        // 同 visibleSkills，必须用请求线程解析好的那份，绝不能在此（异步线程）重新查。
+        context.setRequestSnapshot(requestSnapshot);
         // 阶段 2c-2：记录最近一次工具失败原因，随确认请求下发，
         // 使「第 N 次尝试」的确认框能同时显示上次为什么失败（用户知情后再决定是否执行）
         AtomicReference<String> lastToolError = new AtomicReference<>();
@@ -1185,6 +1229,18 @@ public class AiChatServiceImpl implements AiChatService {
             Pattern.compile("@(skill|doc|table)[-/]([A-Za-z0-9_-]{1,64})", Pattern.CASE_INSENSITIVE);
 
     /**
+     * P1：路径式引用的匹配模式——{@code @source/<数据源>[/<库>[/<表>[.<字段>]]]} /
+     * {@code @topic/<名>} / {@code @env/<名>}。
+     *
+     * <p><b>为什么不并入上面那条正则</b>：上面那条是"单段名字"（skill / doc / table），字符类不含 {@code /}；
+     * 若把多段路径并进去，就会改动既有三种引用的匹配行为——而那是本批最大的回归风险（P1 计划 §7 R1）。
+     * 两条各自独立、互不影响；第二组最多 4 段，与 {@code SourceRefResolver.parse} 口径一致。
+     */
+    private static final Pattern PATH_MENTION_PATTERN = Pattern.compile(
+            "@(source|topic|env)[-/]([\\p{L}\\p{N}_\\-.$]{1,64}(?:/[\\p{L}\\p{N}_\\-.$]{1,64}){0,3})",
+            Pattern.CASE_INSENSITIVE);
+
+    /**
      * 解析本次请求的 {@code @} 引用——<b>兼容「点选」与「手打」两种用法</b>（阶段 4b 修复）。
      *
      * <p><b>为什么必须兜底</b>：前端的 mentions 只在**从候选浮层点选**时才登记；用户**直接手打**
@@ -1220,14 +1276,38 @@ public class AiChatServiceImpl implements AiChatService {
             result.add(mention);
             log.info("Mention recovered from message text: type={}, name={}", type, name);
         }
+        // P1：路径式引用（@source/ @topic/ @env/）同样需要手打兜底——
+        // 前端只在"从候选浮层点选"时登记 mentions，手打不会进来。
+        Matcher pathMatcher = PATH_MENTION_PATTERN.matcher(message);
+        while (pathMatcher.find()) {
+            String rawType = pathMatcher.group(1).toLowerCase();
+            String type = "source".equals(rawType)
+                    ? MentionType.SOURCE
+                    : "topic".equals(rawType) ? MentionType.TOPIC : MentionType.ENV;
+            String name = pathMatcher.group(2);
+            boolean exists = result.stream()
+                    .anyMatch(m -> type.equalsIgnoreCase(m.getType()) && name.equalsIgnoreCase(m.getName()));
+            if (exists) {
+                continue;
+            }
+            AiChatMention mention = new AiChatMention();
+            mention.setType(type);
+            mention.setName(name);
+            result.add(mention);
+            log.info("Path mention recovered from message text: type={}, name={}", type, name);
+        }
         return result;
     }
 
-    private String buildMentionContext(AiChatRequest request, Integer databaseId, String schemaName) {
+    private String buildMentionContext(
+            AiChatRequest request, Integer databaseId, String schemaName, RequestSnapshot snapshot) {
         List<AiChatMention> mentions = resolveMentions(request);
         if (CollUtil.isEmpty(mentions)) {
             return "";
         }
+        // P1：单次对话的 @source/ 展开计数（上限可配）——一个库可有上百张表，
+        // 不限量会把上下文预算一次吃光（P1 计划 §3.1 / D6）。
+        int sourceExpansions = 0;
         StringBuilder sb = new StringBuilder();
         sb.append("## 用户显式指定的上下文（@ 引用，优先级最高）\n");
         for (AiChatMention mention : mentions) {
@@ -1257,6 +1337,28 @@ public class AiChatServiceImpl implements AiChatService {
                         .append(column)
                         .append("\n");
                 appendColumnDetail(sb, databaseId, tableSchema, table, column);
+            } else if (MentionType.SOURCE.equalsIgnoreCase(mention.getType())) {
+                // P1：跨数据源全限定引用（FlinkSQL 作业本身没有数据源，靠它才能引用源表 / sink 表）
+                String sourcePath = StrUtil.nullToEmpty(mention.getName());
+                SystemConfiguration p1Config = SystemConfiguration.getInstances();
+                if (!p1Config.isLlmMentionSourceEnable()) {
+                    sb.append("- @source/").append(sourcePath).append("（该能力未开启：可在【配置中心 - 全局设置 - LLM 配置】开启）\n");
+                } else if (sourceExpansions >= Math.max(p1Config.getLlmMentionSourceMaxExpansions(), 1)) {
+                    sb.append("- @source/")
+                            .append(sourcePath)
+                            .append("（已达本次对话 @source/ 展开上限 ")
+                            .append(p1Config.getLlmMentionSourceMaxExpansions())
+                            .append("，未展开；可合并路径或分批提问）\n");
+                } else {
+                    sourceExpansions++;
+                    sb.append(sourceRefRenderer.render(sourcePath, snapshot.getDataBasesByName()));
+                }
+            } else if (MentionType.TOPIC.equalsIgnoreCase(mention.getType())) {
+                // P1：零连接版 topic（名册血缘 + MySQL 源表字段；不连 Kafka）
+                sb.append(topicRefRenderer.render(StrUtil.nullToEmpty(mention.getName())));
+            } else if (MentionType.ENV.equalsIgnoreCase(mention.getType())) {
+                // P1：环境任务引用（只给 catalog / 库清单，绝不注入 env 原文）
+                sb.append(envRefRenderer.render(StrUtil.nullToEmpty(mention.getName())));
             } else if (MentionType.SKILL.equalsIgnoreCase(mention.getType())
                     || MentionType.DOC.equalsIgnoreCase(mention.getType())) {
                 // 阶段 4a：@skill/<名>；阶段 4b：@doc/<名>（业务背景知识，与 skill 同构）。
@@ -1540,7 +1642,7 @@ public class AiChatServiceImpl implements AiChatService {
      *   <li>未选中表：输出当前 schema 下的表清单（限量）及其列</li>
      * </ul>
      */
-    private String buildSchemaContext(AiChatRequest request) {
+    private String buildSchemaContext(AiChatRequest request, RequestSnapshot snapshot) {
         Integer databaseId = request.getDatabaseId();
         String schemaName = StrUtil.nullToEmpty(request.getSchemaName());
         StringBuilder sb = new StringBuilder();
@@ -1550,7 +1652,7 @@ public class AiChatServiceImpl implements AiChatService {
         // 这类问题根本不需要数据源）会完全看不到引用内容与清单——该缺陷自 4a 起即存在，只是当时
         // 多在已绑定数据源的取数场景下使用，未暴露。
         // 阶段 1a（1.4）：@ 显式引用优先级最高，先于表清单注入
-        sb.append(buildMentionContext(request, databaseId, schemaName));
+        sb.append(buildMentionContext(request, databaseId, schemaName, snapshot));
 
         // 阶段 4a：注入「当前用户可见 skill 清单」（name + description，渐进披露）。
         // 只给清单、不给正文——正文由 @skill/<名> 显式引用时才注入（见 appendAssetDetail）；

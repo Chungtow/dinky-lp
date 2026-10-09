@@ -25,6 +25,8 @@ import {
   getDataSourceList,
   showDataSourceTable
 } from '@/pages/DataStudio/Toolbar/DataSource/service';
+import { decideMentionBackspace } from './mentionBackspace';
+import type { MentionBackspaceArm } from './mentionBackspace';
 import ToolProcess from './components/ToolProcess';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -42,6 +44,8 @@ import {
   cancelAiChat,
   confirmAiChat,
   getAiChatConfig,
+  listFlinkSqlEnvs,
+  listMentionTopics,
   listSkills,
   listTableColumns,
   reportCraftWrite
@@ -77,6 +81,9 @@ import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
 const CODE_BLOCK_REGEX = /```[a-zA-Z]*\s*\n?([\s\S]*?)```/g;
 /** 「最近使用」的 @ 引用名（localStorage key） */
 const RECENT_MENTION_KEY = 'dinky.ai-chat.recent-mentions';
+
+/** 纯修饰键（按下它们不算"打断 @串两下删除"） */
+const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Dead']);
 
 type AiChatProps = {
   tabs: any[];
@@ -219,8 +226,26 @@ const AiChat = (props: AiChatProps) => {
    */
   const [columnOptions, setColumnOptions] = useState<AiChatMentionItem[]>([]);
   const columnCacheRef = useRef<Map<string, AiChatMentionItem[]>>(new Map());
+  /**
+   * @串退格的「两下删除」判据：第一下删分隔符时埋点，第二下才整块删。
+   *
+   * <p>为何需要它：光标前是 `@table/foo` 时，「刚输完」与「打到一半」的文本完全一样，无法只靠文本区分；
+   * 判据与理由见 `mentionBackspace.ts`。
+   */
+  const atomicDeleteArmRef = useRef<MentionBackspaceArm | null>(null);
   /** 阶段 4a：团队 Skill 候选（仅管理员开启 skillEnable 时拉取）——输入 {@code @skill/} 时展示 */
   const [skillOptions, setSkillOptions] = useState<AiChatMentionItem[]>([]);
+  // P1：跨源引用（@source/ / @env/）的候选与懒加载缓存。
+  // @source/ 是四级渐进披露（数据源 → 库 → 表），只在用户逐层往下敲时才拉下一层，
+  // 避免"刚敲 @source/ 就把全部数据源的全部库表都拉下来"。
+  const [dataSources, setDataSources] = useState<any[]>([]);
+  const [envOptions, setEnvOptions] = useState<AiChatMentionItem[]>([]);
+  /** P1-A：{@code @topic/} 候选（名册版：仅含已被作业使用的 topic，不连 Kafka） */
+  const [topicOptions, setTopicOptions] = useState<AiChatMentionItem[]>([]);
+  /** 数据源名 → 该数据源的 schemas（含 tables）缓存 */
+  const sourceTreeRef = useRef<Map<string, any[]>>(new Map());
+  /** 缓存写入后触发候选重算（ref 本身不会触发重渲染） */
+  const [sourceTreeTick, setSourceTreeTick] = useState<number>(0);
   const [recentMentions, setRecentMentions] = useState<string[]>(() => {
     try {
       return JSON.parse(localStorage.getItem(RECENT_MENTION_KEY) ?? '[]');
@@ -255,6 +280,24 @@ const AiChat = (props: AiChatProps) => {
   const columnQuery = useMemo(() => {
     const m = /^([A-Za-z0-9_]+)\.([A-Za-z0-9_]*)$/.exec(mentionQuery.trim());
     return m ? { table: m[1], keyword: m[2] ?? '' } : null;
+  }, [mentionQuery]);
+
+  /**
+   * P1：解析 {@code @source/} 的层级查询。
+   *
+   * <p>为什么区分 trailing（尾随斜杠）：{@code @source/ds/db} 表示"正在输入库名"（该层筛选），
+   * 而 {@code @source/ds/db/} 表示"库已选定，要看表列表"（下一层）——两者字符串接近但语义不同。
+   */
+  const sourceQuery = useMemo(() => {
+    const m = /^source[-/]([^\s]*)$/.exec(mentionQuery.trim().toLowerCase());
+    if (!m) {
+      return null;
+    }
+    const raw = m[1] ?? '';
+    return {
+      trailing: raw.endsWith('/'),
+      parts: raw.split('/').filter((part) => part !== '')
+    };
   }, [mentionQuery]);
 
   useEffect(() => {
@@ -313,6 +356,85 @@ const AiChat = (props: AiChatProps) => {
       .catch(() => setSkillOptions([]));
   }, [config?.skillEnable]);
 
+  // P1：{@code @source/} 第一层候选——数据源清单（首次用到时才拉，且只拉一次）
+  useEffect(() => {
+    if (!sourceQuery || dataSources.length > 0) {
+      return;
+    }
+    getDataSourceList()
+      .then((list: any[]) => setDataSources(list ?? []))
+      .catch(() => setDataSources([]));
+  }, [sourceQuery, dataSources.length]);
+
+  // P1：{@code @source/<数据源>/...} 第二/三层候选——按数据源名懒加载并缓存其 schemas。
+  // 复用数据源面板同一个接口（showDataSourceTable）：一次拉取同时返回库与表，因此一个数据源只需请求一次。
+  useEffect(() => {
+    if (!sourceQuery || sourceQuery.parts.length < 1) {
+      return;
+    }
+    const dsName = sourceQuery.parts[0];
+    if (!dsName || sourceTreeRef.current.has(dsName)) {
+      return;
+    }
+    const ds = dataSources.find((item: any) => item.name === dsName);
+    if (!ds) {
+      return;
+    }
+    let cancelled = false;
+    showDataSourceTable(ds.id)
+      .then((res: any[]) => {
+        if (cancelled) {
+          return;
+        }
+        sourceTreeRef.current.set(dsName, res ?? []);
+        setSourceTreeTick((tick) => tick + 1);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          sourceTreeRef.current.set(dsName, []);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceQuery, dataSources]);
+
+  // P1：{@code @env/} 候选——FlinkSQL 环境任务清单（与右侧「FlinkSQL 环境」下拉同源）
+  useEffect(() => {
+    if (!/^env[-/]/.test(mentionQuery.trim().toLowerCase()) || envOptions.length > 0) {
+      return;
+    }
+    listFlinkSqlEnvs()
+      .then((list) =>
+        setEnvOptions(
+          (list ?? []).map((env: any) => ({
+            type: 'env' as const,
+            name: env.name,
+            group: l('datastudio.aiChat.mention.groupEnv')
+          }))
+        )
+      )
+      .catch(() => setEnvOptions([]));
+  }, [mentionQuery, envOptions.length]);
+
+  // P1-A：{@code @topic/} 候选——首次用到时拉一次（名册接口，不计入 @source/ 的展开上限）
+  useEffect(() => {
+    if (!/^topic[-/]/.test(mentionQuery.trim().toLowerCase()) || topicOptions.length > 0) {
+      return;
+    }
+    listMentionTopics()
+      .then((names) =>
+        setTopicOptions(
+          (names ?? []).map((name: string) => ({
+            type: 'topic' as const,
+            name,
+            group: l('datastudio.aiChat.mention.groupTopic')
+          }))
+        )
+      )
+      .catch(() => setTopicOptions([]));
+  }, [mentionQuery, topicOptions.length]);
+
   const mentionCandidates = useMemo(() => {
     const list: (AiChatMentionItem & { group: string })[] = [];
     // provider 1：当前 schema 下的表
@@ -355,6 +477,64 @@ const AiChat = (props: AiChatProps) => {
     if (columnQuery) {
       return columnOptions;
     }
+    // provider 6（P1）：@source/ 跨数据源引用——逐层懒加载：数据源 → 库 → 表。
+    // 名字存的是"路径"（ds / ds/db / ds/db/tbl），与后端 AiChatMention.name 及（手打时）的文本一致。
+    if (sourceQuery) {
+      const tree: any[] = sourceTreeRef.current.get(sourceQuery.parts[0]) ?? [];
+      // 第一层：数据源名（或在数据源名上筛选）
+      if (sourceQuery.parts.length <= 1 && !sourceQuery.trailing) {
+        const keyword = sourceQuery.parts[0] ?? '';
+        return dataSources
+          .filter((ds: any) => !keyword || `${ds.name}`.toLowerCase().includes(keyword))
+          .map((ds: any) => ({
+            type: 'source' as const,
+            name: ds.name,
+            group: l('datastudio.aiChat.mention.groupSource')
+          }))
+          .slice(0, 20);
+      }
+      // 第二层：库名（ds/ 或在库名上筛选）
+      if (
+        (sourceQuery.trailing && sourceQuery.parts.length === 1) ||
+        (!sourceQuery.trailing && sourceQuery.parts.length === 2)
+      ) {
+        const keyword = sourceQuery.trailing ? '' : sourceQuery.parts[1];
+        return tree
+          .filter((schema: any) => !keyword || `${schema.name}`.toLowerCase().includes(keyword))
+          .map((schema: any) => ({
+            type: 'source' as const,
+            name: `${sourceQuery.parts[0]}/${schema.name}`,
+            group: l('datastudio.aiChat.mention.groupSourceDb')
+          }))
+          .slice(0, 30);
+      }
+      // 第三层：表名（ds/db/ 或在表名上筛选）
+      if (
+        (sourceQuery.trailing && sourceQuery.parts.length === 2) ||
+        (!sourceQuery.trailing && sourceQuery.parts.length === 3)
+      ) {
+        const schema = tree.find((item: any) => item.name === sourceQuery.parts[1]);
+        const keyword = sourceQuery.trailing ? '' : sourceQuery.parts[2];
+        return (schema?.tables ?? [])
+          .filter((table: any) => !keyword || `${table.name}`.toLowerCase().includes(keyword))
+          .map((table: any) => ({
+            type: 'source' as const,
+            name: `${sourceQuery.parts[0]}/${sourceQuery.parts[1]}/${table.name}`,
+            group: l('datastudio.aiChat.mention.groupSourceTable')
+          }))
+          .slice(0, 50);
+      }
+      return [];
+    }
+    // provider 7（P1）：@env/ 环境任务
+    if (/^env[-/]/.test(mentionQuery.trim().toLowerCase())) {
+      return envOptions;
+    }
+    // provider 8（P1-A）：@topic/ 候选——名册里"已被作业使用"的 topic（零连接 Kafka）。
+    // 平台里存在但无任何作业消费的 topic ，需等批次 2 的 list_topics（AdminClient）。
+    if (/^topic[-/]/.test(mentionQuery.trim().toLowerCase())) {
+      return topicOptions;
+    }
     // provider 5（阶段 4a 的 skill / 阶段 4b 扩展的 doc）：输入 @skill/ / @doc/ 时只给对应资产候选
     // 阶段 4b 补：@table/<表名> 与旧语法 @表名 等价，但显式前缀在「表名与 skill 名相同」时
     // 可消除歧义。此处只影响候选过滤：输入 @table/ 时只给表候选。
@@ -385,7 +565,8 @@ const AiChat = (props: AiChatProps) => {
     return list;
     // mentionOpen 作为依赖：每次打开浮层都重新读取最新的选中片段
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [schemas, schemaName, tabs, activeTab, tabParams?.taskId, mentionOpen, mentionQuery, skillOptions]);
+  }, [schemas, schemaName, tabs, activeTab, tabParams?.taskId, mentionOpen, mentionQuery, skillOptions,
+      sourceQuery, dataSources, envOptions, topicOptions, sourceTreeTick]);
 
   /** 过滤 + 排序：最近用过 > 前缀匹配 > 其余 */
   const filteredMentions = useMemo(() => {
@@ -398,8 +579,19 @@ const AiChat = (props: AiChatProps) => {
         ? 'skill'
         : /^table[-/]/.test(q)
           ? 'table'
-          : '';
+          : /^source[-/]/.test(q)
+            ? 'source'
+            : /^topic[-/]/.test(q)
+              ? 'topic'
+              : /^env[-/]/.test(q)
+                ? 'env'
+                : '';
     if (assetPrefix) {
+      if (assetPrefix === 'source') {
+        // P1：@source/ 的候选已在 mentionCandidates 里按「层级 + 该层关键字」算好，
+        // 而名字是路径（ds/db/tbl）——再拿整串 query 过滤一次只会把候选全过滤掉。
+        return mentionCandidates.slice(0, 20);
+      }
       const assetKey = q.slice(assetPrefix.length + 1);
       return mentionCandidates
         .filter((c) => c.type === assetPrefix && c.name?.toLowerCase().includes(assetKey))
@@ -426,6 +618,32 @@ const AiChat = (props: AiChatProps) => {
       .slice(0, 20);
   }, [mentionCandidates, mentionQuery, recentMentions]);
 
+  /**
+   * P1：mention → 输入框 token。
+   *
+   * <p><b>为什么抽成函数</b>：token 规则原本在「候选选中 / onChange 清理 / 退格整块删除」
+   * 三处各写了一遍；新增三类引用（source / topic / env）若继续复制，任何一处漏改都会表现为
+   * 「chip 与文本不同步」（删了文本而 chip 不消失）。
+   */
+  const mentionToken = (m: AiChatMentionItem): string => {
+    switch (m.type) {
+      case 'column':
+        return `@${m.name}.${m.columnName}`;
+      case 'skill':
+        return `@skill/${m.name}`;
+      case 'doc':
+        return `@doc/${m.name}`;
+      case 'source':
+        return `@source/${m.name}`;
+      case 'topic':
+        return `@topic/${m.name}`;
+      case 'env':
+        return `@env/${m.name}`;
+      default:
+        return `@${m.name}`;
+    }
+  };
+
   /** 输入框变化：解析光标前的 {@code @query}（要求 @ 前为空白或行首） */
   const handleInputChange = (e: any) => {
     const value: string = e.target.value ?? '';
@@ -436,14 +654,7 @@ const AiChat = (props: AiChatProps) => {
         ? prev.filter((m) => {
             // 字段引用的 token 是 @表名.字段名，只比对表名会误删同名表的其它字段引用；
             // 阶段 4a：skill 的 token 是 @skill/<名>（2026-10-06 起），旧写法 @skill-<名> 仍视为引用
-            const token =
-              m.type === 'column'
-                ? `@${m.name}.${m.columnName}`
-                : m.type === 'skill'
-                  ? `@skill/${m.name}`
-                  : m.type === 'doc'
-                    ? `@doc/${m.name}`
-                    : `@${m.name}`;
+            const token = mentionToken(m);
             // 阶段 4b 补：table 类型有三种合法 token——旧语法 `@表名` 与显式前缀 `@table-表名`
             // / `@table/表名`，任一仍存在于输入框即视为被引用（否则用前缀选中后会被这里误删）
             if (m.type === 'table') {
@@ -482,15 +693,7 @@ const AiChat = (props: AiChatProps) => {
     // 2026-10-06：分隔符统一为斜杠，选中后一律生成新语法；手打旧语法（连字符）后端仍解析。
     const viaTablePrefix = /^table[-/]/.test(mentionQuery.trim().toLowerCase());
     const token =
-      item.type === 'column'
-        ? `@${item.name}.${item.columnName}`
-        : item.type === 'skill'
-          ? `@skill/${item.name}`
-          : item.type === 'doc'
-            ? `@doc/${item.name}`
-            : item.type === 'table' && viaTablePrefix
-              ? `@table/${item.name}`
-              : `@${item.name}`;
+      item.type === 'table' && viaTablePrefix ? `@table/${item.name}` : mentionToken(item);
     setInputValue(inputValue.replace(/@[^\s@]*$/, `${token} `));
     setMentions((prev) =>
       prev.some(
@@ -513,42 +716,40 @@ const AiChat = (props: AiChatProps) => {
 
   /** 浮层打开时接管方向键 / 回车 / Tab / Esc */
   const handleInputKeyDown = (e: any) => {
-    // 体验优化（2026-10-01 UAT）：Backspace 在 @token 上时整块删除（@ 连同 表名[.字段]），
-    // 而不是逐字符删——把引用当作一个「原子」。TextArea 是纯文本控件无法局部高亮，
-    // 先用整块删除对齐原子引用体验；局部高亮需换 Mentions/contentEditable，另行评估。
-    if (e.key === 'Backspace' && !composingRef.current) {
-      const el = e.target as HTMLTextAreaElement;
-      const start: number = el.selectionStart ?? 0;
-      const end: number = el.selectionEnd ?? 0;
-      // 光标贴着 token（选中态除外）：向前找 @token 头，向后吸收残余，保证整块删除
-      if (start === end && start > 0) {
-        // 2026-10-06：字符集补 `-` 与 `/`，否则 @skill/dw-sql-review 这种 token 只能删到分隔符为止，
-        // 退格会变成逐字符删（原子引用体验破损）
-        const head = /@[A-Za-z0-9_./-]+$/.exec(inputValue.slice(0, start));
-        // 孤零零一个 @ 保持默认逐字符删除
-        if (head && head[0].length > 1) {
-          const tail = /^[A-Za-z0-9_./-]*/.exec(inputValue.slice(end))?.[0] ?? '';
-          const cut = start - head[0].length;
+    // @串的退格体验（2026-10-09 调整；此前是「2026-10-01 一按就整块删」）：
+    //   · 输入**中途**按退格 → 逐字符删（UAT 反馈：打错一个字只能整串重打）；
+    //   · @串**已输完**（其后跟着分隔符，如空格）→ 第一下只删分隔符、第二下整块删。
+    // 判据（为何需要"两下"这个窗口：上述两种情形的文本完全一样）与分隔符取值理由见 mentionBackspace.ts；
+    // 这里只负责「应用判决 + 同步 chips 与浮层状态」。
+    if (e.key === 'Backspace') {
+      if (!composingRef.current) {
+        const el = e.target as HTMLTextAreaElement;
+        const start: number = el.selectionStart ?? 0;
+        const end: number = el.selectionEnd ?? 0;
+        const decision = decideMentionBackspace(inputValue, start, end, atomicDeleteArmRef.current);
+        if (decision.action === 'atomic') {
+          // 第二下：整块删（@ 连同 表名[.字段] / 多级路径）
           const nextValue =
-            inputValue.slice(0, cut) + inputValue.slice(end + tail.length);
+            inputValue.slice(0, decision.removeStart) + inputValue.slice(decision.removeEnd);
           e.preventDefault();
+          atomicDeleteArmRef.current = null;
           setInputValue(nextValue);
           // 与 onChange 的同步清理保持一致：token 没了，对应 chips 一并移除
-          setMentions((prev) =>
-            prev.filter((m) => {
-              const token =
-                m.type === 'column' ? `@${m.name}.${m.columnName}` : `@${m.name}`;
-              return nextValue.includes(token);
-            })
-          );
+          setMentions((prev) => prev.filter((m) => nextValue.includes(mentionToken(m))));
           setMentionOpen(false);
           setMentionQuery('');
           requestAnimationFrame(() => {
-            el.selectionStart = el.selectionEnd = cut;
+            el.selectionStart = el.selectionEnd = decision.removeStart;
           });
           return;
         }
+        // separator：本次走浏览器默认行为（只删那个分隔符），但要记住「下一按可整块删」
+        atomicDeleteArmRef.current = decision.action === 'separator' ? decision.arm : null;
       }
+    } else if (!MODIFIER_KEYS.has(e.key)) {
+      // 任何其它**非修饰键**都会打断「两下删除」的序列（避免隔了几步再按退格仍误删整个 @串）；
+      // 单独按 Shift/Ctrl/Alt/Meta 不算（否则按住 Shift 再退格会莫名失效）
+      atomicDeleteArmRef.current = null;
     }
     if (!mentionOpen || filteredMentions.length === 0) {
       return;
@@ -1375,6 +1576,11 @@ const AiChat = (props: AiChatProps) => {
                 {metaDataAvailable
                   ? l('datastudio.aiChat.mention.noMatch')
                   : l('datastudio.aiChat.mention.noDataSource')}
+                {/* P1：跨源引用的用法提示——@source/ 有层级要求（且受展开上限），
+                    @topic/ 候选只含已被作业使用的 topic，空结果时给一句用法比只显示"无匹配项"有用 */}
+                {/^(source|topic|env)[-/]/.test(mentionQuery.trim().toLowerCase()) ? (
+                  <div style={{ marginTop: 4 }}>{l('datastudio.aiChat.mention.sourceUsage')}</div>
+                ) : null}
               </div>
             ) : (
               filteredMentions.map((item, index) => (

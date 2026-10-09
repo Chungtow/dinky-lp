@@ -44,5 +44,33 @@ public final class MentionType {
     /** 知识文档引用（{@code @doc/<名>}，阶段 4b；与 skill 共用存储与权限模型） */
     public static final String DOC = "doc";
 
+    /**
+     * 跨数据源物理对象引用（{@code @source/<数据源>[/<库>[/<表>[.<字段>]]]}，P1）。
+     *
+     * <p><b>与 {@link #TABLE} 的区别</b>：{@code @table/<表名>} 的语义是「当前面板所选数据源内的表」
+     * （依赖请求里的 {@code databaseId}），而 FlinkSQL 作业<b>没有数据源</b>（P0 结论），
+     * 想在 FlinkSQL 里引用「MySQL 源表 / Doris sink 表」就必须走全限定路径——这正是本类型存在的理由。
+     *
+     * <p>语义上一步覆盖了曾经的 {@code @doris/} 设想：Dinky 的元数据层本就按数据源类型路由
+     * （{@code Driver.build(...)}），无需为某一种数据源单独开语法。
+     */
+    public static final String SOURCE = "source";
+
+    /**
+     * Kafka topic 引用（{@code @topic/<名>}，P1）。
+     *
+     * <p>P1 的零连接版：只从「名册 + 作业 DDL 的 canal-json 血缘 + MySQL 源表结构」推导，
+     * <b>不连接 Kafka</b>；实时枚举（含未被使用的 topic）由批次 2 的 {@code list_topics} 工具承担。
+     */
+    public static final String TOPIC = "topic";
+
+    /**
+     * FlinkSQL 环境任务引用（{@code @env/<env任务名>}，P1）。
+     *
+     * <p><b>只注入枚举结果</b>（该 env 经回放注册出的 catalog / 库清单），
+     * <b>绝不注入 env 语句原文</b>——里面是 {@code 'password'='...'} 明文连接串。
+     */
+    public static final String ENV = "env";
+
     private MentionType() {}
 }
