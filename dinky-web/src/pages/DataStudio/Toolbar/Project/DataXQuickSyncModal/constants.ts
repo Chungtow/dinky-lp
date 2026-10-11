@@ -41,11 +41,37 @@ export interface QuickSyncConfig extends DataXVisualConfig {
 export const QUICK_SYNC_PREFIX = {
   createTable: 'create_table_',
   syncData: 'sync_data_',
-  addPartition: 'add_partition_'
+  addPartition: 'add_partition_',
+  analyzeTable: 'analyze_table_'
 };
 
 /** 默认分区字段名（可自定义，D4） */
 export const DEFAULT_PARTITION_COLUMN = 'pt';
+
+/**
+ * 默认分区值表达式：引用下方默认任务参数 SYNC_TIME。
+ * 显式预填（不再靠渲染时兜底），让用户打开弹窗就看到「分区值从哪来」，避免凭空猜。
+ */
+export const DEFAULT_PARTITION_EXPRESSION = '${SYNC_TIME}';
+
+/**
+ * 参数名示例文案。
+ * ⚠️ 必须在提示文案里用常量引用：若在模板字符串里直接写 ${SYNC_DATE}，
+ * JS 会把它当插值表达式求值 → 运行时 ReferenceError → 整个弹窗组件崩溃。
+ */
+export const PARAM_NAME_SAMPLE = '${SYNC_DATE}';
+
+/**
+ * 「参数值」列的时间表达式建议（DolphinScheduler $[...] 语法）。
+ * ⚠️ 只允许出现在任务参数的「值」里，写进分区值表达式会被 validate 拦住。
+ */
+export const TIME_EXPR_OPTIONS = [
+  '$[yyyyMMdd-1]',
+  '$[yyyyMMdd]',
+  '$[yyyy-MM-dd]',
+  '$[HHmmss]',
+  '$[yyyyMMddHHmmss]'
+].map((v) => ({ label: v, value: v }));
 
 /** 存储格式（D5：默认 ORC；本集群 fork 版 hdfswriter 支持 PARQUET） */
 export const DEFAULT_FILE_TYPE = 'orc';

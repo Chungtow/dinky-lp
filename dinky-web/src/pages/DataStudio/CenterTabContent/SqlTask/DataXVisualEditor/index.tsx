@@ -213,7 +213,7 @@ const DataXVisualEditor = (props: DataXVisualEditorProps) => {
       });
       if (detail.fileType === 'parquet') {
         // 本集群 DataX 为 fork 版（hdfswriter 支持 ORC/PARQUET/TEXT），此处仅提示，不再阻断
-        message.info('目标表为 Parquet 格式，本集群 fork 版 hdfswriter 支持写入；如同步异常请改用 orc/text 表');
+        message.info('目标表为 Parquet 格式：生成 JSON 时会自动附带 parquetSchema（fork 版 hdfswriter 必须显式传入，已实测通过）');
       }
       return;
     }
@@ -327,7 +327,7 @@ const DataXVisualEditor = (props: DataXVisualEditorProps) => {
                 }
               />
               <Input
-                placeholder='分区值表达式，如 ${SYNC_DATE}-${SYNC_TIME}'
+                placeholder='分区值表达式，用 ${参数名} 引用任务参数，如 ${SYNC_TIME}'
                 value={cfg.partitionExpression}
                 onChange={(e) =>
                   setConfig((prev) => ({

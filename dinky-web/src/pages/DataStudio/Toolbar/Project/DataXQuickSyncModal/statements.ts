@@ -71,7 +71,18 @@ export function buildCreateTableDdl(input: CreateTableInput): string {
   return lines.join('\n');
 }
 
-/** 生成加分区 SQL（分区字段名与表达式必须和 writer path 一致） */
+/**
+ * 生成加分区 SQL（分区字段名与表达式必须和 writer path 一致）。
+ *
+ * ⚠️ 只做「注册分区」，ANALYZE 由后续的 `analyze_table_*` 节点负责。
+ * 原因：DataX 的 hdfswriter 要求 writer path（含 `pt=xxx` 目录）**事先存在且不会自动创建**
+ * （`HdfsWriter$Job.prepare` 里 `isPathexists(path)` 为假直接报 HdfsWriter-02），
+ * 而 `create_table` 只建表目录。因此节点顺序必须是：
+ *
+ *   create_table → add_partition（建出分区目录）→ sync_data（写数据）→ analyze_table（刷统计）
+ *
+ * 统计若放在写数据之前做，分析的是空目录 → `numRows=0`，下游 `count(*)` 仍会返回 0。
+ */
 export function buildAddPartitionSql(
   schemaName?: string,
   tableName?: string,
@@ -80,6 +91,25 @@ export function buildAddPartitionSql(
 ): string {
   const qualified = schemaName ? `\`${schemaName}\`.\`${tableName}\`` : `\`${tableName}\``;
   return `ALTER TABLE ${qualified} ADD IF NOT EXISTS PARTITION (${partitionColumn}='${partitionExpression ?? ''}')`;
+}
+
+/**
+ * 生成统计刷新 SQL（`analyze_table_*` 作业）。
+ *
+ * ⚠️ 必须在数据写入之后执行：Hive 的 ADD PARTITION 只在分区目录由本语句创建时才收集
+ * fast stats；一键同步里目录是被 add_partition/sync_data 先创建出来的，Hive 会跳过收集，
+ * 分区统计保留 `numFiles=0 / numRows=0 / totalSize=0` 且 `COLUMN_STATS_ACCURATE` 标记为可信。
+ * 由于 HS2 默认 `hive.compute.query.using.stats=true`，下游 `select count(*)`/`select *`
+ * 会直接读统计导致查不到数据（实测踩过）。ANALYZE 后统计才与真实数据一致。
+ */
+export function buildAnalyzeSql(
+  schemaName?: string,
+  tableName?: string,
+  partitionColumn?: string,
+  partitionExpression?: string
+): string {
+  const qualified = schemaName ? `\`${schemaName}\`.\`${tableName}\`` : `\`${tableName}\``;
+  return `ANALYZE TABLE ${qualified} PARTITION (${partitionColumn}='${partitionExpression ?? ''}') COMPUTE STATISTICS`;
 }
 
 /** 抽取语句里所有 ${X} 占位符名 */
@@ -112,4 +142,26 @@ export function validateParamRefs(texts: (string | undefined)[], params: QuickSy
     });
   });
   return missing;
+}
+
+/**
+ * 非法参数名检测：抓出「${X}」里 X 不符合 [A-Za-z_][A-Za-z0-9_]* 的引用。
+ *
+ * 背景（三处正则不一致，必须在这里拦住）:
+ *   - 前端 extractPlaceholders: /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/  → 不合法的名字直接被忽略
+ *   - 后端 DataX 取参 extractParamNames: /\$\{(\w+)\}/             → 同样忽略，json 里原样保留
+ *   - 后端 SQL 变量替换 GLOBAL_VARIABLE_PATTERN: /\$\{(.+?)}/      → 匹配但不认识，保留占位符 + 告警
+ * 结果: ${biz-date} / ${yyyyMMdd-1} 这类写法会静默进 HDFS 路径与 Hive 分区名。
+ */
+export function extractInvalidParamRefs(text?: string): string[] {
+  const result: string[] = [];
+  const re = /\$\{([^}]*)\}/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text ?? '')) !== null) {
+    const name = match[1];
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && !result.includes(name)) {
+      result.push(name);
+    }
+  }
+  return result;
 }

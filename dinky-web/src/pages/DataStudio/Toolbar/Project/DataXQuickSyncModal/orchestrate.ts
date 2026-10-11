@@ -36,8 +36,9 @@ export const QUICK_SYNC_STEPS: { key: string; label: string }[] = [
   { key: 'subFolder', label: '创建 / 复用子目录' },
   { key: 'createTableJob', label: '创建建表作业' },
   { key: 'execCreateTable', label: '执行建表' },
+  { key: 'partitionJob', label: '创建加分区作业（建出分区目录）' },
   { key: 'syncJob', label: '创建同步作业（DataX）' },
-  { key: 'partitionJob', label: '创建加分区作业' }
+  { key: 'analyzeJob', label: '创建统计作业（ANALYZE）' }
 ];
 
 export interface CatalogueNode {
@@ -81,10 +82,15 @@ export interface QuickSyncRunInput {
   dialect: string;
   /** 目标表名（用于建表/加分区，以及取表详情） */
   targetTableName: string;
-  /** 三个作业最终名称（UI 已处理重名后缀） */
-  names: { createTable: string; syncData: string; addPartition: string };
+  /** 四个作业最终名称（UI 已处理重名后缀） */
+  names: { createTable: string; syncData: string; addPartition: string; analyzeTable: string };
   /** 重名作业选择「覆盖更新」时，传入既有 catalogue id 走更新路径 */
-  overwriteIds?: { createTable?: number; syncData?: number; addPartition?: number };
+  overwriteIds?: {
+    createTable?: number;
+    syncData?: number;
+    addPartition?: number;
+    analyzeTable?: number;
+  };
   /** 目标数据源 id（Hive 类作业必填，否则执行时报 please assign data source） */
   targetDataSourceId?: number;
   targetSchemaName: string;
@@ -97,8 +103,10 @@ export interface QuickSyncRunInput {
   execCreateTable: boolean;
   /** 是否有分区（目标表存在但无分区时不建加分区作业） */
   hasPartition: boolean;
-  /** 生成加分区 SQL（需在拿到分区字段后调用） */
+  /** 生成加分区 SQL（只建分区目录，需在拿到分区字段后调用） */
   buildAddPartitionSql: () => string;
+  /** 生成统计刷新 SQL（ANALYZE，必须在数据写入之后执行） */
+  buildAnalyzeSql: () => string;
   /** 生成 DataX json（建表后重取的目标表详情会回传，闭包持有最新配置） */
   buildSyncStatement: (detail?: TableDetail) => string;
   onStep?: (steps: StepState[]) => void;
@@ -340,29 +348,8 @@ export const runQuickSync = async (input: QuickSyncRunInput): Promise<QuickSyncR
       input.targetTableName
     );
 
-    // Step 5: DataX 同步作业
-    patch('syncJob', 'running');
-    const syncStatement = input.buildSyncStatement(detail);
-    const syncJob = await createTaskUnderFolder({
-      id: input.overwriteIds?.syncData,
-      name: input.names.syncData,
-      dialect: 'DataX',
-      parentId: subFolder.id,
-      statement: syncStatement,
-      taskParams: input.taskParams,
-      firstLevelOwner: input.firstLevelOwner,
-      note: '由「一键 DataX 同步」生成'
-    });
-    created.push({
-      key: 'syncJob',
-      label: '同步作业',
-      name: input.names.syncData,
-      catalogueId: syncJob.catalogueId,
-      taskId: syncJob.taskId
-    });
-    patch('syncJob', 'success', `作业 id ${syncJob.taskId}`);
-
-    // Step 6: 加分区作业（目标表无分区列时不创建）
+    // Step 5: 加分区作业（先建出分区目录；目标表无分区列时不创建）
+    // ⚠️ 必须排在 sync_data 之前：DataX hdfswriter 要求 writer path（含 pt=xxx）事先存在
     const hasPartition = (detail?.partitionColumns?.length ?? 0) > 0 || input.hasPartition;
     if (hasPartition) {
       patch('partitionJob', 'running');
@@ -388,6 +375,55 @@ export const runQuickSync = async (input: QuickSyncRunInput): Promise<QuickSyncR
     } else {
       patch('partitionJob', 'skipped', '目标表无分区字段');
       skipped.push('加分区作业（目标表无分区字段）');
+    }
+
+    // Step 6: DataX 同步作业（此时分区目录已存在）
+    patch('syncJob', 'running');
+    const syncStatement = input.buildSyncStatement(detail);
+    const syncJob = await createTaskUnderFolder({
+      id: input.overwriteIds?.syncData,
+      name: input.names.syncData,
+      dialect: 'DataX',
+      parentId: subFolder.id,
+      statement: syncStatement,
+      taskParams: input.taskParams,
+      firstLevelOwner: input.firstLevelOwner,
+      note: '由「一键 DataX 同步」生成'
+    });
+    created.push({
+      key: 'syncJob',
+      label: '同步作业',
+      name: input.names.syncData,
+      catalogueId: syncJob.catalogueId,
+      taskId: syncJob.taskId
+    });
+    patch('syncJob', 'success', `作业 id ${syncJob.taskId}`);
+
+    // Step 7: 统计刷新作业（必须在数据写入之后；无分区时不创建）
+    if (hasPartition) {
+      patch('analyzeJob', 'running');
+      const analyzeJob = await createTaskUnderFolder({
+        id: input.overwriteIds?.analyzeTable,
+        name: input.names.analyzeTable,
+        dialect: input.dialect,
+        parentId: subFolder.id,
+        statement: input.buildAnalyzeSql(),
+        taskParams: input.taskParams,
+        databaseId: input.targetDataSourceId,
+        firstLevelOwner: input.firstLevelOwner,
+        note: '由「一键 DataX 同步」生成'
+      });
+      created.push({
+        key: 'analyzeJob',
+        label: '统计作业',
+        name: input.names.analyzeTable,
+        catalogueId: analyzeJob.catalogueId,
+        taskId: analyzeJob.taskId
+      });
+      patch('analyzeJob', 'success', `作业 id ${analyzeJob.taskId}`);
+    } else {
+      patch('analyzeJob', 'skipped', '目标表无分区字段');
+      skipped.push('统计刷新作业（目标表无分区字段）');
     }
 
     return {

@@ -17,16 +17,6 @@
  *
  */
 
-/**
- * MySQL → Hive 类型映射。
- *
- * ⚠️ 不要照抄 jobs/datax/gen_datax_config_for_ds.sh：
- * 本项目 hdfswriter 的 writer.column.type 直接取自目标表列类型，而 DataX 的
- * SupportHiveDataType 枚举不含 DECIMAL / BINARY（实机 jar 枚举：TINYINT SMALLINT INT
- * BIGINT FLOAT DOUBLE TIMESTAMP DATE STRING VARCHAR CHAR BOOLEAN），写进去会启动即失败。
- * 因此这里统一收敛到安全子集：decimal→DOUBLE、binary/blob→STRING。
- */
-
 export interface HiveTypeOptions {
   /** 整数统一升级为 BIGINT（贴近现有人工建表产物） */
   intToBigInt?: boolean;

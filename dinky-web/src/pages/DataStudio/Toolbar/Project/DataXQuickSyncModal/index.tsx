@@ -34,6 +34,7 @@ import { PlusOutlined } from '@ant-design/icons';
 import { useModel } from '@umijs/max';
 import {
   Alert,
+  AutoComplete,
   Button,
   Checkbox,
   Col,
@@ -56,15 +57,18 @@ import {
   DEFAULT_FIELD_DELIMITER,
   DEFAULT_FILE_TYPE,
   DEFAULT_PARTITION_COLUMN,
+  DEFAULT_PARTITION_EXPRESSION,
   DEFAULT_TASK_PARAM,
   DEFAULT_WRITE_MODE,
   dialectFromDataSourceType,
   FILE_TYPE_OPTIONS,
   PARAM_DIRECT_OPTIONS,
+  PARAM_NAME_SAMPLE,
   PARAM_TYPE_OPTIONS,
   QuickSyncConfig,
   QuickSyncParam,
-  QUICK_SYNC_PREFIX
+  QUICK_SYNC_PREFIX,
+  TIME_EXPR_OPTIONS
 } from './constants';
 import {
   CatalogueNode,
@@ -74,7 +78,13 @@ import {
   StepState,
   TableDetail
 } from './orchestrate';
-import { buildAddPartitionSql, buildCreateTableDdl, validateParamRefs } from './statements';
+import {
+  buildAddPartitionSql,
+  buildAnalyzeSql,
+  buildCreateTableDdl,
+  extractInvalidParamRefs,
+  validateParamRefs
+} from './statements';
 import { isUnsupportedHiveType, mapToHiveType } from './typeMapping';
 
 const { Text, Paragraph } = Typography;
@@ -99,7 +109,12 @@ const HIVE_TYPE_OPTIONS = [
 
 const emptyConfig = (): QuickSyncConfig => ({
   source: { fields: [] },
-  target: { fields: [], partitionColumn: DEFAULT_PARTITION_COLUMN },
+  target: {
+    fields: [],
+    partitionColumn: DEFAULT_PARTITION_COLUMN,
+    // 预填默认表达式：用户打开就能看到分区值从哪个参数来，而不是留在空白里靠代码兜底
+    partitionExpression: DEFAULT_PARTITION_EXPRESSION
+  },
   mappings: [],
   newFileType: DEFAULT_FILE_TYPE,
   dialect: 'Hive'
@@ -153,13 +168,16 @@ const FieldAdder = (props: {
   );
 };
 
+/**
+ * 默认字段映射：按【同名字段】配对。
+ * ⚠️ 不能用下标顺序配对：目标表已存在时两侧列的顺序/集合可能不同，
+ * 按下标配对会静默产生错误的列映射（数据写进错误的列）。
+ */
 const buildDefaultMappings = (sourceFields: DataXField[], targetFields: DataXField[]): DataXMapping[] => {
-  const length = Math.min(sourceFields.length, targetFields.length);
-  const mappings: DataXMapping[] = [];
-  for (let i = 0; i < length; i++) {
-    mappings.push({ sourceField: sourceFields[i].name, targetField: targetFields[i].name });
-  }
-  return mappings;
+  const targetNames = new Set(targetFields.map((f) => f.name));
+  return sourceFields
+    .filter((f) => targetNames.has(f.name))
+    .map((f) => ({ sourceField: f.name, targetField: f.name }));
 };
 
 const stepStatusOf = (status: StepState['status']): 'wait' | 'process' | 'finish' | 'error' => {
@@ -208,6 +226,8 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
 
   // 供编排回调读取最新配置（避免闭包拿到旧状态）
   const configRef = useRef(config);
+  /** 上一次自动生成的「新建表名」，用于区分“用户手填”与“系统默认填充” */
+  const autoTargetNameRef = useRef('');
   useEffect(() => {
     configRef.current = config;
   }, [config]);
@@ -229,6 +249,33 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
     ? config.fileType
     : config.newFileType || DEFAULT_FILE_TYPE) as string;
   const partitionColumn = config.target.partitionColumn || DEFAULT_PARTITION_COLUMN;
+  /** 实际生效的分区值表达式（留空按默认值处理，与预览/执行保持一致） */
+  const partitionExpression = config.target.partitionExpression || DEFAULT_PARTITION_EXPRESSION;
+  /** 表达式引用了、但任务参数表里没有定义的参数名（行内提示 + 一键补齐用） */
+  const missingParams = useMemo(
+    () => validateParamRefs([partitionExpression], taskParams),
+    [partitionExpression, taskParams]
+  );
+  /** 表达式里形如 ${X} 但 X 不是合法参数名（含 - 等字符）的引用 */
+  const invalidParamRefs = useMemo(() => extractInvalidParamRefs(partitionExpression), [partitionExpression]);
+
+  /**
+   * 关闭弹窗即重置全部状态。
+   * 历史问题：Modal 只是 visible 切换、组件不卸载，上次填的内容（表达式/参数）会残留到下次打开，
+   * 用户以为自己下过线或刷新过，其实还在。
+   */
+  useEffect(() => {
+    if (!visible) {
+      setConfig(emptyConfig());
+      setTaskParams([{ ...DEFAULT_TASK_PARAM }]);
+      setResult(undefined);
+      setSteps([]);
+      setConflict(undefined);
+      setPreviewOpen(false);
+      setExecCreateTable(true);
+      setTargetTableExists(false);
+    }
+  }, [visible]);
 
   useEffect(() => {
     if (!visible) {
@@ -278,6 +325,10 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
       if (side === 'target') {
         next.dialect = dialectFromDataSourceType(ds?.type) ?? prev.dialect;
       }
+      // 切换数据源后两侧字段若仍在（典型顺序：先选源表、再选目标数据源），
+      // 必须按同名字段重建映射；否则 mappings 恒为空，预览/执行会被
+      // 「请至少配置一条字段映射」卡死，用户只能手工拉几十条连线。
+      next.mappings = buildDefaultMappings(next.source.fields, next.target.fields);
       return next;
     });
     setSchemas((prev) => ({ ...prev, [side]: [] }));
@@ -308,6 +359,12 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
           ...prev.target,
           fields: fields.map((f) => ({ name: f.name, type: mapToHiveType(f.type), comment: f.comment }))
         };
+        // 默认表名：ods_<源库>_<源表>（仅当用户没填、或填的仍是上一次自动值时覆盖）
+        const autoName = `ods_${schemaName}_${tableName}`;
+        if (!prev.newTargetTableName || prev.newTargetTableName === autoTargetNameRef.current) {
+          next.newTargetTableName = autoName;
+          autoTargetNameRef.current = autoName;
+        }
       }
       next.mappings = buildDefaultMappings(next.source.fields, next.target.fields);
       return next;
@@ -436,12 +493,10 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
     });
 
   const buildPartitionSql = (): string =>
-    buildAddPartitionSql(
-      config.target.schemaName,
-      targetTableName,
-      partitionColumn,
-      config.target.partitionExpression ?? '${SYNC_TIME}'
-    );
+    buildAddPartitionSql(config.target.schemaName, targetTableName, partitionColumn, partitionExpression);
+
+  const buildAnalyzeSqlFn = (): string =>
+    buildAnalyzeSql(config.target.schemaName, targetTableName, partitionColumn, partitionExpression);
 
   /** 预览用的 writer path（未建表时用默认 warehouse 路径占位） */
   const previewPath = (): string => {
@@ -451,10 +506,10 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
           cur.target.location,
           hadoopConf.defaultFS ?? cur.defaultFS ?? '',
           partitionColumn,
-          cur.target.partitionExpression ?? '${SYNC_TIME}'
+          partitionExpression
         )
       : buildDefaultHdfsPath(cur.target.schemaName ?? '', targetTableName) +
-          `/${partitionColumn}=${cur.target.partitionExpression ?? '${SYNC_TIME}'}`;
+          `/${partitionColumn}=${partitionExpression}`;
   };
 
   const validate = (): string | undefined => {
@@ -477,17 +532,36 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
     if (bad.length > 0) {
       return `目标字段类型 ${bad.map((f) => `${f.name}:${f.type}`).join('、')} 不被 DataX hdfswriter 支持，请改为 DOUBLE / STRING`;
     }
+    if (config.target.partitionExpression && config.target.partitionExpression.includes('$[')) {
+      return '分区值表达式要填任务参数引用（如 ${SYNC_TIME}）；$[yyyyMMdd-1] 这类时间表达式请填在下方任务参数的「值」里';
+    }
+    if (invalidParamRefs.length > 0) {
+      return `分区值表达式里的参数名不合法：${invalidParamRefs
+        .map((n) => '${' + n + '}')
+        .join('、')}（参数名只能用字母、数字、下划线，如 ${PARAM_NAME_SAMPLE}）`;
+    }
     const missing = validateParamRefs([buildPartitionSql(), previewPath()], taskParams);
     if (missing.length > 0) {
-      return `分区值引用了未定义的任务参数：${missing.map((m) => '${' + m + '}').join('、')}`;
+      return `分区值引用了未定义的任务参数：${missing
+        .map((m) => '${' + m + '}')
+        .join('、')}，请先在「任务参数」里补一行同名参数`;
     }
     return undefined;
+  };
+
+  /** 一键补齐表达式里缺失的任务参数（默认值对齐默认参数行 $[yyyyMMdd-1]） */
+  const addMissingParams = () => {
+    setTaskParams([
+      ...taskParams,
+      ...missingParams.map((prop) => ({ prop, direct: 'IN', type: 'VARCHAR', value: '$[yyyyMMdd-1]' }))
+    ]);
   };
 
   const computeNames = (suffix = '') => ({
     createTable: `${QUICK_SYNC_PREFIX.createTable}${targetTableName}${suffix}`,
     syncData: `${QUICK_SYNC_PREFIX.syncData}${targetTableName}${suffix}`,
-    addPartition: `${QUICK_SYNC_PREFIX.addPartition}${targetTableName}${suffix}`
+    addPartition: `${QUICK_SYNC_PREFIX.addPartition}${targetTableName}${suffix}`,
+    analyzeTable: `${QUICK_SYNC_PREFIX.analyzeTable}${targetTableName}${suffix}`
   });
 
   const doRun = async (names: ReturnType<typeof computeNames>, overwriteIds?: any) => {
@@ -510,6 +584,7 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
         ? (config.target.partitionColumns?.length ?? 0) > 0
         : !!partitionColumn,
       buildAddPartitionSql: buildPartitionSql,
+      buildAnalyzeSql: buildAnalyzeSqlFn,
       buildSyncStatement,
       onStep: (s) => setSteps(s)
     });
@@ -565,7 +640,8 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
       await doRun(base, {
         createTable: nameToId.get(base.createTable),
         syncData: nameToId.get(base.syncData),
-        addPartition: nameToId.get(base.addPartition)
+        addPartition: nameToId.get(base.addPartition),
+        analyzeTable: nameToId.get(base.analyzeTable)
       });
       return;
     }
@@ -700,16 +776,6 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
               />
             </>
           )}
-          <Input
-            placeholder={l('datastudio.datax.quickSync.partitionExpression')}
-            value={config.target.partitionExpression}
-            onChange={(e) =>
-              setConfig((prev) => ({
-                ...prev,
-                target: { ...prev.target, partitionExpression: e.target.value }
-              }))
-            }
-          />
           {renderFieldAdder('target')}
         </Space>
       </div>
@@ -724,7 +790,7 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
         <Input
           size='small'
           value={v}
-          placeholder='如 SYNC_TIME'
+          placeholder='字母/数字/下划线，如 SYNC_TIME'
           onChange={(e) => {
             const next = [...taskParams];
             next[i] = { ...next[i], prop: e.target.value };
@@ -773,13 +839,15 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
       title: '值',
       dataIndex: 'value',
       render: (v: string, _r: QuickSyncParam, i: number) => (
-        <Input
+        <AutoComplete
           size='small'
+          style={{ width: '100%' }}
           value={v}
+          options={TIME_EXPR_OPTIONS}
           placeholder='如 $[yyyyMMdd-1]'
-          onChange={(e) => {
+          onChange={(val) => {
             const next = [...taskParams];
-            next[i] = { ...next[i], value: e.target.value };
+            next[i] = { ...next[i], value: val };
             setTaskParams(next);
           }}
         />
@@ -834,7 +902,8 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
           </Button>
         ]}
       >
-        <Flex vertical gap={8} style={{ maxHeight: 'calc(100vh - 260px)', overflow: 'auto' }}>
+        {/* 用普通块级容器而非 Flex：Flex 子项默认可收缩，会把下方「任务参数」表格压成 0 高度 */}
+        <div style={{ maxHeight: 'calc(100vh - 200px)', overflow: 'auto', paddingRight: 4 }}>
           <Space size={16} wrap>
             <Text type='secondary'>{l('datastudio.datax.quickSync.parentPath')}：{parentName ?? parentId}</Text>
             <Text type='secondary'>
@@ -842,38 +911,78 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
             </Text>
             <Text type='secondary'>
               {l('datastudio.datax.quickSync.jobNames')}：{QUICK_SYNC_PREFIX.createTable}
-              {targetTableName || '<表名>'} / {QUICK_SYNC_PREFIX.syncData}
               {targetTableName || '<表名>'} / {QUICK_SYNC_PREFIX.addPartition}
+              {targetTableName || '<表名>'} / {QUICK_SYNC_PREFIX.syncData}
+              {targetTableName || '<表名>'} / {QUICK_SYNC_PREFIX.analyzeTable}
               {targetTableName || '<表名>'}
             </Text>
           </Space>
 
-          <Row gutter={16}>
-            <Col span={12}>{renderSourcePanel()}</Col>
-            <Col span={12}>{renderTargetPanel()}</Col>
-          </Row>
-
-          {config.source.fields.length > 0 || config.target.fields.length > 0 ? (
-            <div style={{ height: 320, border: '1px solid #f0f0f0', borderRadius: 6 }}>
-              <FieldMapping
-                sourceFields={config.source.fields}
-                targetFields={config.target.fields}
-                mappings={config.mappings}
-                onMappingsChange={(mappings) => setConfig((prev) => ({ ...prev, mappings }))}
-                onDeleteSourceField={(name) => handleDeleteField('source', name)}
-                onDeleteTargetField={(name) => handleDeleteField('target', name)}
+          <Divider style={{ margin: '12px 0 8px' }} />
+          <Text strong>{l('datastudio.datax.quickSync.partitionExpression')}</Text>
+          <Row gutter={8} align='middle' style={{ marginTop: 6 }}>
+            <Col flex='none'>
+              <Input
+                style={{ width: 280 }}
+                addonBefore={`${partitionColumn}=`}
+                placeholder={DEFAULT_PARTITION_EXPRESSION}
+                value={config.target.partitionExpression}
+                onChange={(e) =>
+                  setConfig((prev) => ({
+                    ...prev,
+                    target: { ...prev.target, partitionExpression: e.target.value }
+                  }))
+                }
               />
-            </div>
-          ) : (
-            <div style={{ height: 320, border: '1px dashed #d9d9d9', borderRadius: 6 }}>
-              <Empty description='选择源表（或填写新建目标表）后，在此展示字段并支持连线映射' />
-            </div>
+            </Col>
+            <Col flex='auto'>
+              <Text type='secondary' style={{ fontSize: 12 }}>
+                用 {'${参数名}'} 引用下方任务参数；时间算法写进参数的「值」里，如 {'$[yyyyMMdd-1]'}
+              </Text>
+            </Col>
+          </Row>
+          {invalidParamRefs.length > 0 && (
+            <Alert
+              style={{ marginTop: 6 }}
+              type='error'
+              showIcon
+              message={`参数名不合法：${invalidParamRefs
+                .map((n) => '${' + n + '}')
+                .join('、')}，只能用字母、数字、下划线（如 ${PARAM_NAME_SAMPLE}）`}
+            />
           )}
+          {invalidParamRefs.length === 0 && missingParams.length > 0 && (
+            <Alert
+              style={{ marginTop: 6 }}
+              type='warning'
+              showIcon
+              message={`表达式引用了未定义的任务参数：${missingParams
+                .map((m) => '${' + m + '}')
+                .join('、')}`}
+              action={
+                <Button size='small' onClick={addMissingParams}>
+                  一键添加
+                </Button>
+              }
+            />
+          )}
+          {invalidParamRefs.length === 0 &&
+            missingParams.length === 0 &&
+            targetTableName &&
+            config.target.schemaName && (
+              <Text type='secondary' style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
+                写入分区路径：{previewPath()}
+              </Text>
+            )}
 
-          <Divider style={{ margin: '4px 0' }} />
+          <Divider style={{ margin: '8px 0' }} dashed />
           <Text strong>{l('datastudio.datax.quickSync.taskParams')}</Text>
+          {/* 表格 footer 的默认背景在本项目主题变量下会渲染成黑条，这里覆盖为透明 */}
+          <style>{`.quick-sync-param-table .ant-table-footer{background:transparent;padding:8px 0 0;}`}</style>
           <Table
+            className='quick-sync-param-table'
             size='small'
+            style={{ marginTop: 6 }}
             rowKey={(_r, i) => String(i)}
             pagination={false}
             dataSource={taskParams}
@@ -890,6 +999,37 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
               </Button>
             )}
           />
+
+          <Row gutter={16} style={{ marginTop: 8 }}>
+            <Col span={12}>{renderSourcePanel()}</Col>
+            <Col span={12}>{renderTargetPanel()}</Col>
+          </Row>
+
+          <Divider style={{ margin: '12px 0 8px' }} />
+          <Text strong>{l('datastudio.datax.quickSync.mapping')}</Text>
+          {config.source.fields.length > 0 || config.target.fields.length > 0 ? (
+            <div
+              style={{
+                height: 280,
+                border: '1px solid #f0f0f0',
+                borderRadius: 6,
+                marginTop: 6
+              }}
+            >
+              <FieldMapping
+                sourceFields={config.source.fields}
+                targetFields={config.target.fields}
+                mappings={config.mappings}
+                onMappingsChange={(mappings) => setConfig((prev) => ({ ...prev, mappings }))}
+                onDeleteSourceField={(name) => handleDeleteField('source', name)}
+                onDeleteTargetField={(name) => handleDeleteField('target', name)}
+              />
+            </div>
+          ) : (
+            <div style={{ height: 160, border: '1px dashed #d9d9d9', borderRadius: 6, marginTop: 6 }}>
+              <Empty description='选择源表（或填写新建目标表）后，在此展示字段并支持连线映射' />
+            </div>
+          )}
 
           <Checkbox
             checked={execCreateTable}
@@ -926,13 +1066,21 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
               )}
             </>
           )}
-        </Flex>
+        </div>
       </Modal>
 
       <Modal
         title={l('datastudio.datax.quickSync.preview')}
         open={previewOpen}
         width={900}
+        /*
+         * 固定更高的层级 + 关闭即销毁。
+         * 主弹窗带 destroyOnClose：关闭后它的 wrap 会被移除，第二次打开时重新追加到 body 末尾；
+         * 而预览弹窗若残留旧 DOM 节点会排在主弹窗之前，两者 z-index 又同为 1000，
+         * 于是预览弹窗被主弹窗盖住——表现为「第二次使用时点预览生成物弹不出来，强刷才恢复」。
+         */
+        zIndex={1100}
+        destroyOnClose
         onCancel={() => setPreviewOpen(false)}
         footer={[
           <Button key='close' onClick={() => setPreviewOpen(false)}>
@@ -941,20 +1089,26 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
         ]}
       >
         <Flex vertical gap={8} style={{ maxHeight: '60vh', overflow: 'auto' }}>
+          <Text type='secondary'>
+            执行顺序：建表 → 加分区（建出分区目录）→ 同步数据 → 刷新统计（顺序不能变，否则写数据会报 path
+            不存在、或统计为空）
+          </Text>
           <Text strong>① 建表 DDL（作业 {QUICK_SYNC_PREFIX.createTable}{targetTableName}）</Text>
           <Paragraph code copyable style={{ whiteSpace: 'pre-wrap' }}>
             {buildDdl()}
           </Paragraph>
-          <Text strong>② DataX JSON（作业 {QUICK_SYNC_PREFIX.syncData}{targetTableName}）</Text>
+          <Text strong>② 加分区 SQL（作业 {QUICK_SYNC_PREFIX.addPartition}{targetTableName}）</Text>
+          <Paragraph code copyable style={{ whiteSpace: 'pre-wrap' }}>
+            {buildPartitionSql()}
+          </Paragraph>
+          <Text strong>③ DataX JSON（作业 {QUICK_SYNC_PREFIX.syncData}{targetTableName}）</Text>
           <Paragraph code copyable style={{ whiteSpace: 'pre-wrap' }}>
             {buildSyncStatement()}
           </Paragraph>
           <Text type='secondary'>writer path：{previewPath()}</Text>
-          <Text strong>
-            ③ 加分区 SQL（作业 {QUICK_SYNC_PREFIX.addPartition}{targetTableName}）
-          </Text>
+          <Text strong>④ 统计 SQL（作业 {QUICK_SYNC_PREFIX.analyzeTable}{targetTableName}）</Text>
           <Paragraph code copyable style={{ whiteSpace: 'pre-wrap' }}>
-            {buildPartitionSql()}
+            {buildAnalyzeSqlFn()}
           </Paragraph>
         </Flex>
       </Modal>
@@ -962,6 +1116,9 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
       <Modal
         title='作业名已存在'
         open={!!conflict}
+        /* 同预览弹窗：必须高于主弹窗，否则二次使用时会被主弹窗盖住导致无法选择 */
+        zIndex={1150}
+        destroyOnClose
         onCancel={() => setConflict(undefined)}
         footer={[
           <Button key='cancel' onClick={() => setConflict(undefined)}>

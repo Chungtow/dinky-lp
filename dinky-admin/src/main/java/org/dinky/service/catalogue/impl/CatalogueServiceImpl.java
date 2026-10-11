@@ -27,6 +27,7 @@ import org.dinky.data.bo.catalogue.export.ExportTaskBO;
 import org.dinky.data.dto.CatalogueTaskDTO;
 import org.dinky.data.dto.CatalogueTreeQueryDTO;
 import org.dinky.data.dto.ImportCatalogueDTO;
+import org.dinky.data.dto.TaskDTO;
 import org.dinky.data.enums.CatalogueSortValueEnum;
 import org.dinky.data.enums.JobLifeCycle;
 import org.dinky.data.enums.JobStatus;
@@ -306,6 +307,21 @@ public class CatalogueServiceImpl extends SuperServiceImpl<CatalogueMapper, Cata
         task.setNote(catalogueTaskDTO.getNote());
         task.setFirstLevelOwner(catalogueTaskDTO.getFirstLevelOwner());
         task.setSecondLevelOwners(catalogueTaskDTO.getSecondLevelOwners());
+        // id 非空时走的是「更新」分支：上面的 setter 没有覆盖作业正文（statement），
+        // 导致前端「一键 DataX 同步」的覆盖更新不生效——作业内容会永远停留在首次创建的版本。
+        // 这里仅在 DTO 显式提供时才覆盖，避免重命名等不传正文的场景把 statement 清空。
+        TaskDTO dtoTask = catalogueTaskDTO.getTask();
+        if (dtoTask != null) {
+            if (dtoTask.getStatement() != null) {
+                task.setStatement(dtoTask.getStatement());
+            }
+            if (dtoTask.getDatabaseId() != null) {
+                task.setDatabaseId(dtoTask.getDatabaseId());
+            }
+            if (dtoTask.getEnabled() != null) {
+                task.setEnabled(dtoTask.getEnabled());
+            }
+        }
         taskService.saveOrUpdateTask(task);
 
         catalogue.setTenantId(catalogueTaskDTO.getTenantId());
