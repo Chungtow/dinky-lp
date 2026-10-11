@@ -34,6 +34,7 @@ export const InitProjectState: ProjectState = {
   isEdit: false,
   isRename: false,
   isCreateTask: false,
+  isDataXSync: false,
   isCut: false,
   value: {}
 };

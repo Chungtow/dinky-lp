@@ -85,11 +85,11 @@ export const DEFAULT_HADOOP_CONFIG: Record<string, string> = {
 };
 
 /**
- * 默认 HDFS 目标路径模板。
- * 例：/user/hive/warehouse/lpods.db/ods_gmall_order_info/pt=${SYNC_DATE}
+ * 默认 HDFS 目标路径模板（不含分区段，分区段由调用方按分区字段+表达式拼接）。
+ * 例：/user/hive/warehouse/lpods.db/ods_gmall_order_info
  */
 export function buildDefaultHdfsPath(schemaName: string, tableName: string): string {
-  return `/user/hive/warehouse/${schemaName}.db/${tableName}/pt=\${SYNC_DATE}`;
+  return `/user/hive/warehouse/${schemaName}.db/${tableName}`;
 }
 
 /**
@@ -139,6 +139,57 @@ export function buildJdbcUrl(url?: string): string {
  * 未知顶层字段不影响执行。它保存可视化编辑所需的元信息（dinky 数据源 id、
  * 分区字段列表等），用于 JSON → 可视化回填时还原用户填写的完整配置。
  */
+/** parquet 基础类型映射（对齐本集群 fork 版 hdfswriter 的列类型映射规则） */
+const PARQUET_BASE_TYPE: Record<string, string> = {
+  TINYINT: 'int32',
+  SMALLINT: 'int32',
+  INT: 'int32',
+  INTEGER: 'int32',
+  BIGINT: 'int64',
+  LONG: 'int64',
+  FLOAT: 'float',
+  DOUBLE: 'double',
+  BOOLEAN: 'boolean',
+  STRING: 'binary',
+  VARCHAR: 'binary',
+  CHAR: 'binary',
+  BINARY: 'binary',
+  DATE: 'int32',
+  TIMESTAMP: 'int96'
+};
+
+/** parquet 逻辑类型（把 binary 还原成 STRING、int32 还原成 DATE 语义） */
+const PARQUET_LOGICAL_TYPE: Record<string, string> = {
+  STRING: 'UTF8',
+  VARCHAR: 'UTF8',
+  CHAR: 'UTF8',
+  DATE: 'DATE'
+};
+
+/**
+ * 生成 hdfswriter 的 `parquetSchema`（parquet MessageType 语法）。
+ *
+ * ⚠️ parquet 模式下**必须显式提供**：fork 版 hdfswriter 的
+ * `HdfsHelper.parquetFileStartWrite` 直接 `config.getString("parquetSchema")` 再交给
+ * `MessageTypeParser.parseMessageType`，没有任何回退——插件里那个"从 column 自动生成
+ * schema"的 `unitizeParquetConfig` 是死代码（全插件无调用点）。缺省会直接报
+ * `Code:[HdfsWriter-10] Parse parquet schema error - NullPointerException`。
+ *
+ * 实测（本集群 datax 插件）：TIMESTAMP→`int96` 时 Hive 能正确读成 timestamp，
+ * STRING→`binary (UTF8)` 能正确读成 string。
+ */
+export function buildParquetSchema(columns: { name: string; type?: string }[]): string {
+  const lines = ['message m {'];
+  columns.forEach((c) => {
+    const key = (c.type ?? '').trim().toUpperCase();
+    const base = PARQUET_BASE_TYPE[key] ?? 'binary';
+    const logical = PARQUET_LOGICAL_TYPE[key];
+    lines.push(`  optional ${base} ${c.name}${logical ? ` (${logical})` : ''};`);
+  });
+  lines.push('}');
+  return lines.join('\n');
+}
+
 export function buildDataXJson(config: DataXVisualConfig): string {
   const { source, target, mappings } = config;
 
@@ -147,6 +198,7 @@ export function buildDataXJson(config: DataXVisualConfig): string {
     const targetField = target.fields.find((f) => f.name === m.targetField);
     return { name: m.targetField, type: targetField?.type ?? 'STRING' };
   });
+  const fileType = config.fileType ?? 'orc';
 
   const json = {
     dinkyMeta: {
@@ -194,7 +246,11 @@ export function buildDataXJson(config: DataXVisualConfig): string {
             parameter: {
               defaultFS: config.defaultFS ?? 'hdfs://mycluster',
               hadoopConfig: config.hadoopConfig ?? DEFAULT_HADOOP_CONFIG,
-              fileType: config.fileType ?? 'orc',
+              fileType,
+              // parquet 必须带 parquetSchema，否则写端直接 NPE（详见 buildParquetSchema 注释）
+              ...(fileType.trim().toLowerCase() === 'parquet'
+                ? { parquetSchema: buildParquetSchema(writerColumn) }
+                : {}),
               path:
                 config.hdfsPath ??
                 (target.location
@@ -204,7 +260,12 @@ export function buildDataXJson(config: DataXVisualConfig): string {
                       target.partitionColumn,
                       target.partitionExpression
                     )
-                  : buildDefaultHdfsPath(target.schemaName ?? '', target.tableName ?? '')),
+                  : buildHdfsPath(
+                      buildDefaultHdfsPath(target.schemaName ?? '', target.tableName ?? ''),
+                      '',
+                      target.partitionColumn,
+                      target.partitionExpression
+                    )),
               fileName: source.tableName ?? target.tableName ?? '',
               writeMode: config.writeMode ?? 'truncate',
               fieldDelimiter: config.fieldDelimiter ?? '\t',

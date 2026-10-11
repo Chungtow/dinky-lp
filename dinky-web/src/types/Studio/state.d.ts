@@ -32,6 +32,7 @@ export interface ProjectState {
   isEdit: boolean;
   isRename: boolean;
   isCreateTask: boolean;
+  isDataXSync: boolean;
   isCut: boolean;
   value: any;
 }

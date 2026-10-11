@@ -26,6 +26,7 @@ import {
   DownCircleTwoTone,
   EditTwoTone,
   PlusCircleTwoTone,
+  ThunderboltTwoTone,
   UpCircleTwoTone
 } from '@ant-design/icons';
 import { DefaultOptionType } from 'antd/es/select';
@@ -52,6 +53,11 @@ export const FOLDER_RIGHT_MENU = (disabled = false): MenuItemType[] => [
     key: 'createTask',
     icon: <PlusCircleTwoTone />,
     label: l('right.menu.createTask')
+  },
+  {
+    key: 'dataXQuickSync',
+    icon: <ThunderboltTwoTone />,
+    label: l('right.menu.dataXQuickSync')
   },
   {
     key: 'delete',

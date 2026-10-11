@@ -127,12 +127,13 @@ public class CatalogueController {
             required = true,
             dataType = "Catalogue",
             dataTypeClass = Catalogue.class)
-    public Result<Void> saveOrUpdateCatalogue(@RequestBody Catalogue catalogue) {
+    public Result<Catalogue> saveOrUpdateCatalogue(@RequestBody Catalogue catalogue) {
         if (catalogueService.checkNameIsExistByParentId(catalogue)) {
             return Result.failed(Status.NAME_IS_EXIST);
         }
         if (catalogueService.saveOrUpdateOrRename(catalogue)) {
-            return Result.succeed(Status.SAVE_SUCCESS);
+            // saveOrUpdate 后 MyBatis-Plus 会回填主键，返回给前端用于「一键建目录后继续创建作业」
+            return Result.succeed(catalogue, Status.SAVE_SUCCESS);
         } else {
             return Result.failed(Status.SAVE_FAILED);
         }

@@ -294,7 +294,8 @@ public class SchedulerServiceImpl implements SchedulerService {
         sb.append("    content = config['job']['content'][0]\n");
         sb.append("    writer_params = content['writer']['parameter']\n");
         sb.append("    hdfs_path = writer_params['path']\n");
-        sb.append("    table_dir = hdfs_path.rsplit('/pt=', 1)[0]\n");
+        sb.append("    last_seg = hdfs_path.rstrip('/').rsplit('/', 1)[-1]\n");
+        sb.append("    table_dir = hdfs_path.rsplit('/', 1)[0] if '=' in last_seg else hdfs_path\n");
         sb.append("    hadoop_home = os.environ.get('HADOOP_HOME', '/opt/bigdata/hadoop/latest')\n");
         sb.append("    hdfs = os.path.join(hadoop_home, 'bin', 'hdfs')\n");
         sb.append("    subprocess.run([hdfs, 'dfs', '-mkdir', '-p', table_dir], check=True)\n");
@@ -685,6 +686,18 @@ public class SchedulerServiceImpl implements SchedulerService {
         List<TaskMainInfo> taskMainInfos = taskClient.getTaskMainInfos(projectCode, "", "", "");
         // 去掉本身
         taskMainInfos.removeIf(taskMainInfo -> (catalogue.getName()).equalsIgnoreCase(taskMainInfo.getTaskName()));
+        // 候选前置任务按「修改时间倒序」排序（时间相同或缺失时按任务名升序）：
+        // 直接沿用 DS 返回顺序毫无规律，任务一多就只能靠肉眼找。
+        taskMainInfos.sort((a, b) -> {
+            long ta = a.getTaskUpdateTime() != null
+                    ? a.getTaskUpdateTime().getTime()
+                    : (a.getTaskCreateTime() != null ? a.getTaskCreateTime().getTime() : 0L);
+            long tb = b.getTaskUpdateTime() != null
+                    ? b.getTaskUpdateTime().getTime()
+                    : (b.getTaskCreateTime() != null ? b.getTaskCreateTime().getTime() : 0L);
+            int cmp = Long.compare(tb, ta);
+            return cmp != 0 ? cmp : String.valueOf(a.getTaskName()).compareTo(String.valueOf(b.getTaskName()));
+        });
         return taskMainInfos;
     }
 
