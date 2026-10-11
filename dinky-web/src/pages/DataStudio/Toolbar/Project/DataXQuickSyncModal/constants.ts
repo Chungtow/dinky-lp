@@ -108,6 +108,9 @@ export const SUPPORTED_SOURCE_TYPE = 'mysql';
 /**
  * 目标作业方言推导（D7）：默认 Hive，按目标数据源 type 推导。
  * 不支持的类型返回 undefined，由调用方禁用提交并提示。
+ *
+ * ⚠️ MySQL 的方言字符串是 `Mysql`（`Dialect.MYSQL("Mysql")`，注意大小写），
+ * 反向同步（Hive/Spark → MySQL）时用它给建表作业定型。
  */
 export function dialectFromDataSourceType(type?: string): string | undefined {
   switch ((type ?? '').trim().toLowerCase()) {
@@ -115,6 +118,8 @@ export function dialectFromDataSourceType(type?: string): string | undefined {
       return 'Hive';
     case 'spark':
       return 'SparkSql';
+    case 'mysql':
+      return 'Mysql';
     default:
       return undefined;
   }
@@ -123,3 +128,24 @@ export function dialectFromDataSourceType(type?: string): string | undefined {
 export const DEFAULT_CHANNEL = 3;
 export const DEFAULT_WRITE_MODE = 'truncate';
 export const DEFAULT_FIELD_DELIMITER = '\t';
+
+/* ------------------------- 反向同步（阶段一）新增 ------------------------- */
+
+/** 同步方向 */
+export const DIRECTION_OPTIONS = [
+  { label: 'MySQL → Hive/Spark', value: 'mysql2hive' },
+  { label: 'Hive/Spark → MySQL', value: 'hive2mysql' }
+];
+
+/**
+ * 反向写入模式。
+ * ⚠️ PoC 实测（本集群 DATAX-OPENSOURCE-3.0）：三种模式都可用，且 `update`
+ * 语义为 **upsert**（`INSERT ... ON DUPLICATE KEY UPDATE`，存在则更新、不存在则插入），
+ * 需配 `updateKey`（目标表主键/唯一索引列）。
+ */
+export const DEFAULT_REVERSE_WRITE_MODE = 'update';
+export const REVERSE_WRITE_MODE_OPTIONS = [
+  { label: 'update（upsert：存在则更新，不存在则插入）', value: 'update' },
+  { label: 'replace（REPLACE INTO，DELETE+INSERT）', value: 'replace' },
+  { label: 'insert（仅插入，需先清空目标分区）', value: 'insert' }
+];
