@@ -165,3 +165,64 @@ export function extractInvalidParamRefs(text?: string): string[] {
   }
   return result;
 }
+
+/* ================= 阶段二：反向（Hive/Spark → MySQL）SQL 生成 ================= */
+
+export interface MysqlColumnDef {
+  name: string;
+  /** 已经过 mapToMysqlType 映射的 MySQL 类型 */
+  type: string;
+  comment?: string;
+}
+
+export interface MysqlCreateTableInput {
+  schemaName?: string;
+  tableName?: string;
+  columns: MysqlColumnDef[];
+  /** 业务主键列（决定 PRIMARY KEY，也是 upsert 的依据） */
+  primaryKey: string[];
+  engine?: string;
+  charset?: string;
+  comment?: string;
+}
+
+export const DEFAULT_MYSQL_ENGINE = 'InnoDB';
+export const DEFAULT_MYSQL_CHARSET = 'utf8mb4';
+
+/**
+ * 生成 MySQL 建表 DDL（反向：目标表不存在时）。
+ *
+ * ⚠️ 主键列显式 `NOT NULL`：MySQL 虽对 PK 隐含 NOT NULL，显式声明更清晰，
+ * 也与人工 SOP 的建表语句一致（`user_id BIGINT NOT NULL`）。
+ * ⚠️ 只生成一条语句：Dinky 的 executeCommonSql 走 JDBC 单次执行，目标库需已存在。
+ */
+export function buildMysqlCreateTableDdl(input: MysqlCreateTableInput): string {
+  const {
+    schemaName,
+    tableName,
+    columns,
+    primaryKey,
+    engine = DEFAULT_MYSQL_ENGINE,
+    charset = DEFAULT_MYSQL_CHARSET,
+    comment
+  } = input;
+  const pkSet = new Set(primaryKey);
+  const columnLines = columns.map((c) => {
+    const notNull = pkSet.has(c.name) ? ' NOT NULL' : ' DEFAULT NULL';
+    const commentPart = c.comment ? ` COMMENT '${escapeSqlLiteral(c.comment)}'` : '';
+    return `  \`${c.name}\` ${c.type}${notNull}${commentPart}`;
+  });
+  if (primaryKey.length > 0) {
+    columnLines.push(`  PRIMARY KEY (${primaryKey.map((k) => `\`${k}\``).join(', ')})`);
+  }
+  const qualified = schemaName ? `\`${schemaName}\`.\`${tableName}\`` : `\`${tableName}\``;
+  const tail = [
+    `ENGINE = ${engine}`,
+    `DEFAULT CHARSET = ${charset}`,
+    `COLLATE = ${charset}_general_ci`
+  ];
+  if (comment) {
+    tail.push(`COMMENT = '${escapeSqlLiteral(comment)}'`);
+  }
+  return `CREATE TABLE IF NOT EXISTS ${qualified} (\n${columnLines.join(',\n')}\n) ${tail.join('\n  ')}`;
+}
