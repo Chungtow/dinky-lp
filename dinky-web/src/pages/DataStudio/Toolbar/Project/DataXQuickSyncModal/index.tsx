@@ -300,6 +300,22 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
   /** 分区配置所在的一侧：正向=目标（Hive），反向=源（Hive） */
   const partitionSideCfg = isReverse ? config.source : config.target;
 
+  /** 目标字段名集合 */
+  const targetFieldNames = useMemo(
+    () => (config.target.fields ?? []).map((f) => f.name),
+    [config.target.fields]
+  );
+  /**
+   * 生效的业务主键：只保留**目标字段中仍存在**的列。
+   * 旧配置残留的主键（如源端分区列 pt，调整配置后已不在目标字段里）若被写进
+   * MySQL DDL 的 PRIMARY KEY 与 DataX 的 updateKey，会导致 MySQL 报
+   * `Unknown column 'xxx' in 'field list'`。
+   */
+  const effectiveUpdateKey = useMemo(
+    () => (config.updateKey ?? []).filter((k) => targetFieldNames.includes(k)),
+    [config.updateKey, targetFieldNames]
+  );
+
   const targetTableName = config.target.tableName || config.newTargetTableName || '';
   const effectiveFileType = (isReverse
     ? config.fileType || DEFAULT_FILE_TYPE
@@ -629,7 +645,10 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
         hadoopConfig: hadoopConf.hadoopConfig ?? cur.hadoopConfig,
         channel: cur.channel ?? DEFAULT_CHANNEL,
         writeMode: cur.writeMode ?? DEFAULT_REVERSE_WRITE_MODE,
-        updateKey: cur.updateKey ?? []
+        // 只保留目标字段里仍存在的列（避免 updateKey 指向不存在的列）
+        updateKey: (cur.updateKey ?? []).filter((k) =>
+          (cur.target.fields ?? []).some((f) => f.name === k)
+        )
       };
       return buildDataXJson(reverseConfig);
     }
@@ -661,12 +680,15 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
       return buildMysqlCreateTableDdl({
         schemaName: config.target.schemaName,
         tableName: targetTableName,
+        // 目标字段的 type 在理想路径下已是 MySQL 类型，但仍统一再过一次
+        // mapToMysqlType（该函数幂等）—— 避免任何路径残留 Hive 类型（如 STRING）
+        // 被直接写进 MySQL DDL。
         columns: config.target.fields.map((f) => ({
           name: f.name,
-          type: f.type,
+          type: mapToMysqlType(f.type),
           comment: f.comment
         })),
-        primaryKey: config.updateKey ?? [],
+        primaryKey: effectiveUpdateKey,
         comment: `DataX 同步自 ${config.source.schemaName}.${config.source.tableName}`
       });
     }
@@ -731,7 +753,7 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
         return '请至少配置一条字段映射';
       }
       const revWriteMode = config.writeMode ?? DEFAULT_REVERSE_WRITE_MODE;
-      if (revWriteMode === 'update' && (config.updateKey ?? []).length === 0) {
+      if (revWriteMode === 'update' && effectiveUpdateKey.length === 0) {
         return '反向同步在 update（upsert）模式下必须选择业务主键（updateKey），且该列须为目标表主键或唯一索引';
       }
       if (invalidParamRefs.length > 0) {
@@ -990,7 +1012,7 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
                 mode='multiple'
                 style={{ width: '100%' }}
                 placeholder='业务主键（决定 PRIMARY KEY 与 upsert 依据）'
-                value={config.updateKey ?? []}
+                value={effectiveUpdateKey}
                 options={(config.target.fields ?? []).map((f) => ({ label: f.name, value: f.name }))}
                 onChange={(v) => setConfig((prev) => ({ ...prev, updateKey: v as string[] }))}
               />

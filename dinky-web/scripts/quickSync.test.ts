@@ -19,6 +19,8 @@ import {
   MYSQL_PROFILE,
   profileFromDestinationType
 } from '../src/pages/DataStudio/Toolbar/Project/DataXQuickSyncModal/constants';
+import { buildMysqlCreateTableDdl } from '../src/pages/DataStudio/Toolbar/Project/DataXQuickSyncModal/statements';
+import { mapToMysqlType } from '../src/pages/DataStudio/Toolbar/Project/DataXQuickSyncModal/typeMapping';
 
 let passed = 0;
 const failures: string[] = [];
@@ -137,6 +139,66 @@ t('不含 add_partition / analyze（两者是 Hive 目的地特有）', () => {
   const keys = buildQuickSyncSteps(MYSQL_PROFILE).map((s) => s.key);
   ok(!keys.includes('partitionJob'), '反向不应生成加分区作业');
   ok(!keys.includes('analyzeJob'), '反向不应生成统计作业');
+});
+
+/* ---------------------------------------------------------------- 5. 反向建表 DDL */
+
+group('5) 反向建表 DDL：Hive 类型必须转换为 MySQL 类型（阶段二 UAT 反馈）');
+
+t('mapToMysqlType 基础映射', () => {
+  eq(mapToMysqlType('bigint'), 'BIGINT');
+  eq(mapToMysqlType('int'), 'INT');
+  eq(mapToMysqlType('string'), 'VARCHAR(255)');
+  eq(mapToMysqlType('timestamp'), 'DATETIME');
+  eq(mapToMysqlType('date'), 'DATE');
+  eq(mapToMysqlType('boolean'), 'TINYINT(1)');
+  eq(mapToMysqlType('decimal(10,2)'), 'DECIMAL(10,2)');
+});
+
+t('mapToMysqlType 幂等（已是 MySQL 类型时不变形）', () => {
+  eq(mapToMysqlType('VARCHAR(255)'), 'VARCHAR(255)');
+  eq(mapToMysqlType('BIGINT'), 'BIGINT');
+  eq(mapToMysqlType('DECIMAL(10,2)'), 'DECIMAL(10,2)');
+  eq(mapToMysqlType('DATETIME'), 'DATETIME');
+});
+
+t('stringLength 可配置，超长落 TEXT', () => {
+  eq(mapToMysqlType('string', { stringLength: 100 }), 'VARCHAR(100)');
+  eq(mapToMysqlType('string', { stringLength: 8000 }), 'TEXT');
+});
+
+t('DDL：类型为 MySQL 类型、主键 NOT NULL、非主键 DEFAULT NULL', () => {
+  const ddl = buildMysqlCreateTableDdl({
+    schemaName: 'traccar',
+    tableName: 'app_lpdw_ads_traccar_stat',
+    columns: [
+      { name: 'user_id', type: mapToMysqlType('bigint'), comment: '用户ID' },
+      { name: 'user_name', type: mapToMysqlType('string'), comment: '用户名称' },
+      { name: 'stat_date', type: mapToMysqlType('string'), comment: '统计日期' }
+    ],
+    primaryKey: ['user_id'],
+    comment: 'DataX 同步自 lpdw.ads_traccar_stat'
+  });
+  ok(ddl.includes('`user_id` BIGINT NOT NULL'), '主键应为 BIGINT NOT NULL：\n' + ddl);
+  ok(ddl.includes('`user_name` VARCHAR(255) DEFAULT NULL'), '应为 VARCHAR(255)：\n' + ddl);
+  ok(ddl.includes('`stat_date` VARCHAR(255) DEFAULT NULL'), '应为 VARCHAR(255)：\n' + ddl);
+  ok(ddl.includes('PRIMARY KEY (`user_id`)'), '主键子句缺失：\n' + ddl);
+  ok(ddl.includes('ENGINE = InnoDB'), ddl);
+  ok(ddl.includes('DEFAULT CHARSET = utf8mb4'), ddl);
+  ok(!ddl.includes('STRING'), 'DDL 不应残留 Hive 类型 STRING：\n' + ddl);
+});
+
+t('DDL：复合主键顺序与列名保持', () => {
+  const ddl = buildMysqlCreateTableDdl({
+    schemaName: 'traccar',
+    tableName: 't',
+    columns: [
+      { name: 'user_id', type: 'BIGINT' },
+      { name: 'pt', type: 'VARCHAR(8)' }
+    ],
+    primaryKey: ['user_id', 'pt']
+  });
+  ok(ddl.includes('PRIMARY KEY (`user_id`, `pt`)'), ddl);
 });
 
 /* ---------------------------------------------------------------- 汇总 */

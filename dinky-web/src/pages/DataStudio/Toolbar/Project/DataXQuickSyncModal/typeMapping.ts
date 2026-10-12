@@ -138,6 +138,19 @@ export function mapToMysqlType(hiveType?: string, opts: MysqlTypeOptions = {}): 
       return 'DATETIME';
     case 'binary':
       return 'VARBINARY(255)';
+    // 以下为「已经是 MySQL 类型」的情形（如回填旧 JSON 时带来的类型），
+    // 必须原样返回 —— 否则二次映射会退化成 VARCHAR(255)：
+    // 例：timestamp 首次映射得到 DATETIME，若再映射一次就变成 VARCHAR(255)。
+    case 'datetime':
+      return 'DATETIME';
+    case 'time':
+      return 'TIME';
+    case 'text':
+      return 'TEXT';
+    case 'json':
+      return 'JSON';
+    case 'varbinary':
+      return 'VARBINARY(255)';
     case 'string':
     case 'varchar':
     case 'char': {
