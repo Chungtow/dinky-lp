@@ -324,6 +324,12 @@ export function buildDataXJson(config: DataXVisualConfig): string {
           source.partitionExpression
         ));
 
+  // 生效的业务主键：只保留目标字段里仍存在的列（与阶段二向导口径一致，
+  // 避免 updateKey 指向不存在的列导致 MySQL 报 Unknown column 'xxx' in 'field list'）
+  const effectiveUpdateKey = (config.updateKey ?? []).filter((k) =>
+    (target.fields ?? []).some((f) => f.name === k)
+  );
+
   const json = {
     dinkyMeta: {
       /**
@@ -350,9 +356,11 @@ export function buildDataXJson(config: DataXVisualConfig): string {
         tableName: target.tableName,
         fields: target.fields ?? [],
         partitionColumns: target.partitionColumns ?? [],
-        partitionColumn: target.partitionColumn,
-        partitionExpression: target.partitionExpression,
-        updateKey: config.updateKey ?? [],
+        // 反向：目的地是 MySQL，无分区概念 —— 不把源端分区配置（pt / ${SYNC_TIME}）
+        // 残留进 target 元数据（否则回填时出现「无分区列却有 partitionColumn」的矛盾状态）
+        partitionColumn: isReverse ? undefined : target.partitionColumn,
+        partitionExpression: isReverse ? undefined : target.partitionExpression,
+        updateKey: effectiveUpdateKey,
         writeMode: reverseWriteMode
       },
       /**
@@ -404,7 +412,7 @@ export function buildDataXJson(config: DataXVisualConfig): string {
                 parameter: {
                   // PoC 实测 insert/replace/update 均可用；默认 update（upsert：存在则更新、不存在则插入）
                   writeMode: reverseWriteMode,
-                  ...(reverseWriteMode === 'update' ? { updateKey: config.updateKey ?? [] } : {}),
+                  ...(reverseWriteMode === 'update' ? { updateKey: effectiveUpdateKey } : {}),
                   ...(config.session?.length ? { session: config.session } : {}),
                   column: writerColumn.map((c) => c.name),
                   connection: [

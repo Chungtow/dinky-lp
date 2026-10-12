@@ -21,6 +21,7 @@ import {
 } from '../src/pages/DataStudio/Toolbar/Project/DataXQuickSyncModal/constants';
 import { buildMysqlCreateTableDdl } from '../src/pages/DataStudio/Toolbar/Project/DataXQuickSyncModal/statements';
 import { mapToMysqlType } from '../src/pages/DataStudio/Toolbar/Project/DataXQuickSyncModal/typeMapping';
+import { buildDataXJson } from '../src/pages/DataStudio/CenterTabContent/SqlTask/DataXVisualEditor/dataxJson';
 
 let passed = 0;
 const failures: string[] = [];
@@ -199,6 +200,91 @@ t('DDL：复合主键顺序与列名保持', () => {
     primaryKey: ['user_id', 'pt']
   });
   ok(ddl.includes('PRIMARY KEY (`user_id`, `pt`)'), ddl);
+});
+
+/* ---------------------------------------------------------------- 6. 反向 JSON 组装 */
+
+group('6) 反向 JSON 组装（阶段二 UAT 反馈）');
+
+/** 一个最小的反向配置：源 Hive（ORC）→ 目标 MySQL（upsert） */
+function baseReverseConfig(): any {
+  return {
+    direction: 'hive2mysql',
+    source: {
+      dataSourceId: 9,
+      dataSourceName: 'hive-lpdw',
+      schemaName: 'lpdw',
+      tableName: 'ads_traccar_stat',
+      fields: [
+        { name: 'user_id', type: 'bigint' },
+        { name: 'user_name', type: 'string' }
+      ],
+      location: 'hdfs://mycluster/user/hive/warehouse/lpdw.db/ads_traccar_stat',
+      partitionColumns: [{ name: 'pt', type: 'string' }],
+      partitionColumn: 'pt',
+      partitionExpression: '${SYNC_TIME}'
+    },
+    target: {
+      dataSourceId: 20,
+      dataSourceName: 'traccar-mysql',
+      schemaName: 'traccar',
+      tableName: 'app_lpdw_ads_traccar_stat',
+      fields: [
+        { name: 'user_id', type: 'BIGINT' },
+        { name: 'user_name', type: 'VARCHAR(255)' }
+      ],
+      // 目标（MySQL）连接信息 —— 若前端未回填，生成的 writer 会拿到空串
+      jdbcUrl: 'jdbc:mysql://manager:33306/traccar',
+      username: 'syncuser',
+      password: 'syncpass',
+      partitionColumns: [],
+      partitionColumn: 'pt',
+      partitionExpression: '${SYNC_TIME}'
+    },
+    mappings: [
+      { sourceField: 'user_id', targetField: 'user_id' },
+      { sourceField: 'user_name', targetField: 'user_name' }
+    ],
+    // ghost 不在目标字段里，应被剔除
+    updateKey: ['user_id', 'ghost'],
+    writeMode: 'update',
+    fileType: 'orc',
+    defaultFS: 'hdfs://mycluster',
+    channel: 3
+  };
+}
+
+t('writer 为 mysqlwriter 且连接信息取自目标数据源', () => {
+  const obj = JSON.parse(buildDataXJson(baseReverseConfig()));
+  const w = obj.job.content[0].writer;
+  eq(w.name, 'mysqlwriter');
+  ok(w.parameter.connection[0].jdbcUrl.includes('manager:33306'), 'jdbcUrl 不应为空：' + w.parameter.connection[0].jdbcUrl);
+  eq(w.parameter.username, 'syncuser');
+  eq(w.parameter.password, 'syncpass');
+  eq(w.parameter.writeMode, 'update');
+});
+
+t('updateKey 剔除目标表中不存在的列（meta 与 writer 一致）', () => {
+  const obj = JSON.parse(buildDataXJson(baseReverseConfig()));
+  const key = JSON.stringify(['user_id']);
+  eq(JSON.stringify(obj.job.content[0].writer.parameter.updateKey), key);
+  eq(JSON.stringify(obj.dinkyMeta.target.updateKey), key);
+});
+
+t('反向时 dinkyMeta.target 不残留源端分区配置', () => {
+  const obj = JSON.parse(buildDataXJson(baseReverseConfig()));
+  eq('partitionColumn' in obj.dinkyMeta.target, false);
+  eq('partitionExpression' in obj.dinkyMeta.target, false);
+});
+
+t('reader 为 hdfsreader：path 含表目录与分区段，column 为 {index,type}', () => {
+  const obj = JSON.parse(buildDataXJson(baseReverseConfig()));
+  const r = obj.job.content[0].reader;
+  eq(r.name, 'hdfsreader');
+  eq(r.parameter.path, '/user/hive/warehouse/lpdw.db/ads_traccar_stat/pt=${SYNC_TIME}');
+  eq(r.parameter.fileType, 'orc');
+  eq(typeof r.parameter.column[0], 'object');
+  eq(r.parameter.column[0].index, 0);
 });
 
 /* ---------------------------------------------------------------- 汇总 */

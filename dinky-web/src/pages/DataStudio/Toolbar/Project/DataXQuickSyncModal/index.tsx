@@ -394,7 +394,17 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
               username: ds?.connectConfig?.username,
               password: ds?.connectConfig?.password
             }
-          : { ...prev.target, dataSourceId, dataSourceName: ds?.name };
+          : {
+              ...prev.target,
+              dataSourceId,
+              dataSourceName: ds?.name,
+              // 反向（目的地 MySQL）：mysqlwriter 需要 jdbcUrl/username/password；
+              // 原来只给 source 侧写这几个字段，导致反向生成的 JSON 里三者全为空。
+              // 正向（目的地 Hive）不使用它们（writer 为 hdfswriter），填上无害。
+              jdbcUrl: ds?.connectConfig?.url,
+              username: ds?.connectConfig?.username,
+              password: ds?.connectConfig?.password
+            };
       const next: QuickSyncConfig = { ...prev, [side]: nextSide, mappings: [] };
       // 方向：由两侧数据源类型自动判定（源 MySQL + 目标 Hive/Spark → 正向；反之 → 反向）
       const srcDs = side === 'source' ? ds : dataSourceList.find((d) => d.id === prev.source.dataSourceId);
@@ -1361,7 +1371,15 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
                 />
               )}
               {result.executedCreateTable && (
-                <Alert type='info' showIcon message='目标表已在 Hive 侧创建（不可回滚）' />
+                <Alert
+                  type='info'
+                  showIcon
+                  message={
+                    isReverse
+                      ? '目标表已在 MySQL 侧创建（不可回滚）'
+                      : '目标表已在 Hive 侧创建（不可回滚）'
+                  }
+                />
               )}
             </>
           )}
