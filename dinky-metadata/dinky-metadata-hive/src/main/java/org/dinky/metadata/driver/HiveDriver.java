@@ -80,11 +80,20 @@ public class HiveDriver extends AbstractJdbcDriver implements Driver {
     public HiveTableDetail getTableDetail(String schemaName, String tableName) {
         HiveTableDetail detail = new HiveTableDetail();
         String ddl = getCreateTableDdl(schemaName, tableName);
+        List<Column> columns = listColumns(schemaName, tableName);
+        List<Column> partitionColumns = parsePartitionColumns(ddl);
+        // 分区列不属于普通字段：Hive 分区表的 ORC/Parquet 数据文件里**不含分区列**
+        // （分区值体现在目录名 pt=xxx 上），若把分区列混进 columns，DataX 的
+        // hdfswriter/hdfsreader.column 会多出一列，导致列错位或读取失败。
+        // Spark 的 `describe` 还会把分区列同时列在普通列区域，故此处按名字剔除。
+        for (Column partitionColumn : partitionColumns) {
+            columns.removeIf(c -> Asserts.isEquals(c.getName(), partitionColumn.getName()));
+        }
         detail.setLocation(parseLocation(ddl));
         detail.setFileType(parseFileType(ddl));
         detail.setTableType(parseTableType(ddl));
-        detail.setPartitionColumns(parsePartitionColumns(ddl));
-        detail.setColumns(listColumns(schemaName, tableName));
+        detail.setPartitionColumns(partitionColumns);
+        detail.setColumns(columns);
         return detail;
     }
 
@@ -325,13 +334,21 @@ public class HiveDriver extends AbstractJdbcDriver implements Driver {
             }
             Integer positionId = 1;
             while (results.next()) {
+                String currentColumnName = results.getString(dbQuery.columnName());
+                // Hive/Spark 的 `describe` 在普通列之后会输出分区信息段，形如：
+                //   # Partition Information
+                //   # col_name   data_type   comment
+                // 其后才是分区列。这些 '#' 开头的行不是普通列，遇到即结束；
+                // 分区列由 parsePartitionColumns（`show create table`）单独解析。
+                if (currentColumnName == null || currentColumnName.trim().startsWith("#")) {
+                    break;
+                }
                 Column field = new Column();
-                if (StringUtils.isEmpty(results.getString(dbQuery.columnName()))) {
+                if (StringUtils.isEmpty(currentColumnName)) {
                     break;
                 } else {
                     if (columnList.contains(dbQuery.columnName())) {
-                        String columnName = results.getString(dbQuery.columnName());
-                        field.setName(columnName);
+                        field.setName(currentColumnName);
                     }
                     if (columnList.contains(dbQuery.columnType())) {
                         field.setType(results.getString(dbQuery.columnType()));

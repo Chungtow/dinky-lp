@@ -275,13 +275,20 @@ export function buildDataXJson(config: DataXVisualConfig): string {
   const reverseWriteMode = config.writeMode ?? 'update';
   /** 反向 reader.path：与正向 writer.path 对称，指向源（或去重）表的分区目录 */
   const reverseReaderPath =
-    config.hdfsPath ??
-    buildHdfsPath(
-      source.location ?? buildDefaultHdfsPath(source.schemaName ?? '', source.tableName ?? ''),
-      config.defaultFS ?? '',
-      source.partitionColumn,
-      source.partitionExpression
-    );
+    config.hdfsPath ||
+    (source.location
+      ? buildHdfsPath(
+          source.location,
+          config.defaultFS ?? '',
+          source.partitionColumn,
+          source.partitionExpression
+        )
+      : buildHdfsPath(
+          buildDefaultHdfsPath(source.schemaName ?? '', source.tableName ?? ''),
+          '',
+          source.partitionColumn,
+          source.partitionExpression
+        ));
 
   const json = {
     dinkyMeta: {
@@ -381,7 +388,7 @@ export function buildDataXJson(config: DataXVisualConfig): string {
                 ? { parquetSchema: buildParquetSchema(writerColumn) }
                 : {}),
               path:
-                config.hdfsPath ??
+                config.hdfsPath ||
                 (target.location
                   ? buildHdfsPath(
                       target.location,
