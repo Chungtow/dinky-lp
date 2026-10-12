@@ -80,20 +80,13 @@ public class HiveDriver extends AbstractJdbcDriver implements Driver {
     public HiveTableDetail getTableDetail(String schemaName, String tableName) {
         HiveTableDetail detail = new HiveTableDetail();
         String ddl = getCreateTableDdl(schemaName, tableName);
-        List<Column> columns = listColumns(schemaName, tableName);
-        List<Column> partitionColumns = parsePartitionColumns(ddl);
-        // 分区列不属于普通字段：Hive 分区表的 ORC/Parquet 数据文件里**不含分区列**
-        // （分区值体现在目录名 pt=xxx 上），若把分区列混进 columns，DataX 的
-        // hdfswriter/hdfsreader.column 会多出一列，导致列错位或读取失败。
-        // Spark 的 `describe` 还会把分区列同时列在普通列区域，故此处按名字剔除。
-        for (Column partitionColumn : partitionColumns) {
-            columns.removeIf(c -> Asserts.isEquals(c.getName(), partitionColumn.getName()));
-        }
+        // 列清单保留全部列（含分区列）：ADS 层导 MySQL 时，分区列常作为日期字段使用。
+        // `describe` 输出中夹带的分区信息分隔行（'#' 开头）已由 listColumns 跳过。
         detail.setLocation(parseLocation(ddl));
         detail.setFileType(parseFileType(ddl));
         detail.setTableType(parseTableType(ddl));
-        detail.setPartitionColumns(partitionColumns);
-        detail.setColumns(columns);
+        detail.setPartitionColumns(parsePartitionColumns(ddl));
+        detail.setColumns(listColumns(schemaName, tableName));
         return detail;
     }
 
@@ -335,13 +328,22 @@ public class HiveDriver extends AbstractJdbcDriver implements Driver {
             Integer positionId = 1;
             while (results.next()) {
                 String currentColumnName = results.getString(dbQuery.columnName());
-                // Hive/Spark 的 `describe` 在普通列之后会输出分区信息段，形如：
+                if (currentColumnName == null) {
+                    continue;
+                }
+                String trimmedName = currentColumnName.trim();
+                // Hive/Spark 的 `describe` 结果里夹着分区信息分隔行与空行，形如：
+                //   col_name      data_type
+                //   user_id       bigint
+                //   ...
                 //   # Partition Information
-                //   # col_name   data_type   comment
-                // 其后才是分区列。这些 '#' 开头的行不是普通列，遇到即结束；
-                // 分区列由 parsePartitionColumns（`show create table`）单独解析。
-                if (currentColumnName == null || currentColumnName.trim().startsWith("#")) {
-                    break;
+                //   # col_name    data_type    comment
+                //   pt            string              <-- 分区列，必须保留
+                // '#' 开头的分隔行与空行不是列，跳过（**continue 而非 break**：Hive 输出中
+                // 分区列位于分区段之后，break 会把分区列丢掉）；其余行全部保留，含分区列
+                // —— ADS 层导 MySQL 时分区列常作为日期字段使用。
+                if (trimmedName.isEmpty() || trimmedName.startsWith("#")) {
+                    continue;
                 }
                 Column field = new Column();
                 if (StringUtils.isEmpty(currentColumnName)) {
