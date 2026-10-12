@@ -103,6 +103,26 @@ export const DEFAULT_HADOOP_CONFIG: Record<string, string> = {
  * 默认 HDFS 目标路径模板（不含分区段，分区段由调用方按分区字段+表达式拼接）。
  * 例：/user/hive/warehouse/lpods.db/ods_gmall_order_info
  */
+/**
+ * 默认字段映射：按【同名字段】配对（两侧列集不同时，按下标配对会静默错列）。
+ *
+ * `excludeSourceNames`：不参与自动配对的源端字段名（目前用于 **分区列**）。
+ * 分区列的值不在数据文件里（只体现在目录名 `pt=xxx` 上），自动连上会取到空值，
+ * 并让 `reader.column` 出现越界 index；因此默认不自动配对，但仍照常显示在字段列表里，
+ * 需要时可由用户手工连线。
+ */
+export function buildDefaultMappings(
+  sourceFields: DataXField[],
+  targetFields: DataXField[],
+  excludeSourceNames: string[] = []
+): DataXMapping[] {
+  const targetNames = new Set(targetFields.map((f) => f.name));
+  const excluded = new Set(excludeSourceNames);
+  return sourceFields
+    .filter((f) => targetNames.has(f.name) && !excluded.has(f.name))
+    .map((f) => ({ sourceField: f.name, targetField: f.name }));
+}
+
 export function buildDefaultHdfsPath(schemaName: string, tableName: string): string {
   return `/user/hive/warehouse/${schemaName}.db/${tableName}`;
 }
@@ -334,7 +354,13 @@ export function buildDataXJson(config: DataXVisualConfig): string {
         partitionExpression: target.partitionExpression,
         updateKey: config.updateKey ?? [],
         writeMode: reverseWriteMode
-      }
+      },
+      /**
+       * 映射关系一并写入 dinkyMeta：回填时**原样恢复**。
+       * 否则回填只能靠"名字/位置"猜测 —— 源端分区列（值不在文件里、通常无对应目标列）
+       * 会被误配成多余映射，甚至导致列错位（实测踩过）。
+       */
+      mappings
     },
     job: {
       setting: {
@@ -460,10 +486,12 @@ function parseReverseDataXJson(obj: any, readerParam: any, writerParam: any): Da
 
   // 不按旧 JSON 的 writer 列数截断源字段：源表加列后（如新增 stat_date），
   // 截断会让新增列在「重新生成」时丢失。
-  const mappings: DataXMapping[] = sourceFields.map((f, i) => ({
-    sourceField: f.name,
-    targetField: writerNames[i] ?? f.name
-  }));
+  // 优先使用生成时写入的映射（尊重用户手工连线，且不受分区列影响）；
+  // 旧 JSON 无该字段时退化为按【同名字段】配对（不再按位置猜测，避免错列）。
+  const metaMappings: DataXMapping[] = obj?.dinkyMeta?.mappings ?? [];
+  const partitionNames: string[] = (metaSource?.partitionColumns ?? []).map((p: DataXField) => p.name);
+  const mappings: DataXMapping[] =
+    metaMappings.length > 0 ? metaMappings : buildDefaultMappings(sourceFields, targetFields, partitionNames);
 
   const hdfsPath: string = readerParam.path ?? '';
   const defaultFS: string = readerParam.defaultFS ?? '';
@@ -538,10 +566,14 @@ export function parseDataXJson(jsonStr: string): DataXVisualConfig | null {
     const sourceColumns: string[] = readerParam.column ?? [];
     const targetColumns: { name: string; type: string }[] = writerParam.column ?? [];
 
-    const mappings: DataXMapping[] = sourceColumns.map((sourceField, index) => ({
-      sourceField,
-      targetField: targetColumns[index]?.name ?? sourceField
-    }));
+    const metaMappings: DataXMapping[] = obj?.dinkyMeta?.mappings ?? [];
+    const mappings: DataXMapping[] =
+      metaMappings.length > 0
+        ? metaMappings
+        : sourceColumns.map((sourceField, index) => ({
+            sourceField,
+            targetField: targetColumns[index]?.name ?? sourceField
+          }));
 
     const tableName = readerParam.connection?.[0]?.table?.[0] ?? '';
     const jdbcUrl = readerParam.connection?.[0]?.jdbcUrl?.[0] ?? '';

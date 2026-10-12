@@ -34,6 +34,7 @@ import {
 } from '@/pages/DataStudio/Toolbar/Project/DataXQuickSyncModal/constants';
 import {
   buildDataXJson,
+  buildDefaultMappings,
   DataXField,
   DataXMapping,
   DataXVisualConfig,
@@ -62,17 +63,6 @@ const emptyConfig = (): DataXVisualConfig => ({
   target: { fields: [] },
   mappings: []
 });
-
-/**
- * 默认字段映射：按【同名字段】配对。
- * ⚠️ 不能用下标顺序配对：两侧列集不同时会静默错配（与一键同步向导保持一致）。
- */
-const buildDefaultMappings = (sourceFields: DataXField[], targetFields: DataXField[]): DataXMapping[] => {
-  const targetNames = new Set(targetFields.map((f) => f.name));
-  return sourceFields
-    .filter((f) => targetNames.has(f.name))
-    .map((f) => ({ sourceField: f.name, targetField: f.name }));
-};
 
 const DataXVisualEditor = (props: DataXVisualEditorProps) => {
   const { statement, onChange, databaseDataList, readOnly } = props;
@@ -225,7 +215,11 @@ const DataXVisualEditor = (props: DataXVisualEditorProps) => {
               : undefined
           }
         };
-        next.mappings = buildDefaultMappings(next.source.fields, next.target.fields);
+        next.mappings = buildDefaultMappings(
+          next.source.fields,
+          next.target.fields,
+          (next.source.partitionColumns ?? []).map((p) => p.name)
+        );
         return next;
       });
       if (detail.fileType === 'parquet') {
@@ -260,7 +254,11 @@ const DataXVisualEditor = (props: DataXVisualEditorProps) => {
     }));
     setConfig((prev) => {
       const next = { ...prev, [side]: { ...prev[side], schemaName, tableName, fields } };
-      next.mappings = buildDefaultMappings(next.source.fields, next.target.fields);
+      next.mappings = buildDefaultMappings(
+        next.source.fields,
+        next.target.fields,
+        (next.source.partitionColumns ?? []).map((p) => p.name)
+      );
       return next;
     });
   };

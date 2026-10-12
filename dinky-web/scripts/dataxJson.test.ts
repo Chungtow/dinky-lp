@@ -18,6 +18,7 @@
 import {
   buildDataXJson,
   buildDefaultHdfsPath,
+  buildDefaultMappings,
   buildHdfsPath,
   buildHdfsReaderColumn,
   extractSchemaFromHdfsPath,
@@ -26,6 +27,7 @@ import {
   mapToDataxType,
   parseDataXJson,
   parseHdfsPathInfo,
+  type DataXField,
   type DataXVisualConfig
 } from '../src/pages/DataStudio/CenterTabContent/SqlTask/DataXVisualEditor/dataxJson';
 
@@ -237,16 +239,41 @@ t('反向：往返后 updateKey / writeMode 保持，writer.column 幂等', () =
   eq(writerParam(j3).column, writerParam(j2).column, '往返后 writer.column 应稳定（幂等）');
 });
 
-/**
- * 已知行为（待产品决策，见 docs/review/20261012-dinky-DataX反向同步阶段一-复盘.md §7 改进措施）：
- * 回填时 buildDefaultMappings 按「同名字段」自动配对，源端**分区列** pt 与目标端同名列 pt 也会被
- * 自动连上 —— 实测该列取不到值（分区值在目录名上），且会让 reader.column 出现越界 index。
- * 当前不擅自变更交互行为，此处仅固化现状；将来若实现「分区列不参与自动配对」，请同步修改本用例。
- */
-t('（现状记录）源端分区列与目标端同名列会被自动配对', () => {
-  const c2 = parseDataXJson(buildDataXJson(reverseConfig(''))) as DataXVisualConfig;
+t('反向：往返后 writer.column 与首次完全一致（映射不会因往返膨胀）', () => {
+  const j1 = buildDataXJson(reverseConfig(''));
+  const c2 = parseDataXJson(j1) as DataXVisualConfig;
   const j2 = buildDataXJson(c2);
-  ok(writerParam(j2).column.includes('pt'), '现状：pt 会被自动配对进 writer.column');
+  eq(writerParam(j1).column, ['user_id', 'user_name', 'device_cnt', 'pt']);
+  eq(writerParam(j2).column, writerParam(j1).column, '往返后 writer.column 应完全一致');
+});
+
+t('反向：dinkyMeta.mappings 原样恢复（含跨名映射 stat_date → pt）', () => {
+  const j1 = buildDataXJson(reverseConfig(''));
+  const c2 = parseDataXJson(j1) as DataXVisualConfig;
+  eq(c2.mappings, [
+    { sourceField: 'user_id', targetField: 'user_id' },
+    { sourceField: 'user_name', targetField: 'user_name' },
+    { sourceField: 'device_cnt', targetField: 'device_cnt' },
+    { sourceField: 'stat_date', targetField: 'pt' }
+  ]);
+});
+
+t('分区列不参与自动配对（buildDefaultMappings 排除源端分区列）', () => {
+  const src: DataXField[] = [
+    { name: 'user_id', type: 'bigint' },
+    { name: 'stat_date', type: 'string' },
+    { name: 'pt', type: 'string' }
+  ];
+  const tgt: DataXField[] = [
+    { name: 'user_id', type: 'bigint' },
+    { name: 'pt', type: 'varchar' }
+  ];
+  eq(buildDefaultMappings(src, tgt, ['pt']), [{ sourceField: 'user_id', targetField: 'user_id' }]);
+  // 不传排除列表时语义保持朴素：同名即配对
+  eq(buildDefaultMappings(src, tgt), [
+    { sourceField: 'user_id', targetField: 'user_id' },
+    { sourceField: 'pt', targetField: 'pt' }
+  ]);
 });
 
 t('正向：往返后 writer.path 稳定', () => {
