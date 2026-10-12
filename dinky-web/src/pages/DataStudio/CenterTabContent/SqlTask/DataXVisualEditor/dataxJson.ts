@@ -108,6 +108,20 @@ export function buildDefaultHdfsPath(schemaName: string, tableName: string): str
 }
 
 /**
+ * location 是否是**有效的表路径**：排除空串，以及只有 scheme 的残缺值（如 `hdfs://mycluster`）。
+ * 后者常见于「回填旧 JSON」——旧 path 退化时解析出的 location 只剩 scheme，若当成有效值
+ * 参与拼路径（会被剥掉 scheme），会再次生成丢表目录的 path（如 /pt=xxx）。
+ */
+export function isValidTableLocation(location?: string): boolean {
+  const loc = (location ?? '').trim();
+  if (!loc) {
+    return false;
+  }
+  const path = loc.replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/]+/, '');
+  return path.length > 1;
+}
+
+/**
  * 由表 location + 分区字段 + 分区值表达式组装 hdfswriter 的 path。
  * 例：location=hdfs://mycluster/user/hive/warehouse/lpods.db/ods_gmall_user_info,
  *     partitionColumn=pt, expression=${SYNC_DATE}-${SYNC_TIME}
@@ -389,9 +403,9 @@ export function buildDataXJson(config: DataXVisualConfig): string {
                 : {}),
               path:
                 config.hdfsPath ||
-                (target.location
+                (isValidTableLocation(target.location)
                   ? buildHdfsPath(
-                      target.location,
+                      target.location as string,
                       config.defaultFS ?? '',
                       target.partitionColumn,
                       target.partitionExpression
@@ -444,12 +458,12 @@ function parseReverseDataXJson(obj: any, readerParam: any, writerParam: any): Da
     return { name: n, type: f?.type ?? 'STRING' };
   });
 
-  const mappings: DataXMapping[] = sourceFields
-    .slice(0, writerNames.length || sourceFields.length)
-    .map((f, i) => ({
-      sourceField: f.name,
-      targetField: writerNames[i] ?? f.name
-    }));
+  // 不按旧 JSON 的 writer 列数截断源字段：源表加列后（如新增 stat_date），
+  // 截断会让新增列在「重新生成」时丢失。
+  const mappings: DataXMapping[] = sourceFields.map((f, i) => ({
+    sourceField: f.name,
+    targetField: writerNames[i] ?? f.name
+  }));
 
   const hdfsPath: string = readerParam.path ?? '';
   const defaultFS: string = readerParam.defaultFS ?? '';

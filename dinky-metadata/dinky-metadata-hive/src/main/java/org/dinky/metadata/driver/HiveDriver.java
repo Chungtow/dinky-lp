@@ -326,12 +326,19 @@ public class HiveDriver extends AbstractJdbcDriver implements Driver {
                 columnList.add(metaData.getColumnLabel(i));
             }
             Integer positionId = 1;
+            List<String> seenColumnNames = new ArrayList<>();
             while (results.next()) {
                 String currentColumnName = results.getString(dbQuery.columnName());
                 if (currentColumnName == null) {
                     continue;
                 }
                 String trimmedName = currentColumnName.trim();
+                // 同名列只保留一次：Spark 的 `describe` 会把分区列先列在普通列区域、
+                // 又在分区段之后列一次，不去重会在字段列表里出现重复项（如 pt 出现两次）。
+                if (seenColumnNames.contains(trimmedName.toLowerCase())) {
+                    continue;
+                }
+                seenColumnNames.add(trimmedName.toLowerCase());
                 // Hive/Spark 的 `describe` 结果里夹着分区信息分隔行与空行，形如：
                 //   col_name      data_type
                 //   user_id       bigint
