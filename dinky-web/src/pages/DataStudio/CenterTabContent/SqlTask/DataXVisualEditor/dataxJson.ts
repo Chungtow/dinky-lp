@@ -499,7 +499,10 @@ function parseReverseDataXJson(obj: any, readerParam: any, writerParam: any): Da
     updateKey: writerParam.updateKey ?? metaTarget?.updateKey ?? [],
     session: writerParam.session,
     defaultFS,
-    hdfsPath,
+    // ⚠️ 不要把回填的 path 写回 config.hdfsPath：生成时它的优先级最高，会把旧 path
+    // 原样带出（旧 path 一旦退化就会一直退化下去），location / 分区字段 / 分区表达式
+    // 已从 path 解析出来，重新生成时可正确重建路径。
+    hdfsPath: undefined,
     hadoopConfig: readerParam.hadoopConfig,
     channel: obj?.job?.setting?.speed?.channel
   };
@@ -589,7 +592,8 @@ export function parseDataXJson(jsonStr: string): DataXVisualConfig | null {
       writeMode: writerParam.writeMode,
       fieldDelimiter: writerParam.fieldDelimiter,
       defaultFS: writerParam.defaultFS,
-      hdfsPath,
+      // 同上：不把回填的旧 path 当成「用户自定义路径」，避免生成时短路路径推导
+      hdfsPath: undefined,
       hadoopConfig: writerParam.hadoopConfig,
       channel: obj?.job?.setting?.speed?.channel
     };

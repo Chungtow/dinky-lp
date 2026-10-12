@@ -311,7 +311,7 @@ const DataXVisualEditor = (props: DataXVisualEditorProps) => {
         return;
       }
     }
-    onChange(buildDataXJson(config));
+    onChange(buildDataXJson(buildConfig));
     setMode('json');
     message.success('已根据可视化配置生成 DataX JSON，并写回编辑区');
   };
