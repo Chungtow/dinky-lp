@@ -85,7 +85,16 @@ public class HiveDriver extends AbstractJdbcDriver implements Driver {
         detail.setLocation(parseLocation(ddl));
         detail.setFileType(parseFileType(ddl));
         detail.setTableType(parseTableType(ddl));
-        detail.setPartitionColumns(parsePartitionColumns(ddl));
+        List<Column> partitionColumns = parsePartitionColumns(ddl);
+        if (partitionColumns.isEmpty()) {
+            // 兜底：`show create table` 的 DDL 未包含（或未能解析出）PARTITIONED BY 时，
+            // 改从 `describe` 输出的分区信息段解析。
+            // 实测：不同 HiveServer2 / Spark ThriftServer 的 DDL 输出格式存在差异，
+            // 会导致分区列丢失 —— 表现为向导里 source.partitionColumns 为空、
+            // reader.path 丢掉分区段（生成 .../ads_traccar_stat 而非 .../pt=${SYNC_TIME}）。
+            partitionColumns = parsePartitionColumnsFromDescribe(schemaName, tableName);
+        }
+        detail.setPartitionColumns(partitionColumns);
         detail.setColumns(listColumns(schemaName, tableName));
         return detail;
     }
@@ -181,6 +190,63 @@ public class HiveDriver extends AbstractJdbcDriver implements Driver {
 
     private String parseTableType(String ddl) {
         return ddl.trim().toUpperCase().startsWith("CREATE EXTERNAL TABLE") ? "EXTERNAL_TABLE" : "MANAGED_TABLE";
+    }
+
+    /**
+     * 从 {@code describe} 结果中解析分区列（回退方案）。
+     *
+     * <p>Hive/Spark 的 {@code describe} 在普通列之后输出分区信息段：
+     *
+     * <pre>
+     *   col_name      data_type   comment
+     *   user_id       bigint
+     *   ...
+     *   # Partition Information
+     *   # col_name    data_type   comment
+     *   pt            string                  &lt;-- 分区列
+     * </pre>
+     *
+     * <p>当 {@code show create table} 的 DDL 中没有可解析的 PARTITIONED BY
+     * （不同 HiveServer2 / Spark ThriftServer 输出格式有差异）时用它兜底，避免分区列丢失。
+     */
+    private List<Column> parsePartitionColumnsFromDescribe(String schemaName, String tableName) {
+        List<Column> columns = new ArrayList<>();
+        IDBQuery dbQuery = getDBQuery();
+        String sql = String.format("describe `%s`.`%s`", schemaName, tableName);
+        try (PreparedStatement preparedStatement = conn.get().prepareStatement(sql);
+                ResultSet results = preparedStatement.executeQuery()) {
+            boolean inPartitionSection = false;
+            List<String> seen = new ArrayList<>();
+            while (results.next()) {
+                String colName = results.getString(dbQuery.columnName());
+                if (colName == null) {
+                    continue;
+                }
+                String trimmed = colName.trim();
+                if (trimmed.startsWith("#")) {
+                    // '# Partition Information' 之后进入分区段（随后的 '# col_name ...' 仍在段内）
+                    inPartitionSection = trimmed.toLowerCase().contains("partition");
+                    continue;
+                }
+                if (!inPartitionSection || trimmed.isEmpty() || seen.contains(trimmed.toLowerCase())) {
+                    continue;
+                }
+                seen.add(trimmed.toLowerCase());
+                Column column = new Column();
+                column.setName(trimmed);
+                String type = results.getString(dbQuery.columnType());
+                column.setType(StringUtils.isEmpty(type) ? "string" : type.trim());
+                column.setJavaType(getTypeConvert().convert(column));
+                columns.add(column);
+            }
+        } catch (Exception e) {
+            log.error(
+                    "HiveDriver.parsePartitionColumnsFromDescribe failed, schema={}, table={}",
+                    schemaName,
+                    tableName,
+                    e);
+        }
+        return columns;
     }
 
     private List<Column> parsePartitionColumns(String ddl) {

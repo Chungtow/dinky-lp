@@ -869,7 +869,59 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
     }
   };
 
+  /**
+   * 反向生成前的兜底：源表分区列缺失时自动补拉一次表详情。
+   *
+   * <p>分区列用于拼出 `reader.path` 的分区段（如 /pt=${SYNC_TIME}）。实测中该字段
+   * 可能在「回填旧 JSON」「选表时详情未返回」等情况下丢失，而 path 一旦丢掉分区段
+   * 便会**永久退化**（回填 → 再生成 → 依旧丢），故在生成前统一兜底补全。
+   */
+  const ensureReverseSourceDetail = async () => {
+    const cur = configRef.current;
+    if ((cur.direction ?? '') !== 'hive2mysql') {
+      return;
+    }
+    if (!cur.source?.tableName || (cur.source.partitionColumns ?? []).length > 0) {
+      return;
+    }
+    try {
+      const detail: any = await queryDataByParams(API_CONSTANTS.DATASOURCE_GET_TABLE_DETAIL, {
+        id: cur.source.dataSourceId,
+        schemaName: cur.source.schemaName,
+        tableName: cur.source.tableName
+      });
+      if (!detail) {
+        return;
+      }
+      const partitionColumns = (detail.partitionColumns ?? []).map((c: any) => ({
+        name: c.name,
+        type: c.type,
+        comment: c.comment
+      }));
+      if (partitionColumns.length === 0) {
+        return;
+      }
+      const next: QuickSyncConfig = {
+        ...cur,
+        fileType: cur.fileType ?? detail.fileType,
+        source: {
+          ...cur.source,
+          location: cur.source.location || detail.location,
+          partitionColumns,
+          partitionColumn: partitionColumns[0].name
+        }
+      };
+      configRef.current = next;
+      setConfig(next);
+    } catch (e) {
+      // 兜底失败不阻断主流程
+      console.warn('ensureReverseSourceDetail failed', e);
+    }
+  };
+
   const handleSubmit = async () => {
+    // 反向：分区列缺失时先补全（否则 reader.path 会丢掉分区段，且会永久退化）
+    await ensureReverseSourceDetail();
     const error = validate();
     if (error) {
       message.error(error);
