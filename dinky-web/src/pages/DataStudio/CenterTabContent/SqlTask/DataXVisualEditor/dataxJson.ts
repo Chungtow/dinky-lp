@@ -290,9 +290,9 @@ export function buildDataXJson(config: DataXVisualConfig): string {
   /** 反向 reader.path：与正向 writer.path 对称，指向源（或去重）表的分区目录 */
   const reverseReaderPath =
     config.hdfsPath ||
-    (source.location
+    (isValidTableLocation(source.location)
       ? buildHdfsPath(
-          source.location,
+          source.location as string,
           config.defaultFS ?? '',
           source.partitionColumn,
           source.partitionExpression
@@ -645,6 +645,9 @@ export function parseHdfsPathInfo(
     partitionColumn = match[2];
     partitionExpression = match[3];
   }
-  const fullLocation = defaultFS ? `${defaultFS}${location}` : location;
+  // location 为空（path 只剩分区段）时不要拼 defaultFS；location 已带 scheme 时也不要重复拼，
+  // 否则会得到 "hdfs://xxx" 甚至 "hdfs://xxxhdfs://xxx/..."，回填后永久污染配置。
+  const hasScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(location);
+  const fullLocation = !location ? '' : hasScheme || !defaultFS ? location : `${defaultFS}${location}`;
   return { location: fullLocation, partitionColumn, partitionExpression };
 }
