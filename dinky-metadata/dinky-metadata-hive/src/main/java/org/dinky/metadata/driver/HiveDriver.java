@@ -116,6 +116,13 @@ public class HiveDriver extends AbstractJdbcDriver implements Driver {
         return matcher.find() ? matcher.group(1) : "";
     }
 
+    /**
+     * 推断文件格式：orc / parquet / text。
+     *
+     * Hive 的 `show create table` 会展开为 `STORED AS INPUTFORMAT '...OrcInputFormat' OUTPUTFORMAT ...`；
+     * 而 Spark（如 STS 数据源）输出的是 `USING orc` / `USING parquet`，或 `STORED AS ORC` 形式。
+     * 只认 INPUTFORMAT 会让 Spark 表错误地落到默认值 text（实测踩过），故多种写法都兼容。
+     */
     private String parseFileType(String ddl) {
         Matcher matcher =
                 Pattern.compile("INPUTFORMAT\\s*'([^']+)'", Pattern.DOTALL).matcher(ddl);
@@ -130,6 +137,44 @@ public class HiveDriver extends AbstractJdbcDriver implements Driver {
             if (inputFormat.contains("text")) {
                 return "text";
             }
+        }
+        // Spark 风格：`USING orc` / `USING parquet` / `USING text`
+        Matcher usingMatcher = Pattern.compile("USING\\s+([a-zA-Z]+)", Pattern.CASE_INSENSITIVE)
+                .matcher(ddl);
+        if (usingMatcher.find()) {
+            String using = usingMatcher.group(1).toLowerCase();
+            if (using.contains("orc")) {
+                return "orc";
+            }
+            if (using.contains("parquet")) {
+                return "parquet";
+            }
+            if (using.contains("text") || using.contains("csv")) {
+                return "text";
+            }
+        }
+        // Hive 风格：`STORED AS ORC` / `STORED AS PARQUET` / `STORED AS TEXTFILE`
+        Matcher storedAsMatcher = Pattern.compile("STORED\\s+AS\\s+([a-zA-Z]+)", Pattern.CASE_INSENSITIVE)
+                .matcher(ddl);
+        if (storedAsMatcher.find()) {
+            String storedAs = storedAsMatcher.group(1).toLowerCase();
+            if (storedAs.contains("orc")) {
+                return "orc";
+            }
+            if (storedAs.contains("parquet")) {
+                return "parquet";
+            }
+            if (storedAs.contains("text") || storedAs.contains("csv")) {
+                return "text";
+            }
+        }
+        // 兜底：整段 DDL 中出现关键字（覆盖 tblproperties 等场景）
+        String lowerDdl = ddl.toLowerCase();
+        if (lowerDdl.contains("orc")) {
+            return "orc";
+        }
+        if (lowerDdl.contains("parquet")) {
+            return "parquet";
         }
         return "text";
     }

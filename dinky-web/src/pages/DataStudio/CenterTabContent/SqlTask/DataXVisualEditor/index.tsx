@@ -283,13 +283,35 @@ const DataXVisualEditor = (props: DataXVisualEditorProps) => {
     });
   };
 
-  const handleGenerate = () => {
+  const handleGenerate = async () => {
     if (!config.source.tableName || !config.target.tableName) {
       message.warning('请先选择源表与目标表');
       return;
     }
+    // 反向：生成前用最新元数据刷新源表的 fileType / location，避免沿用回填的旧值
+    // （如 fileType=text、location 只剩 scheme 导致 reader.path 丢表目录）。
+    let buildConfig = config;
+    if (isReverse && config.source.dataSourceId && config.source.schemaName) {
+      try {
+        const detail = (await queryDataByParams(API_CONSTANTS.DATASOURCE_GET_TABLE_DETAIL, {
+          id: config.source.dataSourceId,
+          schemaName: config.source.schemaName,
+          tableName: config.source.tableName
+        })) as { fileType?: string; location?: string } | null;
+        if (detail && (detail.fileType || detail.location)) {
+          buildConfig = {
+            ...config,
+            fileType: detail.fileType ?? config.fileType,
+            source: { ...config.source, location: detail.location ?? config.source.location }
+          };
+          setConfig(buildConfig);
+        }
+      } catch (e) {
+        // 元数据刷新失败时沿用当前配置，不阻断生成
+      }
+    }
     // 反向：hdfsreader 只支持 ORC/SEQ/RC/CSV/TEXT，Parquet 源表在运行期必报 HdfsReader-12，直接阻断生成
-    if (isReverse && (config.fileType ?? '').toLowerCase() === 'parquet') {
+    if (isReverse && (buildConfig.fileType ?? '').toLowerCase() === 'parquet') {
       message.warning(
         '源表为 Parquet 格式，DataX 的 hdfsreader 不支持，无法反向同步；请改用 ORC 存储的源表' +
           '（如需日期字段，请在表设计时显式添加一个普通列，不要用分区字段当日期）。',
