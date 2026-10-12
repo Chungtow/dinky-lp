@@ -229,8 +229,20 @@ const DataXVisualEditor = (props: DataXVisualEditorProps) => {
         return next;
       });
       if (detail.fileType === 'parquet') {
-        // 本集群 DataX 为 fork 版（hdfswriter 支持 ORC/PARQUET/TEXT），此处仅提示，不再阻断
-        message.info('目标表为 Parquet 格式：生成 JSON 时会自动附带 parquetSchema（fork 版 hdfswriter 必须显式传入，已实测通过）');
+        if (isReverse) {
+          // 反向：DataX 的 hdfsreader 只支持 ORC/SEQ/RC/CSV/TEXT，**不支持 Parquet**
+          // （已核实插件 HdfsFileType 枚举），生成 JSON 后运行期必报 HdfsReader-12。
+          message.warning(
+            '源表为 Parquet 格式：DataX 的 hdfsreader 不支持 Parquet（仅支持 ORC/TEXT 等），无法反向同步。' +
+              '请将 ADS 层表建成 ORC 存储；如需日期字段，请在表设计时显式添加一个普通列，不要用分区字段当日期。',
+            6
+          );
+        } else {
+          // 正向：fork 版 hdfswriter 支持 Parquet（须显式传 parquetSchema），此处仅提示、不阻断
+          message.info(
+            '目标表为 Parquet 格式：生成 JSON 时会自动附带 parquetSchema（fork 版 hdfswriter 必须显式传入，已实测通过）'
+          );
+        }
       }
       return;
     }
@@ -274,6 +286,15 @@ const DataXVisualEditor = (props: DataXVisualEditorProps) => {
   const handleGenerate = () => {
     if (!config.source.tableName || !config.target.tableName) {
       message.warning('请先选择源表与目标表');
+      return;
+    }
+    // 反向：hdfsreader 只支持 ORC/SEQ/RC/CSV/TEXT，Parquet 源表在运行期必报 HdfsReader-12，直接阻断生成
+    if (isReverse && (config.fileType ?? '').toLowerCase() === 'parquet') {
+      message.warning(
+        '源表为 Parquet 格式，DataX 的 hdfsreader 不支持，无法反向同步；请改用 ORC 存储的源表' +
+          '（如需日期字段，请在表设计时显式添加一个普通列，不要用分区字段当日期）。',
+        6
+      );
       return;
     }
     if (config.mappings.length === 0) {
