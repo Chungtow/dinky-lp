@@ -24,7 +24,7 @@ import { chooseTenantSubmit, login, queryDataByParams } from '@/services/Busines
 import { API } from '@/services/data';
 import { API_CONSTANTS } from '@/services/endpoints';
 import { SaTokenInfo, UserBaseInfo } from '@/types/AuthCenter/data.d';
-import { setTenantStorageAndCookie } from '@/utils/function';
+import { setCurrentTenant } from '@/utils/function';
 import { useLocalStorage } from '@/utils/hook/useLocalStorage';
 import { l } from '@/utils/intl';
 import { ErrorMessage, SuccessMessageAsync } from '@/utils/messages';
@@ -127,7 +127,7 @@ const Login: React.FC = () => {
    */
   const singleTenant = async (tenantList: UserBaseInfo.Tenant[]) => {
     const tenantId = tenantList[0].id;
-    setTenantStorageAndCookie(tenantId);
+    setCurrentTenant(tenantId);
     const chooseTenantResult: API.Result = await chooseTenantSubmit({
       tenantId
     });

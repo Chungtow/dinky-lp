@@ -23,7 +23,7 @@ import {
   getValueFromLocalStorage,
   removeKeyFromLocalStorage,
   setKeyToLocalStorage,
-  setTenantStorageAndCookie
+  setCurrentTenant
 } from '@/utils/function';
 import { l } from '@/utils/intl';
 import { ErrorNotification, SuccessNotification, WarningNotification } from '@/utils/messages';
@@ -178,7 +178,7 @@ const AvatarDropdown = () => {
       cancelText: l('button.cancel'),
       onOk: async () => {
         const result = await chooseTenantSubmit({ tenantId });
-        setTenantStorageAndCookie(tenantId);
+        setCurrentTenant(tenantId);
         if (result.code === 0) {
           SuccessNotification(result.msg);
         } else {
