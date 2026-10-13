@@ -415,14 +415,27 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
               jdbcUrl: ds?.connectConfig?.url,
               username: ds?.connectConfig?.username,
               password: ds?.connectConfig?.password,
-              // 同 source：换数据源后库/表/字段全部作废，须清空后重选
+              // ⚠️ 与 source 侧不同：一键同步的**目标表往往尚不存在**（第一个任务就是 create_table），
+              // 因此 target.fields 不是从数据源读的，而是**由源字段派生的初始字段**
+              // （用户在此基础上手工增删、选业务主键）。换目标数据源时必须保留或重新派生，
+              // 否则「字段映射」的目标侧一列会凭空消失，用户只能全手填。
               schemaName: '',
               tableName: '',
-              fields: [],
               location: '',
               partitionColumns: [],
               partitionColumn: undefined,
-              partitionExpression: undefined
+              partitionExpression: undefined,
+              fields: prev.target.fields?.length
+                ? prev.target.fields
+                : (prev.source?.fields ?? []).map((f) => ({
+                    name: f.name,
+                    // 目标类型按当前方向映射：反向（目的地 MySQL）→ MySQL 类型；正向（目的地 Hive）→ Hive 类型
+                    type:
+                      (prev.direction ?? 'mysql2hive') === 'hive2mysql'
+                        ? mapToMysqlType(f.type)
+                        : mapToHiveType(f.type),
+                    comment: f.comment
+                  }))
             };
       const next: QuickSyncConfig = { ...prev, [side]: nextSide, mappings: [] };
       // 方向：由两侧数据源类型自动判定（源 MySQL + 目标 Hive/Spark → 正向；反之 → 反向）
