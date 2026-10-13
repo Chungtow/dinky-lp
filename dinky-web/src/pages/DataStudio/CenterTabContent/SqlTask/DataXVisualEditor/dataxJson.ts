@@ -23,6 +23,13 @@ export interface DataXField {
   comment?: string;
 }
 
+/**
+ * 同步方向。
+ * - `mysql2hive`（默认，向后兼容）：reader=`mysqlreader`，writer=`hdfswriter`
+ * - `hive2mysql`（反向）：reader=`hdfsreader`，writer=`mysqlwriter`
+ */
+export type DataXDirection = 'mysql2hive' | 'hive2mysql';
+
 /** 单侧（源/目标）配置 */
 export interface DataXSide {
   dataSourceId?: number;
@@ -32,7 +39,7 @@ export interface DataXSide {
   /** 表名（不含库名） */
   tableName?: string;
   fields: DataXField[];
-  /** 表在 HDFS 上的完整路径（Hive 目标，来自 show create table 的 LOCATION，含 scheme） */
+  /** 表在 HDFS 上的完整路径（Hive 侧，来自 show create table 的 LOCATION，含 scheme） */
   location?: string;
   /** 分区字段列表（来自表 DDL 的 PARTITIONED BY） */
   partitionColumns?: DataXField[];
@@ -40,14 +47,16 @@ export interface DataXSide {
   partitionColumn?: string;
   /** 分区值表达式（如 ${SYNC_DATE}-${SYNC_TIME}） */
   partitionExpression?: string;
-}
-
-/** 源侧额外连接信息（生成 json 用） */
-export interface DataXSourceSide extends DataXSide {
+  /** JDBC 连接串（MySQL 侧；正向=源，反向=目标） */
   jdbcUrl?: string;
+  /** 数据库账号（MySQL 侧；正向=源，反向=目标） */
   username?: string;
+  /** 数据库密码（MySQL 侧；正向=源，反向=目标） */
   password?: string;
 }
+
+/** @deprecated 连接信息已上移到 {@link DataXSide}；保留别名以兼容既有引用 */
+export type DataXSourceSide = DataXSide;
 
 /**
  * 字段映射关系。
@@ -61,12 +70,18 @@ export interface DataXMapping {
 
 /** 可视化编辑器的完整配置 */
 export interface DataXVisualConfig {
-  source: DataXSourceSide;
+  /** 同步方向；缺省视为 `mysql2hive`（向后兼容既有 JSON） */
+  direction?: DataXDirection;
+  source: DataXSide;
   target: DataXSide;
   mappings: DataXMapping[];
   splitPk?: string;
   fileType?: string;
   writeMode?: string;
+  /** 反向 upsert（`writeMode=update`）的业务主键列；须为目标表主键或唯一索引 */
+  updateKey?: string[];
+  /** 反向：`mysqlwriter` 的 session 语句（可选，如 sql_mode） */
+  session?: string[];
   fieldDelimiter?: string;
   defaultFS?: string;
   hdfsPath?: string;
@@ -88,8 +103,42 @@ export const DEFAULT_HADOOP_CONFIG: Record<string, string> = {
  * 默认 HDFS 目标路径模板（不含分区段，分区段由调用方按分区字段+表达式拼接）。
  * 例：/user/hive/warehouse/lpods.db/ods_gmall_order_info
  */
+/**
+ * 默认字段映射：按【同名字段】配对（两侧列集不同时，按下标配对会静默错列）。
+ *
+ * `excludeSourceNames`：不参与自动配对的源端字段名（目前用于 **分区列**）。
+ * 分区列的值不在数据文件里（只体现在目录名 `pt=xxx` 上），自动连上会取到空值，
+ * 并让 `reader.column` 出现越界 index；因此默认不自动配对，但仍照常显示在字段列表里，
+ * 需要时可由用户手工连线。
+ */
+export function buildDefaultMappings(
+  sourceFields: DataXField[],
+  targetFields: DataXField[],
+  excludeSourceNames: string[] = []
+): DataXMapping[] {
+  const targetNames = new Set(targetFields.map((f) => f.name));
+  const excluded = new Set(excludeSourceNames);
+  return sourceFields
+    .filter((f) => targetNames.has(f.name) && !excluded.has(f.name))
+    .map((f) => ({ sourceField: f.name, targetField: f.name }));
+}
+
 export function buildDefaultHdfsPath(schemaName: string, tableName: string): string {
   return `/user/hive/warehouse/${schemaName}.db/${tableName}`;
+}
+
+/**
+ * location 是否是**有效的表路径**：排除空串，以及只有 scheme 的残缺值（如 `hdfs://mycluster`）。
+ * 后者常见于「回填旧 JSON」——旧 path 退化时解析出的 location 只剩 scheme，若当成有效值
+ * 参与拼路径（会被剥掉 scheme），会再次生成丢表目录的 path（如 /pt=xxx）。
+ */
+export function isValidTableLocation(location?: string): boolean {
+  const loc = (location ?? '').trim();
+  if (!loc) {
+    return false;
+  }
+  const path = loc.replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/]+/, '');
+  return path.length > 1;
 }
 
 /**
@@ -190,8 +239,65 @@ export function buildParquetSchema(columns: { name: string; type?: string }[]): 
   return lines.join('\n');
 }
 
+/**
+ * Hive 类型 → DataX `hdfsreader.column[].type`。
+ *
+ * ⚠️ PoC 实测：反向读 HDFS 时 `column` **必须是 `{index, type}` 对象数组**——
+ * 纯字符串数组报 `HdfsReader-05`（[type] 必填），只给 `type` 不给 `index` 报
+ * `HdfsReader-06`（至少需要 index 或 value）。这与 `mysqlreader` 的
+ * `["col1","col2"]` 完全不同。
+ */
+export function mapToDataxType(hiveType?: string): string {
+  const t = (hiveType ?? '').trim().toLowerCase().replace(/\(.*\)/, '');
+  switch (t) {
+    case 'tinyint':
+    case 'smallint':
+    case 'int':
+    case 'integer':
+    case 'bigint':
+      return 'LONG';
+    case 'float':
+    case 'double':
+    case 'decimal':
+    case 'numeric':
+      return 'DOUBLE';
+    case 'boolean':
+      return 'BOOLEAN';
+    case 'date':
+    case 'timestamp':
+      return 'DATE';
+    case 'string':
+    case 'varchar':
+    case 'char':
+      return 'STRING';
+    default:
+      // 复杂类型（array/map/struct）与未知类型：按 STRING 声明，
+      // 需在上游（去重 SQL）CAST 成字符串，否则读取结果不可控。
+      return 'STRING';
+  }
+}
+
+/**
+ * 反向 reader 的 column：`[{index, type}]`。
+ * `index` 取**源表真实列位置**（hdfsreader 按文件列位置读取），
+ * 因此映射了部分列时，index 仍指向正确的列。
+ */
+export function buildHdfsReaderColumn(
+  sourceFields: DataXField[],
+  mappedFieldNames: string[]
+): { index: number; type: string }[] {
+  return mappedFieldNames.map((name) => {
+    const idx = sourceFields.findIndex((f) => f.name === name);
+    const field = idx >= 0 ? sourceFields[idx] : undefined;
+    return { index: idx >= 0 ? idx : 0, type: mapToDataxType(field?.type) };
+  });
+}
+
 export function buildDataXJson(config: DataXVisualConfig): string {
   const { source, target, mappings } = config;
+  /** 同步方向：缺省 mysql2hive（向后兼容既有 JSON） */
+  const direction: DataXDirection = config.direction ?? 'mysql2hive';
+  const isReverse = direction === 'hive2mysql';
 
   const readerColumn = mappings.map((m) => m.sourceField);
   const writerColumn = mappings.map((m) => {
@@ -199,24 +305,70 @@ export function buildDataXJson(config: DataXVisualConfig): string {
     return { name: m.targetField, type: targetField?.type ?? 'STRING' };
   });
   const fileType = config.fileType ?? 'orc';
+  /** 反向写入模式：默认 upsert（update），见计划 §4.3 */
+  const reverseWriteMode = config.writeMode ?? 'update';
+  /** 反向 reader.path：与正向 writer.path 对称，指向源（或去重）表的分区目录 */
+  const reverseReaderPath =
+    config.hdfsPath ||
+    (isValidTableLocation(source.location)
+      ? buildHdfsPath(
+          source.location as string,
+          config.defaultFS ?? '',
+          source.partitionColumn,
+          source.partitionExpression
+        )
+      : buildHdfsPath(
+          buildDefaultHdfsPath(source.schemaName ?? '', source.tableName ?? ''),
+          '',
+          source.partitionColumn,
+          source.partitionExpression
+        ));
+
+  // 生效的业务主键：只保留目标字段里仍存在的列（与阶段二向导口径一致，
+  // 避免 updateKey 指向不存在的列导致 MySQL 报 Unknown column 'xxx' in 'field list'）
+  const effectiveUpdateKey = (config.updateKey ?? []).filter((k) =>
+    (target.fields ?? []).some((f) => f.name === k)
+  );
 
   const json = {
     dinkyMeta: {
+      /**
+       * ⚠️ 方向与两侧字段必须写入 dinkyMeta：
+       * 反向的 `hdfsreader.column` 只有 `{index,type}`、**不含列名**，
+       * JSON → 可视化回填时只能靠这里还原列名与类型。
+       */
+      direction,
       source: {
         dataSourceId: source.dataSourceId,
         dataSourceName: source.dataSourceName,
         schemaName: source.schemaName,
-        tableName: source.tableName
+        tableName: source.tableName,
+        fields: source.fields ?? [],
+        location: source.location,
+        partitionColumns: source.partitionColumns ?? [],
+        partitionColumn: source.partitionColumn,
+        partitionExpression: source.partitionExpression
       },
       target: {
         dataSourceId: target.dataSourceId,
         dataSourceName: target.dataSourceName,
         schemaName: target.schemaName,
         tableName: target.tableName,
+        fields: target.fields ?? [],
         partitionColumns: target.partitionColumns ?? [],
-        partitionColumn: target.partitionColumn,
-        partitionExpression: target.partitionExpression
-      }
+        // 反向：目的地是 MySQL，无分区概念 —— 不把源端分区配置（pt / ${SYNC_TIME}）
+        // 残留进 target 元数据（否则回填时出现「无分区列却有 partitionColumn」的矛盾状态）
+        partitionColumn: isReverse ? undefined : target.partitionColumn,
+        partitionExpression: isReverse ? undefined : target.partitionExpression,
+        updateKey: effectiveUpdateKey,
+        writeMode: reverseWriteMode
+      },
+      /**
+       * 映射关系一并写入 dinkyMeta：回填时**原样恢复**。
+       * 否则回填只能靠"名字/位置"猜测 —— 源端分区列（值不在文件里、通常无对应目标列）
+       * 会被误配成多余映射，甚至导致列错位（实测踩过）。
+       */
+      mappings
     },
     job: {
       setting: {
@@ -226,22 +378,54 @@ export function buildDataXJson(config: DataXVisualConfig): string {
       },
       content: [
         {
-          reader: {
-            name: 'mysqlreader',
-            parameter: {
-              username: source.username ?? '',
-              password: source.password ?? '',
-              column: readerColumn,
-              ...(config.splitPk ? { splitPk: config.splitPk } : {}),
-              connection: [
-                {
-                  table: [source.tableName ?? ''],
-                  jdbcUrl: [buildJdbcUrl(source.jdbcUrl)]
+          reader: isReverse
+            ? {
+                name: 'hdfsreader',
+                parameter: {
+                  defaultFS: config.defaultFS ?? 'hdfs://mycluster',
+                  hadoopConfig: config.hadoopConfig ?? DEFAULT_HADOOP_CONFIG,
+                  path: reverseReaderPath,
+                  fileType,
+                  encoding: 'UTF-8',
+                  // 必须是 {index,type}：hdfsreader 不接受字符串数组（PoC 实测）
+                  column: buildHdfsReaderColumn(source.fields, readerColumn)
                 }
-              ]
-            }
-          },
-          writer: {
+              }
+            : {
+                name: 'mysqlreader',
+                parameter: {
+                  username: source.username ?? '',
+                  password: source.password ?? '',
+                  column: readerColumn,
+                  ...(config.splitPk ? { splitPk: config.splitPk } : {}),
+                  connection: [
+                    {
+                      table: [source.tableName ?? ''],
+                      jdbcUrl: [buildJdbcUrl(source.jdbcUrl)]
+                    }
+                  ]
+                }
+              },
+          writer: isReverse
+            ? {
+                name: 'mysqlwriter',
+                parameter: {
+                  // PoC 实测 insert/replace/update 均可用；默认 update（upsert：存在则更新、不存在则插入）
+                  writeMode: reverseWriteMode,
+                  ...(reverseWriteMode === 'update' ? { updateKey: effectiveUpdateKey } : {}),
+                  ...(config.session?.length ? { session: config.session } : {}),
+                  column: writerColumn.map((c) => c.name),
+                  connection: [
+                    {
+                      jdbcUrl: buildJdbcUrl(target.jdbcUrl),
+                      table: [target.tableName ?? '']
+                    }
+                  ],
+                  username: target.username ?? '',
+                  password: target.password ?? ''
+                }
+              }
+            : {
             name: 'hdfswriter',
             parameter: {
               defaultFS: config.defaultFS ?? 'hdfs://mycluster',
@@ -252,10 +436,10 @@ export function buildDataXJson(config: DataXVisualConfig): string {
                 ? { parquetSchema: buildParquetSchema(writerColumn) }
                 : {}),
               path:
-                config.hdfsPath ??
-                (target.location
+                config.hdfsPath ||
+                (isValidTableLocation(target.location)
                   ? buildHdfsPath(
-                      target.location,
+                      target.location as string,
                       config.defaultFS ?? '',
                       target.partitionColumn,
                       target.partitionExpression
@@ -281,8 +465,88 @@ export function buildDataXJson(config: DataXVisualConfig): string {
 }
 
 /**
+ * 反向（hive2mysql）JSON → 可视化配置。
+ *
+ * reader=`hdfsreader`（Hive 源）、writer=`mysqlwriter`（MySQL 目标）。
+ * ⚠️ `hdfsreader.column` 只有 `{index,type}`、**不含列名**，所以列名/类型
+ * 只能从 `dinkyMeta.{source,target}.fields` 还原；手写 JSON（无 dinkyMeta）
+ * 时退化为按 index 生成占位列名，用户需在界面上重新选择源表。
+ */
+function parseReverseDataXJson(obj: any, readerParam: any, writerParam: any): DataXVisualConfig {
+  const metaSource = obj?.dinkyMeta?.source;
+  const metaTarget = obj?.dinkyMeta?.target;
+
+  const readerCols: any[] = readerParam.column ?? [];
+  const writerCols: any[] = writerParam.column ?? [];
+  const writerNames: string[] = writerCols.map((c) => (typeof c === 'string' ? c : (c?.name ?? '')));
+
+  const metaSourceFields: DataXField[] = metaSource?.fields ?? [];
+  const metaTargetFields: DataXField[] = metaTarget?.fields ?? [];
+
+  const sourceFields: DataXField[] = metaSourceFields.length
+    ? metaSourceFields
+    : readerCols.map((c, i) => ({ name: `col_${c?.index ?? i}`, type: '' }));
+
+  const targetFields: DataXField[] = writerNames.map((n) => {
+    const f = metaTargetFields.find((x) => x.name === n);
+    return { name: n, type: f?.type ?? 'STRING' };
+  });
+
+  // 不按旧 JSON 的 writer 列数截断源字段：源表加列后（如新增 stat_date），
+  // 截断会让新增列在「重新生成」时丢失。
+  // 优先使用生成时写入的映射（尊重用户手工连线，且不受分区列影响）；
+  // 旧 JSON 无该字段时退化为按【同名字段】配对（不再按位置猜测，避免错列）。
+  const metaMappings: DataXMapping[] = obj?.dinkyMeta?.mappings ?? [];
+  const partitionNames: string[] = (metaSource?.partitionColumns ?? []).map((p: DataXField) => p.name);
+  const mappings: DataXMapping[] =
+    metaMappings.length > 0 ? metaMappings : buildDefaultMappings(sourceFields, targetFields, partitionNames);
+
+  const hdfsPath: string = readerParam.path ?? '';
+  const defaultFS: string = readerParam.defaultFS ?? '';
+  const pathInfo = parseHdfsPathInfo(hdfsPath, defaultFS);
+  const connection = writerParam.connection?.[0] ?? {};
+
+  return {
+    direction: 'hive2mysql',
+    source: {
+      dataSourceId: metaSource?.dataSourceId,
+      dataSourceName: metaSource?.dataSourceName,
+      schemaName: metaSource?.schemaName || extractSchemaFromHdfsPath(hdfsPath),
+      tableName: metaSource?.tableName || extractTableFromHdfsPath(hdfsPath),
+      fields: sourceFields,
+      location: metaSource?.location || pathInfo.location,
+      partitionColumns: metaSource?.partitionColumns ?? [],
+      partitionColumn: pathInfo.partitionColumn || metaSource?.partitionColumn,
+      partitionExpression: pathInfo.partitionExpression || metaSource?.partitionExpression
+    },
+    target: {
+      dataSourceId: metaTarget?.dataSourceId,
+      dataSourceName: metaTarget?.dataSourceName,
+      schemaName: metaTarget?.schemaName || extractSchemaFromJdbcUrl(connection.jdbcUrl ?? ''),
+      tableName: metaTarget?.tableName || connection.table?.[0] || '',
+      fields: targetFields,
+      jdbcUrl: connection.jdbcUrl ?? '',
+      username: writerParam.username ?? '',
+      password: writerParam.password ?? ''
+    },
+    mappings,
+    fileType: readerParam.fileType ?? 'orc',
+    writeMode: writerParam.writeMode ?? 'update',
+    updateKey: writerParam.updateKey ?? metaTarget?.updateKey ?? [],
+    session: writerParam.session,
+    defaultFS,
+    // ⚠️ 不要把回填的 path 写回 config.hdfsPath：生成时它的优先级最高，会把旧 path
+    // 原样带出（旧 path 一旦退化就会一直退化下去），location / 分区字段 / 分区表达式
+    // 已从 path 解析出来，重新生成时可正确重建路径。
+    hdfsPath: undefined,
+    hadoopConfig: readerParam.hadoopConfig,
+    channel: obj?.job?.setting?.speed?.channel
+  };
+}
+
+/**
  * 从 datax json 字符串还原可视化配置（json → 可视化切换）。
- * 解析失败返回 null。
+ * 解析失败返回 null。正/反向按 reader/writer 名或 dinkyMeta.direction 自动判定。
  */
 export function parseDataXJson(jsonStr: string): DataXVisualConfig | null {
   if (!jsonStr) {
@@ -297,13 +561,27 @@ export function parseDataXJson(jsonStr: string): DataXVisualConfig | null {
       return null;
     }
 
+    // 方向判定：优先 dinkyMeta（可视化生成时写入），否则按 reader/writer 名推断
+    const readerName: string = content?.reader?.name ?? '';
+    const writerName: string = content?.writer?.name ?? '';
+    const direction: DataXDirection =
+      obj?.dinkyMeta?.direction ??
+      (readerName === 'hdfsreader' || writerName === 'mysqlwriter' ? 'hive2mysql' : 'mysql2hive');
+    if (direction === 'hive2mysql') {
+      return parseReverseDataXJson(obj, readerParam, writerParam);
+    }
+
     const sourceColumns: string[] = readerParam.column ?? [];
     const targetColumns: { name: string; type: string }[] = writerParam.column ?? [];
 
-    const mappings: DataXMapping[] = sourceColumns.map((sourceField, index) => ({
-      sourceField,
-      targetField: targetColumns[index]?.name ?? sourceField
-    }));
+    const metaMappings: DataXMapping[] = obj?.dinkyMeta?.mappings ?? [];
+    const mappings: DataXMapping[] =
+      metaMappings.length > 0
+        ? metaMappings
+        : sourceColumns.map((sourceField, index) => ({
+            sourceField,
+            targetField: targetColumns[index]?.name ?? sourceField
+          }));
 
     const tableName = readerParam.connection?.[0]?.table?.[0] ?? '';
     const jdbcUrl = readerParam.connection?.[0]?.jdbcUrl?.[0] ?? '';
@@ -318,6 +596,7 @@ export function parseDataXJson(jsonStr: string): DataXVisualConfig | null {
     const pathPartitionColumn: string = pathInfo.partitionColumn ?? '';
 
     return {
+      direction,
       source: {
         dataSourceId: metaSource?.dataSourceId,
         dataSourceName: metaSource?.dataSourceName,
@@ -353,7 +632,8 @@ export function parseDataXJson(jsonStr: string): DataXVisualConfig | null {
       writeMode: writerParam.writeMode,
       fieldDelimiter: writerParam.fieldDelimiter,
       defaultFS: writerParam.defaultFS,
-      hdfsPath,
+      // 同上：不把回填的旧 path 当成「用户自定义路径」，避免生成时短路路径推导
+      hdfsPath: undefined,
       hadoopConfig: writerParam.hadoopConfig,
       channel: obj?.job?.setting?.speed?.channel
     };
@@ -405,6 +685,9 @@ export function parseHdfsPathInfo(
     partitionColumn = match[2];
     partitionExpression = match[3];
   }
-  const fullLocation = defaultFS ? `${defaultFS}${location}` : location;
+  // location 为空（path 只剩分区段）时不要拼 defaultFS；location 已带 scheme 时也不要重复拼，
+  // 否则会得到 "hdfs://xxx" 甚至 "hdfs://xxxhdfs://xxx/..."，回填后永久污染配置。
+  const hasScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(location);
+  const fullLocation = !location ? '' : hasScheme || !defaultFS ? location : `${defaultFS}${location}`;
   return { location: fullLocation, partitionColumn, partitionExpression };
 }

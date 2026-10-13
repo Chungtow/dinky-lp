@@ -80,10 +80,21 @@ public class HiveDriver extends AbstractJdbcDriver implements Driver {
     public HiveTableDetail getTableDetail(String schemaName, String tableName) {
         HiveTableDetail detail = new HiveTableDetail();
         String ddl = getCreateTableDdl(schemaName, tableName);
+        // 列清单保留全部列（含分区列）：ADS 层导 MySQL 时，分区列常作为日期字段使用。
+        // `describe` 输出中夹带的分区信息分隔行（'#' 开头）已由 listColumns 跳过。
         detail.setLocation(parseLocation(ddl));
         detail.setFileType(parseFileType(ddl));
         detail.setTableType(parseTableType(ddl));
-        detail.setPartitionColumns(parsePartitionColumns(ddl));
+        List<Column> partitionColumns = parsePartitionColumns(ddl);
+        if (partitionColumns.isEmpty()) {
+            // 兜底：`show create table` 的 DDL 未包含（或未能解析出）PARTITIONED BY 时，
+            // 改从 `describe` 输出的分区信息段解析。
+            // 实测：不同 HiveServer2 / Spark ThriftServer 的 DDL 输出格式存在差异，
+            // 会导致分区列丢失 —— 表现为向导里 source.partitionColumns 为空、
+            // reader.path 丢掉分区段（生成 .../ads_traccar_stat 而非 .../pt=${SYNC_TIME}）。
+            partitionColumns = parsePartitionColumnsFromDescribe(schemaName, tableName);
+        }
+        detail.setPartitionColumns(partitionColumns);
         detail.setColumns(listColumns(schemaName, tableName));
         return detail;
     }
@@ -114,6 +125,13 @@ public class HiveDriver extends AbstractJdbcDriver implements Driver {
         return matcher.find() ? matcher.group(1) : "";
     }
 
+    /**
+     * 推断文件格式：orc / parquet / text。
+     *
+     * Hive 的 `show create table` 会展开为 `STORED AS INPUTFORMAT '...OrcInputFormat' OUTPUTFORMAT ...`；
+     * 而 Spark（如 STS 数据源）输出的是 `USING orc` / `USING parquet`，或 `STORED AS ORC` 形式。
+     * 只认 INPUTFORMAT 会让 Spark 表错误地落到默认值 text（实测踩过），故多种写法都兼容。
+     */
     private String parseFileType(String ddl) {
         Matcher matcher =
                 Pattern.compile("INPUTFORMAT\\s*'([^']+)'", Pattern.DOTALL).matcher(ddl);
@@ -129,11 +147,106 @@ public class HiveDriver extends AbstractJdbcDriver implements Driver {
                 return "text";
             }
         }
+        // Spark 风格：`USING orc` / `USING parquet` / `USING text`
+        Matcher usingMatcher = Pattern.compile("USING\\s+([a-zA-Z]+)", Pattern.CASE_INSENSITIVE)
+                .matcher(ddl);
+        if (usingMatcher.find()) {
+            String using = usingMatcher.group(1).toLowerCase();
+            if (using.contains("orc")) {
+                return "orc";
+            }
+            if (using.contains("parquet")) {
+                return "parquet";
+            }
+            if (using.contains("text") || using.contains("csv")) {
+                return "text";
+            }
+        }
+        // Hive 风格：`STORED AS ORC` / `STORED AS PARQUET` / `STORED AS TEXTFILE`
+        Matcher storedAsMatcher = Pattern.compile("STORED\\s+AS\\s+([a-zA-Z]+)", Pattern.CASE_INSENSITIVE)
+                .matcher(ddl);
+        if (storedAsMatcher.find()) {
+            String storedAs = storedAsMatcher.group(1).toLowerCase();
+            if (storedAs.contains("orc")) {
+                return "orc";
+            }
+            if (storedAs.contains("parquet")) {
+                return "parquet";
+            }
+            if (storedAs.contains("text") || storedAs.contains("csv")) {
+                return "text";
+            }
+        }
+        // 兜底：整段 DDL 中出现关键字（覆盖 tblproperties 等场景）
+        String lowerDdl = ddl.toLowerCase();
+        if (lowerDdl.contains("orc")) {
+            return "orc";
+        }
+        if (lowerDdl.contains("parquet")) {
+            return "parquet";
+        }
         return "text";
     }
 
     private String parseTableType(String ddl) {
         return ddl.trim().toUpperCase().startsWith("CREATE EXTERNAL TABLE") ? "EXTERNAL_TABLE" : "MANAGED_TABLE";
+    }
+
+    /**
+     * 从 {@code describe} 结果中解析分区列（回退方案）。
+     *
+     * <p>Hive/Spark 的 {@code describe} 在普通列之后输出分区信息段：
+     *
+     * <pre>
+     *   col_name      data_type   comment
+     *   user_id       bigint
+     *   ...
+     *   # Partition Information
+     *   # col_name    data_type   comment
+     *   pt            string                  &lt;-- 分区列
+     * </pre>
+     *
+     * <p>当 {@code show create table} 的 DDL 中没有可解析的 PARTITIONED BY
+     * （不同 HiveServer2 / Spark ThriftServer 输出格式有差异）时用它兜底，避免分区列丢失。
+     */
+    private List<Column> parsePartitionColumnsFromDescribe(String schemaName, String tableName) {
+        List<Column> columns = new ArrayList<>();
+        IDBQuery dbQuery = getDBQuery();
+        String sql = String.format("describe `%s`.`%s`", schemaName, tableName);
+        try (PreparedStatement preparedStatement = conn.get().prepareStatement(sql);
+                ResultSet results = preparedStatement.executeQuery()) {
+            boolean inPartitionSection = false;
+            List<String> seen = new ArrayList<>();
+            while (results.next()) {
+                String colName = results.getString(dbQuery.columnName());
+                if (colName == null) {
+                    continue;
+                }
+                String trimmed = colName.trim();
+                if (trimmed.startsWith("#")) {
+                    // '# Partition Information' 之后进入分区段（随后的 '# col_name ...' 仍在段内）
+                    inPartitionSection = trimmed.toLowerCase().contains("partition");
+                    continue;
+                }
+                if (!inPartitionSection || trimmed.isEmpty() || seen.contains(trimmed.toLowerCase())) {
+                    continue;
+                }
+                seen.add(trimmed.toLowerCase());
+                Column column = new Column();
+                column.setName(trimmed);
+                String type = results.getString(dbQuery.columnType());
+                column.setType(StringUtils.isEmpty(type) ? "string" : type.trim());
+                column.setJavaType(getTypeConvert().convert(column));
+                columns.add(column);
+            }
+        } catch (Exception e) {
+            log.error(
+                    "HiveDriver.parsePartitionColumnsFromDescribe failed, schema={}, table={}",
+                    schemaName,
+                    tableName,
+                    e);
+        }
+        return columns;
     }
 
     private List<Column> parsePartitionColumns(String ddl) {
@@ -324,14 +437,38 @@ public class HiveDriver extends AbstractJdbcDriver implements Driver {
                 columnList.add(metaData.getColumnLabel(i));
             }
             Integer positionId = 1;
+            List<String> seenColumnNames = new ArrayList<>();
             while (results.next()) {
+                String currentColumnName = results.getString(dbQuery.columnName());
+                if (currentColumnName == null) {
+                    continue;
+                }
+                String trimmedName = currentColumnName.trim();
+                // 同名列只保留一次：Spark 的 `describe` 会把分区列先列在普通列区域、
+                // 又在分区段之后列一次，不去重会在字段列表里出现重复项（如 pt 出现两次）。
+                if (seenColumnNames.contains(trimmedName.toLowerCase())) {
+                    continue;
+                }
+                seenColumnNames.add(trimmedName.toLowerCase());
+                // Hive/Spark 的 `describe` 结果里夹着分区信息分隔行与空行，形如：
+                //   col_name      data_type
+                //   user_id       bigint
+                //   ...
+                //   # Partition Information
+                //   # col_name    data_type    comment
+                //   pt            string              <-- 分区列，必须保留
+                // '#' 开头的分隔行与空行不是列，跳过（**continue 而非 break**：Hive 输出中
+                // 分区列位于分区段之后，break 会把分区列丢掉）；其余行全部保留，含分区列
+                // —— ADS 层导 MySQL 时分区列常作为日期字段使用。
+                if (trimmedName.isEmpty() || trimmedName.startsWith("#")) {
+                    continue;
+                }
                 Column field = new Column();
-                if (StringUtils.isEmpty(results.getString(dbQuery.columnName()))) {
+                if (StringUtils.isEmpty(currentColumnName)) {
                     break;
                 } else {
                     if (columnList.contains(dbQuery.columnName())) {
-                        String columnName = results.getString(dbQuery.columnName());
-                        field.setName(columnName);
+                        field.setName(currentColumnName);
                     }
                     if (columnList.contains(dbQuery.columnType())) {
                         field.setType(results.getString(dbQuery.columnType()));

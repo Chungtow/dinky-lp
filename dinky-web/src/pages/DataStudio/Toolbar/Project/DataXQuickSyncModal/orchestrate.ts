@@ -21,7 +21,12 @@ import { showDataSourceTable } from '@/pages/DataStudio/Toolbar/DataSource/servi
 import { addOrUpdateData, getData, postAll, removeById } from '@/services/api';
 import { API_CONSTANTS } from '@/services/endpoints';
 import { DataSources } from '@/types/RegCenter/data';
-import { QUICK_SYNC_PREFIX, QuickSyncParam } from './constants';
+import {
+  buildQuickSyncSteps,
+  DestinationProfile,
+  QUICK_SYNC_PREFIX,
+  QuickSyncParam
+} from './constants';
 
 export type StepStatus = 'pending' | 'running' | 'success' | 'error' | 'skipped';
 
@@ -74,6 +79,8 @@ export interface QuickSyncResult {
 }
 
 export interface QuickSyncRunInput {
+  /** 目的地画像（决定生成哪些作业，计划 §4.8） */
+  profile: DestinationProfile;
   /** 右键所在目录 id */
   parentId: number;
   /** 子目录名（默认目标表名，D1） */
@@ -268,7 +275,10 @@ export const fetchHadoopConfig = async (): Promise<HadoopConfigResp | undefined>
  * 任一步失败：已创建对象逆序补偿删除；补偿失败的对象进入 residual 由用户手工处理。
  */
 export const runQuickSync = async (input: QuickSyncRunInput): Promise<QuickSyncResult> => {
-  const steps: StepState[] = QUICK_SYNC_STEPS.map((s) => ({ ...s, status: 'pending' as StepStatus }));
+  const steps: StepState[] = buildQuickSyncSteps(input.profile).map((s) => ({
+    ...s,
+    status: 'pending' as StepStatus
+  }));
   const created: QuickSyncCreatedItem[] = [];
   const residual: { label: string; id?: number }[] = [];
   const skipped: string[] = [];
@@ -341,16 +351,17 @@ export const runQuickSync = async (input: QuickSyncRunInput): Promise<QuickSyncR
       skipped.push('执行建表');
     }
 
-    // Step 5 前置：建表后重取目标表详情，拿到真实 location / fileType / 分区列
-    const detail = await fetchTableDetail(
-      input.targetDataSourceId!,
-      input.targetSchemaName,
-      input.targetTableName
-    );
+    // Step 5 前置：Hive 目的地才需要重取表详情（location / fileType / 分区列）；
+    // MySQL 目的地不支持 getTableDetail，且反向同步不需要这些信息。
+    const detail = input.profile.kind === 'hive'
+      ? await fetchTableDetail(input.targetDataSourceId!, input.targetSchemaName, input.targetTableName)
+      : undefined;
 
     // Step 5: 加分区作业（先建出分区目录；目标表无分区列时不创建）
     // ⚠️ 必须排在 sync_data 之前：DataX hdfswriter 要求 writer path（含 pt=xxx）事先存在
-    const hasPartition = (detail?.partitionColumns?.length ?? 0) > 0 || input.hasPartition;
+    const hasPartition =
+      input.profile.requiresPreCreatedPath &&
+      ((detail?.partitionColumns?.length ?? 0) > 0 || input.hasPartition);
     if (hasPartition) {
       patch('partitionJob', 'running');
       const partitionJob = await createTaskUnderFolder({
@@ -373,8 +384,9 @@ export const runQuickSync = async (input: QuickSyncRunInput): Promise<QuickSyncR
       });
       patch('partitionJob', 'success', `作业 id ${partitionJob.taskId}`);
     } else {
-      patch('partitionJob', 'skipped', '目标表无分区字段');
-      skipped.push('加分区作业（目标表无分区字段）');
+      const reason = input.profile.requiresPreCreatedPath ? '目标表无分区字段' : '目的地无需预建分区目录';
+      patch('partitionJob', 'skipped', reason);
+      skipped.push(`加分区作业（${reason}）`);
     }
 
     // Step 6: DataX 同步作业（此时分区目录已存在）
@@ -400,7 +412,7 @@ export const runQuickSync = async (input: QuickSyncRunInput): Promise<QuickSyncR
     patch('syncJob', 'success', `作业 id ${syncJob.taskId}`);
 
     // Step 7: 统计刷新作业（必须在数据写入之后；无分区时不创建）
-    if (hasPartition) {
+    if (input.profile.requiresStatsRefresh && hasPartition) {
       patch('analyzeJob', 'running');
       const analyzeJob = await createTaskUnderFolder({
         id: input.overwriteIds?.analyzeTable,
@@ -422,8 +434,9 @@ export const runQuickSync = async (input: QuickSyncRunInput): Promise<QuickSyncR
       });
       patch('analyzeJob', 'success', `作业 id ${analyzeJob.taskId}`);
     } else {
-      patch('analyzeJob', 'skipped', '目标表无分区字段');
-      skipped.push('统计刷新作业（目标表无分区字段）');
+      const reason = input.profile.requiresStatsRefresh ? '目标表无分区字段' : '目的地无需刷新统计';
+      patch('analyzeJob', 'skipped', reason);
+      skipped.push(`统计刷新作业（${reason}）`);
     }
 
     return {

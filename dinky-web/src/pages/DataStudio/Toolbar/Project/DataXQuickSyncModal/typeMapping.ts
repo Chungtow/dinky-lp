@@ -89,3 +89,80 @@ export function mapToHiveType(mysqlType?: string, opts: HiveTypeOptions = {}): s
   // char / varchar / text / json / enum / set 以及其它未知类型
   return 'STRING';
 }
+
+/* --------------------- 反向同步：Hive → MySQL（阶段一/二共用） --------------------- */
+
+export interface MysqlTypeOptions {
+  /** string/varchar 映射的目标长度（默认 255）；≤0 或 >4000 时用 TEXT */
+  stringLength?: number;
+  /** 复杂类型（array/map/struct）映射为 JSON（默认）还是 TEXT */
+  complexAsJson?: boolean;
+}
+
+/**
+ * Hive 类型 → MySQL 列类型（反向同步的建表 DDL 用）。
+ *
+ * ⚠️ 与 {@link mapToHiveType} 方向相反，且**不需要**像正向那样把 decimal/binary 降级
+ * ——MySQL 类型体系更全，相反要注意的是「字符串静默截断」与「复杂类型不可读」
+ * （复杂类型按 JSON 声明，若 `hdfsreader` 读不出来则需在去重 SQL 阶段 CAST 成字符串）。
+ */
+export function mapToMysqlType(hiveType?: string, opts: MysqlTypeOptions = {}): string {
+  const raw = (hiveType ?? '').trim().toLowerCase();
+  const base = raw.replace(/\(.*\)/, '').trim();
+  const len = opts.stringLength ?? 255;
+
+  switch (base) {
+    case 'tinyint':
+      return 'TINYINT';
+    case 'smallint':
+      return 'SMALLINT';
+    case 'int':
+    case 'integer':
+      return 'INT';
+    case 'bigint':
+      return 'BIGINT';
+    case 'float':
+      return 'FLOAT';
+    case 'double':
+      return 'DOUBLE';
+    case 'decimal':
+    case 'numeric': {
+      const m = raw.match(/\((\d+)\s*,\s*(\d+)\)/);
+      return m ? `DECIMAL(${m[1]},${m[2]})` : 'DECIMAL(20,6)';
+    }
+    case 'boolean':
+      return 'TINYINT(1)';
+    case 'date':
+      return 'DATE';
+    case 'timestamp':
+      return 'DATETIME';
+    case 'binary':
+      return 'VARBINARY(255)';
+    // 以下为「已经是 MySQL 类型」的情形（如回填旧 JSON 时带来的类型），
+    // 必须原样返回 —— 否则二次映射会退化成 VARCHAR(255)：
+    // 例：timestamp 首次映射得到 DATETIME，若再映射一次就变成 VARCHAR(255)。
+    case 'datetime':
+      return 'DATETIME';
+    case 'time':
+      return 'TIME';
+    case 'text':
+      return 'TEXT';
+    case 'json':
+      return 'JSON';
+    case 'varbinary':
+      return 'VARBINARY(255)';
+    case 'string':
+    case 'varchar':
+    case 'char': {
+      const m = raw.match(/\((\d+)\)/);
+      const size = m ? Number(m[1]) : len;
+      return size > 0 && size <= 4000 ? `VARCHAR(${size})` : 'TEXT';
+    }
+    case 'array':
+    case 'map':
+    case 'struct':
+      return opts.complexAsJson === false ? 'TEXT' : 'JSON';
+    default:
+      return len > 0 && len <= 4000 ? `VARCHAR(${len})` : 'TEXT';
+  }
+}

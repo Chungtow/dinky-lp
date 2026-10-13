@@ -292,16 +292,24 @@ public class SchedulerServiceImpl implements SchedulerService {
         sb.append("        text = text.replace('${' + name + '}', value)\n");
         sb.append("    config = json.loads(text)\n");
         sb.append("    content = config['job']['content'][0]\n");
-        sb.append("    writer_params = content['writer']['parameter']\n");
-        sb.append("    hdfs_path = writer_params['path']\n");
-        sb.append("    last_seg = hdfs_path.rstrip('/').rsplit('/', 1)[-1]\n");
-        sb.append("    table_dir = hdfs_path.rsplit('/', 1)[0] if '=' in last_seg else hdfs_path\n");
-        sb.append("    hadoop_home = os.environ.get('HADOOP_HOME', '/opt/bigdata/hadoop/latest')\n");
-        sb.append("    hdfs = os.path.join(hadoop_home, 'bin', 'hdfs')\n");
-        sb.append("    subprocess.run([hdfs, 'dfs', '-mkdir', '-p', table_dir], check=True)\n");
-        sb.append("    subprocess.run([hdfs, 'dfs', '-chown', 'hadoop-user:hadoop-user', table_dir], check=True)\n");
-        sb.append("    subprocess.run([hdfs, 'dfs', '-mkdir', '-p', hdfs_path], check=True)\n");
-        sb.append("    subprocess.run([hdfs, 'dfs', '-chown', 'hadoop-user:hadoop-user', hdfs_path], check=True)\n");
+        // 仅正向（MySQL→Hive）需要预建 HDFS 分区目录：
+        // DataX 的 HdfsWriter$Job.prepare 要求 writer path 事先存在且不会自建（否则 HdfsWriter-02）；
+        // 反向（Hive/Spark→MySQL）的 writer 是 mysqlwriter，**没有 path 字段**（path 在 reader 上），
+        // 也无需建目录；若不判断而直接取 writer.parameter['path']，会抛 KeyError 导致作业失败。
+        sb.append("    writer_name = content['writer']['name']\n");
+        sb.append("    if writer_name == 'hdfswriter':\n");
+        sb.append("        writer_params = content['writer']['parameter']\n");
+        sb.append("        hdfs_path = writer_params['path']\n");
+        sb.append("        last_seg = hdfs_path.rstrip('/').rsplit('/', 1)[-1]\n");
+        sb.append("        table_dir = hdfs_path.rsplit('/', 1)[0] if '=' in last_seg else hdfs_path\n");
+        sb.append("        hadoop_home = os.environ.get('HADOOP_HOME', '/opt/bigdata/hadoop/latest')\n");
+        sb.append("        hdfs = os.path.join(hadoop_home, 'bin', 'hdfs')\n");
+        sb.append("        subprocess.run([hdfs, 'dfs', '-mkdir', '-p', table_dir], check=True)\n");
+        sb.append(
+                "        subprocess.run([hdfs, 'dfs', '-chown', 'hadoop-user:hadoop-user', table_dir], check=True)\n");
+        sb.append("        subprocess.run([hdfs, 'dfs', '-mkdir', '-p', hdfs_path], check=True)\n");
+        sb.append(
+                "        subprocess.run([hdfs, 'dfs', '-chown', 'hadoop-user:hadoop-user', hdfs_path], check=True)\n");
         sb.append("    temp_file = '/tmp/datax_' + str(int(time.time())) + '.json'\n");
         sb.append("    with open(temp_file, 'w') as f:\n");
         sb.append("        json.dump(config, f, indent=2)\n");

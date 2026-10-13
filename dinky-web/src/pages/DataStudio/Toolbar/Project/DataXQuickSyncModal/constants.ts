@@ -108,6 +108,9 @@ export const SUPPORTED_SOURCE_TYPE = 'mysql';
 /**
  * 目标作业方言推导（D7）：默认 Hive，按目标数据源 type 推导。
  * 不支持的类型返回 undefined，由调用方禁用提交并提示。
+ *
+ * ⚠️ MySQL 的方言字符串是 `Mysql`（`Dialect.MYSQL("Mysql")`，注意大小写），
+ * 反向同步（Hive/Spark → MySQL）时用它给建表作业定型。
  */
 export function dialectFromDataSourceType(type?: string): string | undefined {
   switch ((type ?? '').trim().toLowerCase()) {
@@ -115,6 +118,8 @@ export function dialectFromDataSourceType(type?: string): string | undefined {
       return 'Hive';
     case 'spark':
       return 'SparkSql';
+    case 'mysql':
+      return 'Mysql';
     default:
       return undefined;
   }
@@ -123,3 +128,152 @@ export function dialectFromDataSourceType(type?: string): string | undefined {
 export const DEFAULT_CHANNEL = 3;
 export const DEFAULT_WRITE_MODE = 'truncate';
 export const DEFAULT_FIELD_DELIMITER = '\t';
+
+/* ------------------------- 反向同步（阶段一）新增 ------------------------- */
+
+/** 同步方向 */
+export const DIRECTION_OPTIONS = [
+  { label: 'MySQL → Hive/Spark', value: 'mysql2hive' },
+  { label: 'Hive/Spark → MySQL', value: 'hive2mysql' }
+];
+
+/**
+ * 反向写入模式。
+ * ⚠️ PoC 实测（本集群 DATAX-OPENSOURCE-3.0）：三种模式都可用，且 `update`
+ * 语义为 **upsert**（`INSERT ... ON DUPLICATE KEY UPDATE`，存在则更新、不存在则插入），
+ * 需配 `updateKey`（目标表主键/唯一索引列）。
+ */
+export const DEFAULT_REVERSE_WRITE_MODE = 'update';
+export const REVERSE_WRITE_MODE_OPTIONS = [
+  { label: 'update（upsert：存在则更新，不存在则插入）', value: 'update' },
+  { label: 'replace（REPLACE INTO，DELETE+INSERT）', value: 'replace' },
+  { label: 'insert（仅插入，需先清空目标分区）', value: 'insert' }
+];
+
+/* ================= 阶段二：目的地画像 + 步骤种类 + 目标表名前缀 ================= */
+
+/** 作业步骤种类（节点命名 = `${kind}_${表名}`，见 QUICK_SYNC_PREFIX） */
+export type StepKind =
+  | 'create_table'
+  | 'ensure_partition'
+  | 'sync_data'
+  | 'analyze_stats'
+  | 'dedup'
+  | 'verify';
+
+/**
+ * 目的地画像：决定「要生成哪些作业」。
+ * 把这些能力抽成数据，未来接入 Doris / Kafka / ES 时只需新增一份画像 + 增量 StepKind，
+ * 不必改编排主流程（计划 §4.8）。
+ */
+export interface DestinationProfile {
+  kind: 'hive' | 'mysql';
+  label: string;
+  /** 是否需要生成建表作业 */
+  needsCreateTable: boolean;
+  /**
+   * 是否要求「数据目录预先存在」。
+   * Hive 的 DataX HdfsWriter **不会自建目录**，缺失即报 HdfsWriter-02，
+   * 因此分区表必须先建出 pt=xxx 目录（= 加分区作业）。MySQL 无此约束。
+   */
+  requiresPreCreatedPath: boolean;
+  /**
+   * 写入后是否需要刷新统计。
+   * Hive 不刷 ANALYZE 时，HS2 默认 `hive.compute.query.using.stats=true`，
+   * 下游 `count(*)` 会直接读统计返回 0（实测踩过）。MySQL 无此约束。
+   */
+  requiresStatsRefresh: boolean;
+  /** 是否支持 upsert（需业务主键 / updateKey） */
+  supportsUpsert: boolean;
+}
+
+export const HIVE_PROFILE: DestinationProfile = {
+  kind: 'hive',
+  label: 'Hive/Spark',
+  needsCreateTable: true,
+  requiresPreCreatedPath: true,
+  requiresStatsRefresh: true,
+  supportsUpsert: false
+};
+
+export const MYSQL_PROFILE: DestinationProfile = {
+  kind: 'mysql',
+  label: 'MySQL',
+  needsCreateTable: true,
+  requiresPreCreatedPath: false,
+  requiresStatsRefresh: false,
+  supportsUpsert: true
+};
+
+/**
+ * 目的地数据源类型 → 画像。
+ * `isPartitioned=false` 时 Hive 不需要预建分区目录（非分区表无 add_partition 步骤）。
+ * 不支持的类型返回 undefined，由调用方禁用提交并提示。
+ */
+export function profileFromDestinationType(
+  type?: string,
+  isPartitioned = true
+): DestinationProfile | undefined {
+  switch ((type ?? '').trim().toLowerCase()) {
+    case 'hive':
+    case 'spark':
+      return { ...HIVE_PROFILE, requiresPreCreatedPath: isPartitioned };
+    case 'mysql':
+      return MYSQL_PROFILE;
+    default:
+      return undefined;
+  }
+}
+
+/** 源侧数据源类型是否可作为「反向」的源（Hive/Spark） */
+export function isHiveLikeType(type?: string): boolean {
+  const t = (type ?? '').trim().toLowerCase();
+  return t === 'hive' || t === 'spark';
+}
+
+/**
+ * 目标表名自动前缀（计划 §3.7，2026-10-12 需求确认）。
+ *
+ * 规则：取右键所在**目录名** → 转小写 → 移除非 `[a-z0-9_]` 字符 → 取**前 3 位** → 为空则回退 `ods`。
+ * 例：`ODS` → `ods`；`ODS_LAYER` → `ods`；`数仓ODS` →（去中文后 `ods`）→ `ods`；`APP` → `app`。
+ *
+ * ⚠️ 该函数必须**静默**（不弹提示）：必要时由 UI 用「问号图标 + Tooltip」说明来源。
+ */
+export function buildTableNamePrefix(catalogueName?: string): string {
+  const cleaned = (catalogueName ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, '');
+  const prefix = cleaned.slice(0, 3);
+  return prefix || 'ods';
+}
+
+/** 目标表名默认值：`<目录名小写前3位>_<源库>_<源表>` */
+export function buildDefaultTargetTableName(
+  catalogueName: string | undefined,
+  sourceSchema?: string,
+  sourceTable?: string
+): string {
+  return `${buildTableNamePrefix(catalogueName)}_${sourceSchema ?? ''}_${sourceTable ?? ''}`;
+}
+
+/**
+ * 按「目的地画像」生成步骤清单（计划 §4.8）。
+ *
+ * - Hive/Spark 目的地：与既有 6 项**完全一致**（子目录 → 建表 → 执行建表 → 加分区 → 同步 → 统计）；
+ * - MySQL 目的地：无「分区目录预建」「统计刷新」需求，只保留
+ *   子目录 → 建表 → 执行建表 → 同步。
+ */
+export const buildQuickSyncSteps = (
+  profile: DestinationProfile
+): { key: string; label: string }[] => [
+  { key: 'subFolder', label: '创建 / 复用子目录' },
+  { key: 'createTableJob', label: '创建建表作业' },
+  { key: 'execCreateTable', label: '执行建表' },
+  ...(profile.requiresPreCreatedPath
+    ? [{ key: 'partitionJob', label: '创建加分区作业（建出分区目录）' }]
+    : []),
+  { key: 'syncJob', label: '创建同步作业（DataX）' },
+  ...(profile.requiresStatsRefresh
+    ? [{ key: 'analyzeJob', label: '创建统计作业（ANALYZE）' }]
+    : [])
+];
