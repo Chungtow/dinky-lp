@@ -392,7 +392,18 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
               dataSourceName: ds?.name,
               jdbcUrl: ds?.connectConfig?.url,
               username: ds?.connectConfig?.username,
-              password: ds?.connectConfig?.password
+              password: ds?.connectConfig?.password,
+              // ⚠️ 换了数据源，库/表/字段/分区信息都可能不再适用，必须清空后重选。
+              // 否则会沿用上一个数据源留下的残留 —— 实测踩过：把源数据源换到 STS 后，
+              // 仍带着旧表的空 partitionColumns，生成的 reader.path 直接丢掉分区段
+              // （.../ads_traccar_stat 而非 .../ads_traccar_stat/pt=${SYNC_TIME}）。
+              schemaName: '',
+              tableName: '',
+              fields: [],
+              location: '',
+              partitionColumns: [],
+              partitionColumn: undefined,
+              partitionExpression: undefined
             }
           : {
               ...prev.target,
@@ -403,7 +414,15 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
               // 正向（目的地 Hive）不使用它们（writer 为 hdfswriter），填上无害。
               jdbcUrl: ds?.connectConfig?.url,
               username: ds?.connectConfig?.username,
-              password: ds?.connectConfig?.password
+              password: ds?.connectConfig?.password,
+              // 同 source：换数据源后库/表/字段全部作废，须清空后重选
+              schemaName: '',
+              tableName: '',
+              fields: [],
+              location: '',
+              partitionColumns: [],
+              partitionColumn: undefined,
+              partitionExpression: undefined
             };
       const next: QuickSyncConfig = { ...prev, [side]: nextSide, mappings: [] };
       // 方向：由两侧数据源类型自动判定（源 MySQL + 目标 Hive/Spark → 正向；反之 → 反向）
@@ -1242,11 +1261,14 @@ const DataXQuickSyncModal = (props: DataXQuickSyncModalProps) => {
           </Button>,
           <Button
             key='preview'
-            onClick={() => {
+            onClick={async () => {
               if (validate()) {
                 message.error(validate() as string);
                 return;
               }
+              // 预览前也做一次分区列兜底补全：否则预览里 reader.path 仍是丢分区段的旧值，
+              // 会误导判断（执行时才补全，预览与执行结果不一致）。
+              await ensureReverseSourceDetail();
               setPreviewOpen(true);
             }}
           >
