@@ -95,14 +95,6 @@ export function getTenantByLocalStorage() {
 }
 
 /**
- * get cookie by key
- * @param key
- */
-export function getCookieByKey(key: string) {
-  return cookies.get(key) ?? '';
-}
-
-/**
  * set cookie by key
  * @param key
  * @param value
@@ -113,14 +105,19 @@ export function setCookieByKey(key: string, value: string, options?: {}) {
 }
 
 /**
- * PUT tenantId TO localStorage & cookies
- * @param tenantId
+ * 设置当前租户（前端唯一入口）
+ *
+ * 只写 localStorage：localStorage 按 origin（协议 + 域名 + 端口）隔离，测试槽 8889 与生产槽 8888 各存各的。
+ * 同时清理历史遗留的 tenantId Cookie —— 旧实现把租户写进 Cookie，而 Cookie 的作用域**不含端口**，
+ * 导致同一台机器上的两个槽互相覆盖租户上下文；租户的传递改由请求头完成（见 src/requestErrorConfig.ts）。
+ *
+ * @param tenantId tenant id
  */
-export function setTenantStorageAndCookie(tenantId: number) {
-  // save as localStorage
+export function setCurrentTenant(tenantId: number) {
+  // save to localStorage (origin-scoped)
   setKeyToLocalStorage(TENANT_ID, tenantId.toString());
-  // save as cookies
-  setCookieByKey(TENANT_ID, tenantId.toString(), { path: '/' });
+  // drop the legacy tenant cookie, so that the backend fallback chain never reads a stale tenant
+  cookies.remove(TENANT_ID, { path: '/' });
 }
 
 /**

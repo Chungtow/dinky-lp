@@ -19,7 +19,7 @@
 
 import { redirectToLogin } from '@/pages/Other/Login/function';
 import { ENABLE_MODEL_TIP } from '@/services/constants';
-import { getValueFromLocalStorage } from '@/utils/function';
+import { getTenantByLocalStorage, getValueFromLocalStorage } from '@/utils/function';
 import { l } from '@/utils/intl';
 import { ErrorNotification, WarningNotification } from '@/utils/messages';
 import type { RequestOptions } from '@@/plugin-request/request';
@@ -130,7 +130,11 @@ export const errorConfig: RequestConfig = {
     (config: RequestOptions) => {
       // Intercept request configuration for personalized processing.
       const url = config?.url;
-      return { ...config, url };
+      // 注入当前租户：取自 localStorage（按 origin 隔离，测试槽/生产槽天然独立），
+      // 不再依赖 Cookie —— Cookie 作用域不含端口，曾导致双槽租户上下文互相覆盖。
+      const tenantId = getTenantByLocalStorage();
+      const headers = tenantId ? { ...config?.headers, tenantId } : config?.headers;
+      return { ...config, url, headers };
     }
   ],
 
