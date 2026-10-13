@@ -296,6 +296,31 @@ export default [
     ]
   },
 
+  // 2026-10-14 菜单与权限登记缺口修复（F6）：补监控模块路由段。
+  // 此前 routes.ts 整段缺 /metrics，菜单里的监控页面全部不可达
+  // （menuList 不注册路由，patch 只调默认跳转）——仅改菜单 type 无法修复可达性。
+  // 注意：/metrics/server（Dinky 服务监控）的**前端页面从未实现**
+  //       （src/pages/Metrics/Server/ 下只有 constants/data/function/GlobalFilter，无组件入口），
+  //       故不注册该路由（注册会因 Cannot find module './Metrics/Server' 导致构建失败），
+  //       菜单 id=120 亦保持 F 类不在导航中展示。
+  {
+    path: '/metrics',
+    name: 'metrics',
+    icon: 'AreaChartOutlined',
+    routes: [
+      {
+        path: '/metrics',
+        redirect: '/metrics/job'
+      },
+      {
+        path: '/metrics/job',
+        name: 'job',
+        hideInMenu: true,
+        component: './Metrics/JobMetricsList'
+      }
+    ]
+  },
+
   {
     path: '/dashboard',
     name: 'dashboard',

@@ -44,6 +44,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import cn.dev33.satoken.annotation.SaCheckLogin;
 import cn.dev33.satoken.annotation.SaCheckPermission;
+import cn.dev33.satoken.annotation.SaMode;
 import cn.dev33.satoken.stp.StpUtil;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiImplicitParam;
@@ -55,7 +56,18 @@ import lombok.extern.slf4j.Slf4j;
  * Skill Controller（阶段 4a：Skills 基础与引用）。
  *
  * <p>「谁能看 / 谁能改」在 {@link SkillService} 内以<b>显式条件</b>判定（属主 + 同租户共享）；
- * 这里的权限注解只保证「有资源操作权限的人才能进入对应动作」。
+ * 这里的权限注解负责「功能权限」这一层，两者互补。
+ *
+ * <p>2026-10-14 菜单与权限登记缺口修复：
+ *
+ * <ul>
+ *   <li>此前写接口复用 {@code registration:resource:upload/delete}，语义不符且导致"配了资源中心就等于
+ *       配了 Skills 写权限"；现改用独立权限点 {@code registration:skill:*}；
+ *   <li>过渡期内写接口以 {@link SaMode#OR} 同时接受新旧权限点，避免已按资源中心授权的角色"升级即失权"；
+ *   <li>读接口 {@code /list} 需同时兼容 {@code aiChat:use}：AI Chat 的 {@code @skill/} 候选会调用该接口
+ *       （{@code DataStudio/Toolbar/AiChat/service.tsx}），若只认 {@code registration:skill:view}，
+ *       仅有 AI Chat 权限的用户将无法引用 skill（功能回归）。
+ * </ul>
  *
  * @since 2026/10/05
  */
@@ -71,6 +83,9 @@ public class SkillController {
 
     @GetMapping("/list")
     @ApiOperation("List Visible Skills")
+    @SaCheckPermission(
+            value = {PermissionConstants.REGISTRATION_SKILL_VIEW, PermissionConstants.AI_CHAT_USE},
+            mode = SaMode.OR)
     public Result<List<Skill>> list() {
         return Result.succeed(skillService.listVisible());
     }
@@ -78,6 +93,7 @@ public class SkillController {
     @GetMapping("/detail")
     @ApiOperation("Skill Detail (with content)")
     @ApiImplicitParam(name = "id", value = "Skill ID", required = true, dataType = "Long", paramType = "query")
+    @SaCheckPermission(PermissionConstants.REGISTRATION_SKILL_VIEW)
     public Result<SkillDetailVO> detail(@RequestParam Long id) {
         Skill skill = skillService.getVisibleById(id);
         SkillDetailVO vo = new SkillDetailVO();
@@ -91,7 +107,9 @@ public class SkillController {
     @PostMapping("/create")
     @ApiOperation("Create Skill")
     @Log(title = "Create Skill", businessType = BusinessType.INSERT)
-    @SaCheckPermission(PermissionConstants.REGISTRATION_RESOURCE_UPLOAD)
+    @SaCheckPermission(
+            value = {PermissionConstants.REGISTRATION_SKILL_ADD, PermissionConstants.REGISTRATION_RESOURCE_UPLOAD},
+            mode = SaMode.OR)
     public Result<Skill> create(@RequestBody SkillCreateDTO skillCreateDTO) {
         return Result.succeed(skillService.create(
                 skillCreateDTO.getName(),
@@ -104,7 +122,9 @@ public class SkillController {
     @PostMapping("/save")
     @ApiOperation("Save Skill Content")
     @Log(title = "Save Skill Content", businessType = BusinessType.UPDATE)
-    @SaCheckPermission(PermissionConstants.REGISTRATION_RESOURCE_UPLOAD)
+    @SaCheckPermission(
+            value = {PermissionConstants.REGISTRATION_SKILL_SAVE, PermissionConstants.REGISTRATION_RESOURCE_UPLOAD},
+            mode = SaMode.OR)
     public Result<Skill> save(@RequestBody SkillSaveDTO skillSaveDTO) {
         return Result.succeed(skillService.save(skillSaveDTO.getId(), skillSaveDTO.getContent()));
     }
@@ -112,7 +132,9 @@ public class SkillController {
     @DeleteMapping("/remove")
     @ApiOperation("Remove Skill")
     @Log(title = "Remove Skill", businessType = BusinessType.DELETE)
-    @SaCheckPermission(PermissionConstants.REGISTRATION_RESOURCE_DELETE)
+    @SaCheckPermission(
+            value = {PermissionConstants.REGISTRATION_SKILL_DELETE, PermissionConstants.REGISTRATION_RESOURCE_DELETE},
+            mode = SaMode.OR)
     public Result<Void> remove(@RequestParam Long id) {
         skillService.removeSkill(id, StpUtil.getLoginIdAsInt());
         return Result.succeed();
@@ -123,6 +145,7 @@ public class SkillController {
     @GetMapping("/files")
     @ApiOperation("List Files Inside a Skill")
     @ApiImplicitParam(name = "id", value = "Skill ID", required = true, dataType = "Long", paramType = "query")
+    @SaCheckPermission(PermissionConstants.REGISTRATION_SKILL_VIEW)
     public Result<List<SkillFileNode>> files(@RequestParam Long id) {
         return Result.succeed(skillService.listFiles(id));
     }
@@ -130,6 +153,7 @@ public class SkillController {
     @GetMapping("/file/read")
     @ApiOperation("Read a File Inside a Skill")
     @ApiImplicitParam(name = "id", value = "Skill ID", required = true, dataType = "Long", paramType = "query")
+    @SaCheckPermission(PermissionConstants.REGISTRATION_SKILL_VIEW)
     public Result<Object> readFile(@RequestParam Long id, @RequestParam(required = false) String relativePath) {
         // ⚠️ 不能写成 Result.succeed(skillService.readFile(...))：readFile 返回 String 时，
         // Java 重载决议会优先匹配 Result.succeed(String msg)，把正文塞进 msg 而 data 为 null
@@ -142,7 +166,9 @@ public class SkillController {
     @PostMapping("/file/write")
     @ApiOperation("Write a File Inside a Skill")
     @Log(title = "Write Skill File", businessType = BusinessType.UPDATE)
-    @SaCheckPermission(PermissionConstants.REGISTRATION_RESOURCE_UPLOAD)
+    @SaCheckPermission(
+            value = {PermissionConstants.REGISTRATION_SKILL_FILE, PermissionConstants.REGISTRATION_RESOURCE_UPLOAD},
+            mode = SaMode.OR)
     public Result<SkillFileNode> writeFile(@RequestBody SkillFileWriteDTO skillFileWriteDTO) {
         return Result.succeed(skillService.writeFile(
                 skillFileWriteDTO.getSkillId(),
@@ -154,7 +180,9 @@ public class SkillController {
     @PostMapping("/file/mkdir")
     @ApiOperation("Create a Directory Inside a Skill")
     @Log(title = "Create Skill Directory", businessType = BusinessType.INSERT)
-    @SaCheckPermission(PermissionConstants.REGISTRATION_RESOURCE_UPLOAD)
+    @SaCheckPermission(
+            value = {PermissionConstants.REGISTRATION_SKILL_FILE, PermissionConstants.REGISTRATION_RESOURCE_UPLOAD},
+            mode = SaMode.OR)
     public Result<SkillFileNode> mkdir(@RequestBody SkillFileRemoveDTO skillFileRemoveDTO) {
         return Result.succeed(skillService.mkdir(
                 skillFileRemoveDTO.getSkillId(), skillFileRemoveDTO.getRelativePath(), StpUtil.getLoginIdAsInt()));
@@ -163,7 +191,9 @@ public class SkillController {
     @PostMapping("/file/remove")
     @ApiOperation("Remove a File or Directory Inside a Skill")
     @Log(title = "Remove Skill File", businessType = BusinessType.DELETE)
-    @SaCheckPermission(PermissionConstants.REGISTRATION_RESOURCE_DELETE)
+    @SaCheckPermission(
+            value = {PermissionConstants.REGISTRATION_SKILL_DELETE, PermissionConstants.REGISTRATION_RESOURCE_DELETE},
+            mode = SaMode.OR)
     public Result<Void> removeFile(@RequestBody SkillFileRemoveDTO skillFileRemoveDTO) {
         skillService.removeFile(
                 skillFileRemoveDTO.getSkillId(), skillFileRemoveDTO.getRelativePath(), StpUtil.getLoginIdAsInt());

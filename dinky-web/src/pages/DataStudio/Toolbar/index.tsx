@@ -20,13 +20,17 @@
 import { Flex, Row, Tooltip, Typography } from 'antd';
 import React from 'react';
 import './index.less';
+import { HasAuthority } from '@/hooks/useAccess';
 import { ToolbarPosition, ToolbarProp } from '@/pages/DataStudio/Toolbar/data.d';
 import { ToolbarRoutes } from '@/pages/DataStudio/Toolbar/ToolbarRoute';
+import { PermissionConstants } from '@/types/Public/constants';
 import { ReactSortable } from 'react-sortablejs';
 
 export default React.memo((props: ToolbarProp) => {
   const { showDesc, onClick, toolbarSelect, position, saveToolbarLayout, height } = props;
-  const routes = toolbarSelect.allTabs;
+  // 2026-10-14 权限登记：无 aiChat:use 权限时不展示 AI Chat 面板（hooks 须在组件顶层调用）
+  const canUseAiChat = HasAuthority(PermissionConstants.DATASTUDIO_AI_CHAT);
+  const routes = toolbarSelect.allTabs.filter((key) => key !== 'aiChat' || canUseAiChat);
   const currentRoutes = routes
     .map((value) => ToolbarRoutes.find((item) => item.key === value)!!)
     .map((item) => ({

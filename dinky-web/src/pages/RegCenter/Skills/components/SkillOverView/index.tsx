@@ -17,6 +17,8 @@
  *
  */
 
+import { Authorized } from '@/hooks/useAccess';
+import { PermissionConstants } from '@/types/Public/constants';
 import { l } from '@/utils/intl';
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { Button, Card, Form, Input, Modal, Popconfirm, Space, Table, Tag } from 'antd';
@@ -130,22 +132,28 @@ const SkillOverView = () => {
       width: 230,
       render: (_: any, row: SkillInfo) => (
         <Space>
-          <Button size={'small'} onClick={() => openEdit(row)}>
-            {l('pages.skill.viewOrEdit')}
-          </Button>
-          <Button size={'small'} type={'link'} onClick={() => openFiles(row)}>
-            {l('pages.skill.fileManage')}
-          </Button>
-          <Popconfirm
-            title={l('pages.skill.removeConfirm')}
-            okText={l('button.confirm')}
-            cancelText={l('button.cancel')}
-            onConfirm={() => removeSkill(row.id, load)}
-          >
-            <Button size={'small'} danger>
-              {l('button.delete')}
+          <Authorized path={PermissionConstants.REGISTRATION_SKILL_SAVE}>
+            <Button size={'small'} onClick={() => openEdit(row)}>
+              {l('pages.skill.viewOrEdit')}
             </Button>
-          </Popconfirm>
+          </Authorized>
+          <Authorized path={PermissionConstants.REGISTRATION_SKILL_FILE}>
+            <Button size={'small'} type={'link'} onClick={() => openFiles(row)}>
+              {l('pages.skill.fileManage')}
+            </Button>
+          </Authorized>
+          <Authorized path={PermissionConstants.REGISTRATION_SKILL_DELETE}>
+            <Popconfirm
+              title={l('pages.skill.removeConfirm')}
+              okText={l('button.confirm')}
+              cancelText={l('button.cancel')}
+              onConfirm={() => removeSkill(row.id, load)}
+            >
+              <Button size={'small'} danger>
+                {l('button.delete')}
+              </Button>
+            </Popconfirm>
+          </Authorized>
         </Space>
       )
     }
@@ -160,25 +168,29 @@ const SkillOverView = () => {
             <Button icon={<ReloadOutlined />} onClick={load}>
               {l('button.refresh')}
             </Button>
-            <Button
-              icon={<PlusOutlined />}
-              onClick={() => {
-                setCreateAssetType('doc');
-                setCreateOpen(true);
-              }}
-            >
-              {l('pages.skill.createDoc')}
-            </Button>
-            <Button
-              type={'primary'}
-              icon={<PlusOutlined />}
-              onClick={() => {
-                setCreateAssetType('skill');
-                setCreateOpen(true);
-              }}
-            >
-              {l('button.create')}
-            </Button>
+            <Authorized path={PermissionConstants.REGISTRATION_SKILL_FILE}>
+              <Button
+                icon={<PlusOutlined />}
+                onClick={() => {
+                  setCreateAssetType('doc');
+                  setCreateOpen(true);
+                }}
+              >
+                {l('pages.skill.createDoc')}
+              </Button>
+            </Authorized>
+            <Authorized path={PermissionConstants.REGISTRATION_SKILL_ADD}>
+              <Button
+                type={'primary'}
+                icon={<PlusOutlined />}
+                onClick={() => {
+                  setCreateAssetType('skill');
+                  setCreateOpen(true);
+                }}
+              >
+                {l('button.create')}
+              </Button>
+            </Authorized>
           </Space>
         }
       >
