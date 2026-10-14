@@ -90,6 +90,22 @@ public final class SkillDocParser {
         return ASSET_TYPE_DOC.equals(assetType) ? DOC_MAIN_FILE : SKILL_MAIN_FILE;
     }
 
+    /**
+     * 归属目录前缀（2026-10-14：Skill 存储路径按属主隔离）。
+     *
+     * <p>目录结构：{@code /skills/<u+ownerId>/<name>/SKILL.md}。此前所有用户的资产都落在
+     * {@code /skills/<name>/} 下，不同用户建同名 skill 会复用同一目录并撞 {@code dinky_resources}
+     * 的 {@code (full_name, type)} 唯一键（表现为 HTTP 500），或静默互相覆盖。
+     *
+     * <p>用 {@code u<id>} 而非裸 id 作目录名：避免与纯数字 skill 名在资源树中视觉混淆。
+     */
+    public static final String OWNER_DIR_PREFIX = "u";
+
+    /** 属主归属目录名（{@code u<ownerId>}） */
+    public static String ownerDirName(Integer ownerId) {
+        return OWNER_DIR_PREFIX + (ownerId == null ? 0 : ownerId);
+    }
+
     private SkillDocParser() {}
 
     /**

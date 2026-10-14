@@ -49,7 +49,12 @@ public interface SkillService extends ISuperService<Skill> {
      */
     Skill getVisibleById(Long id);
 
-    /** 按 name 取当前用户<b>可见</b>的 skill（{@code @skill/<name>} 引用时用）；不可见 / 不存在返回 null */
+    /**
+     * 按 name 取当前用户<b>可见</b>的 skill（{@code @skill/<name>} 引用时用）；不可见 / 不存在返回 null。
+     *
+     * <p>2026-10-14：存储路径按属主隔离后，同名资产可跨属主共存，本方法按
+     * 「自己的 &gt; 全体公开 &gt; 同租户共享 &gt; 最新」优先级取一条。
+     */
     Skill findVisibleByName(String name);
 
     /** 读取 skill 的 {@code SKILL.md} 正文（可见性校验后按路径直读资源存储） */
@@ -79,6 +84,22 @@ public interface SkillService extends ISuperService<Skill> {
      * @param assetType {@code skill} 或 {@code doc}；空值按 {@code skill} 处理（兼容旧调用方）
      */
     Skill create(String name, String description, String assetType, Integer actorId);
+
+    /**
+     * 新建资产并指定<b>可见性</b>（2026-10-14 三档可见性）。
+     *
+     * @param visibility {@code private}（默认）/ {@code tenant}（同租户共享）/ {@code public}（全体公开）；
+     *     空值按 {@code private}，非法值抛 {@code BusException}
+     */
+    Skill create(String name, String description, String assetType, Integer actorId, String visibility);
+
+    /**
+     * 修改资产<b>可见性</b>（<b>仅属主</b>；2026-10-14 三档可见性）。
+     *
+     * <p>改为 {@code tenant} 前会确保 {@code tenant_id} 有值（否则同租户成员看不到）；
+     * {@code public} 不限租户。
+     */
+    Skill updateVisibility(Long id, String visibility, Integer actorId);
 
     /**
      * 保存 {@code SKILL.md} 正文（<b>仅属主</b>）：写文件 → 重新解析 frontmatter → 回写

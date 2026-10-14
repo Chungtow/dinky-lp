@@ -252,4 +252,45 @@ public class PermissionConstants {
     public static final String DASHBOARD_CHART_DELETE = "dashboard:chart:delete";
     public static final String DASHBOARD_CHART_EDIT = "dashboard:chart:edit";
     public static final String DASHBOARD_CHART_ADD = "dashboard:chart:add";
+
+    /**
+     * registration skills
+     *
+     * <p>2026-10-14 菜单与权限登记缺口修复：Skills 能力此前无独立权限点，写接口复用
+     * REGISTRATION_RESOURCE_UPLOAD/DELETE。过渡期两个发布周期内以 SaMode.OR 同时接受新旧权限点，
+     * 避免"升级即失权"。
+     */
+    public static final String REGISTRATION_SKILL = "registration:skill";
+
+    public static final String REGISTRATION_SKILL_VIEW = "registration:skill:view";
+    public static final String REGISTRATION_SKILL_ADD = "registration:skill:add";
+    public static final String REGISTRATION_SKILL_SAVE = "registration:skill:save";
+    public static final String REGISTRATION_SKILL_DELETE = "registration:skill:delete";
+    public static final String REGISTRATION_SKILL_FILE = "registration:skill:file";
+
+    /**
+     * Skills 可见性：把资产设置为「全体公开」所需的权限点（2026-10-14 三档可见性）。
+     *
+     * <p>「私有 / 同租户共享」沿用 {@link #REGISTRATION_SKILL_SAVE}；只有「面向全体公开」这一组织级
+     * 动作单独管控。权限串**必须 ≥ 3 段**，否则连超管 {@code *:*:*} 都匹配不上
+     * （见 V20261014.1.4.5 的实测教训）。
+     */
+    public static final String REGISTRATION_SKILL_SHARE = "registration:skill:share";
+
+    /**
+     * AI Chat（分级：使用 / 写操作）
+     *
+     * <p>aiChat:panel:use → 面板入口、对话、只读工具；aiChat:panel:write → 写审计 / 确认 / 取消（落盘闸门）。
+     *
+     * <p><b>必须保持 3 段式</b>：超管的通配权限为 {@code *:*:*}，Sa-Token 的通配按「冒号分段」匹配，
+     * 2 段权限串（如 {@code aiChat:use}）**连超管都无法匹配**，会导致接口对所有人 403。
+     */
+    public static final String AI_CHAT_USE = "aiChat:panel:use";
+
+    public static final String AI_CHAT_WRITE = "aiChat:panel:write";
+
+    /**
+     * classloader jars
+     */
+    public static final String SETTINGS_CLASSLOADERJARS_VIEW = "settings:classloaderjars:view";
 }

@@ -35,6 +35,7 @@ import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -63,20 +64,71 @@ public class ResourceServiceImpl extends ServiceImpl<ResourcesMapper, Resources>
     private static final TimedCache<Integer, Resources> RESOURCES_CACHE = new TimedCache<>(30 * 1000);
     private static final long ALLOW_MAX_CAT_CONTENT_SIZE = 10 * 1024 * 1024;
 
+    /** AI 资产（Skill / 知识文档）在资源树中的顶层目录名 */
+    private static final List<String> AI_ASSET_TOP_DIRS = Arrays.asList("skills", "docs");
+
+    /**
+     * 收集「AI 资产根目录」的 full_name 前缀——仅 {@code pid = -1} 且目录名为 {@code skills} / {@code docs}
+     * 的节点，即由 {@code SkillServiceImpl#create} 建在资源树<b>根部</b>（与 {@code Root} 平级）的两个目录。
+     *
+     * <p><b>背景</b>（2026-10-14）：这两个目录承载 AI Skill / 知识文档的文件，属于「能力内部存储」，
+     * 有两个必须隔离的点：
+     *
+     * <ul>
+     *   <li><b>不该出现在通用资源管理页面</b>（数据开发-资源、注册中心-资源）——其目录结构里含其他租户 /
+     *       其他用户的资产信息，而 {@code dinky_resources} 没有属主 / 租户字段，无法按权限过滤。
+     *       Skill 的文件管理请走「注册中心 → Skills → 文件」。
+     *   <li><b>不该被「同步远程目录结构」删除或重建</b>——该功能只从 {@code Root} 子树扫描，且会先删掉
+     *       全部非根记录；AI 资产不在 Root 子树内，删掉就再也无法从扫描结果恢复（skill 详情 / 文件树
+     *       会全部失效）。
+     * </ul>
+     *
+     * <p><b>为什么必须靠 {@code pid = -1} 而不是仅靠目录名</b>：用户完全可能在 {@code Root} 下自建一个
+     * 同名目录（{@code pid = 0}，fullName 同样是 {@code /docs}），那属于普通资源，<b>不能</b>被隐藏。
+     * AI 资产目录的子孙（如 {@code /skills/u12/foo}）自身 pid 不是 -1，故用前缀匹配覆盖整个子树；
+     * 又因 {@code dinky_resources} 对 {@code (full_name, type)} 全局唯一，AI 目录与用户同名目录
+     * 不可能同时存在，因此前缀匹配不会误伤。
+     */
+    private static List<String> aiAssetRootPrefixes(List<Resources> all) {
+        List<String> prefixes = new ArrayList<>();
+        for (Resources resource : all) {
+            if (Integer.valueOf(-1).equals(resource.getPid())
+                    && AI_ASSET_TOP_DIRS.contains(StrUtil.trimToEmpty(resource.getFileName()))) {
+                prefixes.add(StrUtil.nullToEmpty(resource.getFullName()));
+            }
+        }
+        return prefixes;
+    }
+
+    /** 路径是否落在任一前缀之下（含前缀自身） */
+    private static boolean isUnderAnyPrefix(String fullName, List<String> prefixes) {
+        String path = StrUtil.nullToEmpty(fullName);
+        return prefixes.stream().anyMatch(prefix -> path.equals(prefix) || StrUtil.startWith(path, prefix + "/"));
+    }
+
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean syncRemoteDirectoryStructure() {
-        Resources rootResource = getOne(new LambdaQueryWrapper<Resources>().eq(Resources::getPid, -1));
+        // 2026-10-14：资源树根部可能有不止一条 pid = -1 的记录（AI 资产目录 /skills、/docs 亦以 -1
+        // 建在根部），getOne 在多结果下会抛 TooManyResultsException → 显式按 id 升序取 Root（id = 0）。
+        Resources rootResource = getOne(new LambdaQueryWrapper<Resources>()
+                .eq(Resources::getPid, -1)
+                .orderByAsc(Resources::getId)
+                .last("limit 1"));
         if (rootResource == null) {
             throw new BusException(Status.RESOURCE_ROOT_DIR_NOT_EXIST);
         }
         List<Resources> local = list();
         Map<Integer, Resources> localMap =
                 local.stream().collect(Collectors.toMap(Resources::getId, Function.identity()));
+        // 2026-10-14：AI 资产子树（/skills、/docs）不在 Root 子树内，也不由本功能维护
+        List<String> aiAssetPrefixes = aiAssetRootPrefixes(local);
 
         List<Resources> resourcesList =
                 getBaseResourceManager().getFullDirectoryStructure(rootResource.getId()).stream()
                         .filter(x -> x.getPid() != -1)
+                        // 若把扫描到的 /skills、/docs 一并写入，会与根部既有记录撞 (full_name, type) 唯一键
+                        .filter(x -> !isUnderAnyPrefix(x.getFullName(), aiAssetPrefixes))
                         .map(Resources::of)
                         .peek(x -> {
                             // Restore the existing information. If the remotmap is not available,
@@ -91,8 +143,12 @@ public class ResourceServiceImpl extends ServiceImpl<ResourcesMapper, Resources>
                             x.setPid(Math.abs(x.getPid()));
                         })
                         .collect(Collectors.toList());
-        // not delete root directory
-        this.remove(new LambdaQueryWrapper<Resources>().ne(Resources::getPid, -1));
+        // not delete root directory（2026-10-14：同时保留 AI 资产子树——扫描不会重建它们）
+        LambdaQueryWrapper<Resources> deleteWrapper = new LambdaQueryWrapper<Resources>().ne(Resources::getPid, -1);
+        for (String aiAssetPrefix : aiAssetPrefixes) {
+            deleteWrapper.notLikeRight(Resources::getFullName, aiAssetPrefix + "/");
+        }
+        this.remove(deleteWrapper);
         this.saveBatch(resourcesList);
         return true;
     }
@@ -471,7 +527,17 @@ public class ResourceServiceImpl extends ServiceImpl<ResourcesMapper, Resources>
      */
     @Override
     public List<Resources> getResourcesTree() {
-        return buildResourcesTree(this.list());
+        // 2026-10-14：对外隐藏 AI 资产目录（/skills、/docs）及其子孙——它们有专属管理入口
+        // （注册中心 → Skills → 文件管理），且目录结构含其他租户 / 用户的资产信息，
+        // 而 dinky_resources 无属主字段、无法按权限过滤。
+        List<Resources> all = list();
+        List<String> aiAssetPrefixes = aiAssetRootPrefixes(all);
+        List<Resources> visible = aiAssetPrefixes.isEmpty()
+                ? all
+                : all.stream()
+                        .filter(resource -> !isUnderAnyPrefix(resource.getFullName(), aiAssetPrefixes))
+                        .collect(Collectors.toList());
+        return buildResourcesTree(visible);
     }
 
     /**

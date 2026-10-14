@@ -760,6 +760,11 @@ export default {
   'pages.skill.visibility': 'Visibility',
   'pages.skill.visibilityPrivate': 'Private',
   'pages.skill.visibilityTenant': 'Shared in tenant',
+  'pages.skill.visibilityPublic': 'Public',
+  'pages.skill.visibilityChange': 'Visibility',
+  'pages.skill.visibilityChangeTitle': 'Change Visibility',
+  'pages.skill.visibilityHint':
+    'Private: only you; Shared in tenant: visible to members of your tenant; Public: visible to all users (requires permission). Shared and public assets are read-only — only the owner can edit or delete them.',
   'pages.skill.version': 'Version',
   'pages.skill.updateTime': 'Updated At',
   'pages.skill.action': 'Actions',

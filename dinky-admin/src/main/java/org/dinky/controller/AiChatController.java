@@ -20,6 +20,7 @@
 package org.dinky.controller;
 
 import org.dinky.ai.context.NameRegistryService;
+import org.dinky.data.constant.PermissionConstants;
 import org.dinky.data.dto.AiChatConfirmRequest;
 import org.dinky.data.dto.AiChatRequest;
 import org.dinky.data.dto.AiChatWriteAuditRequest;
@@ -37,6 +38,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import cn.dev33.satoken.annotation.SaCheckLogin;
+import cn.dev33.satoken.annotation.SaCheckPermission;
 import cn.dev33.satoken.stp.StpUtil;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
@@ -47,6 +49,19 @@ import lombok.extern.slf4j.Slf4j;
  * AI Chat Controller
  *
  * <p>提供数据开发场景下的 AI 对话能力（Text-to-SQL / Explain），以 SSE 流式返回。
+ *
+ * <p>2026-10-14 菜单与权限登记缺口修复（分级权限）：
+ *
+ * <ul>
+ *   <li>{@code aiChat:use} —— 面板使用：对话（{@code /chat}）、配置查询（{@code /config}）、
+ *       {@code @topic/} 候选（{@code /mentionTopics}）；
+ *   <li>{@code aiChat:write} —— <b>落盘闸门</b>：写审计（{@code /write-audit}）、二次确认
+ *       （{@code /confirm}）、中断（{@code /cancel}）。
+ * </ul>
+ *
+ * <p>之所以把权限挂在闸门而非 {@code /chat} 内部：{@code /chat} 单次请求内可能既产出只读建议、
+ * 也可能产出待确认的写提案，接口级注解无法按请求参数细分；而阶段 2c 已实现"写语句必须人工确认"，
+ * 因此在 {@code /confirm} 等闸门接口上收紧即可做到"能对话、不能落盘"。
  *
  * @since 2026/09/26
  */
@@ -71,6 +86,7 @@ public class AiChatController {
      */
     @PostMapping("/chat")
     @ApiOperation("Chat With AI (SSE Stream)")
+    @SaCheckPermission(PermissionConstants.AI_CHAT_USE)
     public SseEmitter chat(@RequestBody AiChatRequest request) {
         if (request != null) {
             try {
@@ -90,6 +106,7 @@ public class AiChatController {
      */
     @GetMapping("/config")
     @ApiOperation("Query AI Chat Config")
+    @SaCheckPermission(PermissionConstants.AI_CHAT_USE)
     public Result<AiChatConfig> getConfig() {
         return Result.succeed(aiChatService.getConfig());
     }
@@ -113,6 +130,7 @@ public class AiChatController {
      */
     @GetMapping("/mentionTopics")
     @ApiOperation("List topic candidates for @topic mentions (from name registry, no Kafka connection)")
+    @SaCheckPermission(PermissionConstants.AI_CHAT_USE)
     public Result<List<String>> listMentionTopics() {
         return Result.succeed(nameRegistryService.getSnapshot().get("kafkaTopic"));
     }
@@ -128,6 +146,7 @@ public class AiChatController {
      */
     @PostMapping("/write-audit")
     @ApiOperation("Record AI Craft Write Audit")
+    @SaCheckPermission(PermissionConstants.AI_CHAT_WRITE)
     public Result<Void> writeAudit(@RequestBody AiChatWriteAuditRequest request) {
         if (request != null) {
             try {
@@ -151,6 +170,7 @@ public class AiChatController {
      */
     @PostMapping("/confirm")
     @ApiOperation("Confirm AI Write Execution")
+    @SaCheckPermission(PermissionConstants.AI_CHAT_WRITE)
     public Result<Void> confirm(@RequestBody AiChatConfirmRequest request) {
         if (request != null) {
             try {
@@ -174,6 +194,7 @@ public class AiChatController {
      */
     @PostMapping("/cancel")
     @ApiOperation("Cancel AI Chat Run")
+    @SaCheckPermission(PermissionConstants.AI_CHAT_WRITE)
     public Result<Void> cancel(@RequestBody AiChatConfirmRequest request) {
         if (request != null) {
             try {

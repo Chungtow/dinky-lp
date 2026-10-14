@@ -17,13 +17,27 @@
  *
  */
 
+import { Authorized } from '@/hooks/useAccess';
+import { PermissionConstants } from '@/types/Public/constants';
 import { l } from '@/utils/intl';
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
-import { Button, Card, Form, Input, Modal, Popconfirm, Space, Table, Tag } from 'antd';
+import { Button, Card, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag } from 'antd';
 import { useEffect, useState } from 'react';
-import { createSkill, detailSkill, listSkills, removeSkill, saveSkill } from '../../service';
+import { createSkill, detailSkill, listSkills, removeSkill, saveSkill, updateSkillVisibility } from '../../service';
 import SkillFilePanel from '../SkillFilePanel';
 import type { SkillInfo } from '@/types/RegCenter/skill';
+
+/** 可见性展示（2026-10-14 三档）：文案 + Tag 颜色 */
+const visibilityLabel = (value?: string) => {
+  switch (value) {
+    case 'public':
+      return { label: l('pages.skill.visibilityPublic'), color: 'gold' };
+    case 'tenant':
+      return { label: l('pages.skill.visibilityTenant'), color: 'blue' };
+    default:
+      return { label: l('pages.skill.visibilityPrivate'), color: 'default' };
+  }
+};
 
 const SkillOverView = () => {
   const [loading, setLoading] = useState(false);
@@ -39,6 +53,10 @@ const SkillOverView = () => {
   const [saving, setSaving] = useState(false);
   // 阶段 4b：文件面板（管理 skill 目录树与 references/ 子文件）
   const [filePanel, setFilePanel] = useState<{ id: number; name: string; assetType?: string; editable: boolean }>();
+  // 2026-10-14 三档可见性：修改可见性弹窗
+  const [visibilityTarget, setVisibilityTarget] = useState<{ id: number; name: string; visibility?: string }>();
+  const [visibilityForm] = Form.useForm();
+  const [visibilitySaving, setVisibilitySaving] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -73,6 +91,28 @@ const SkillOverView = () => {
       assetType: row.assetType,
       editable: detail?.editable !== false
     });
+  };
+
+  /** 2026-10-14 三档可见性：打开「修改可见性」弹窗（属主校验由后端负责） */
+  const openVisibility = (row: SkillInfo) => {
+    visibilityForm.setFieldsValue({ visibility: row.visibility ?? 'private' });
+    setVisibilityTarget({ id: row.id, name: row.name, visibility: row.visibility });
+  };
+
+  const handleVisibilitySave = async () => {
+    if (!visibilityTarget) {
+      return;
+    }
+    const values = await visibilityForm.validateFields();
+    setVisibilitySaving(true);
+    try {
+      await updateSkillVisibility({ id: visibilityTarget.id, visibility: values.visibility }, () => {
+        setVisibilityTarget(undefined);
+      });
+      await load();
+    } finally {
+      setVisibilitySaving(false);
+    }
   };
 
   const handleSave = async () => {
@@ -117,35 +157,49 @@ const SkillOverView = () => {
       title: l('pages.skill.visibility'),
       dataIndex: 'visibility',
       width: 110,
-      render: (value: string) => (
-        <Tag color={value === 'tenant' ? 'blue' : 'default'}>
-          {value === 'tenant' ? l('pages.skill.visibilityTenant') : l('pages.skill.visibilityPrivate')}
-        </Tag>
-      )
+      render: (value: string) => {
+        const meta = visibilityLabel(value);
+        return <Tag color={meta.color}>{meta.label}</Tag>;
+      }
     },
     { title: l('pages.skill.version'), dataIndex: 'version', width: 80 },
     { title: l('pages.skill.updateTime'), dataIndex: 'updateTime', width: 170 },
     {
       title: l('pages.skill.action'),
-      width: 230,
+      // 2026-10-14：本列为 4 个操作（查看/编辑、文件、可见性、删除），原 230 会裁掉末尾的删除按钮；
+      // 同时给 Table 加了 scroll.x 兜底，窄屏横向滚动而非裁切；右侧固定，滚动时按钮始终可见。
+      width: 300,
+      fixed: 'right' as const,
       render: (_: any, row: SkillInfo) => (
         <Space>
-          <Button size={'small'} onClick={() => openEdit(row)}>
-            {l('pages.skill.viewOrEdit')}
-          </Button>
-          <Button size={'small'} type={'link'} onClick={() => openFiles(row)}>
-            {l('pages.skill.fileManage')}
-          </Button>
-          <Popconfirm
-            title={l('pages.skill.removeConfirm')}
-            okText={l('button.confirm')}
-            cancelText={l('button.cancel')}
-            onConfirm={() => removeSkill(row.id, load)}
-          >
-            <Button size={'small'} danger>
-              {l('button.delete')}
+          <Authorized path={PermissionConstants.REGISTRATION_SKILL_SAVE}>
+            <Button size={'small'} onClick={() => openEdit(row)}>
+              {l('pages.skill.viewOrEdit')}
             </Button>
-          </Popconfirm>
+          </Authorized>
+          <Authorized path={PermissionConstants.REGISTRATION_SKILL_FILE}>
+            <Button size={'small'} type={'link'} onClick={() => openFiles(row)}>
+              {l('pages.skill.fileManage')}
+            </Button>
+          </Authorized>
+          {/* 2026-10-14 三档可见性：入口对持有 save 权限者可见，「是否本人资产」由后端校验 */}
+          <Authorized path={PermissionConstants.REGISTRATION_SKILL_SAVE}>
+            <Button size={'small'} type={'link'} onClick={() => openVisibility(row)}>
+              {l('pages.skill.visibilityChange')}
+            </Button>
+          </Authorized>
+          <Authorized path={PermissionConstants.REGISTRATION_SKILL_DELETE}>
+            <Popconfirm
+              title={l('pages.skill.removeConfirm')}
+              okText={l('button.confirm')}
+              cancelText={l('button.cancel')}
+              onConfirm={() => removeSkill(row.id, load)}
+            >
+              <Button size={'small'} danger>
+                {l('button.delete')}
+              </Button>
+            </Popconfirm>
+          </Authorized>
         </Space>
       )
     }
@@ -160,25 +214,29 @@ const SkillOverView = () => {
             <Button icon={<ReloadOutlined />} onClick={load}>
               {l('button.refresh')}
             </Button>
-            <Button
-              icon={<PlusOutlined />}
-              onClick={() => {
-                setCreateAssetType('doc');
-                setCreateOpen(true);
-              }}
-            >
-              {l('pages.skill.createDoc')}
-            </Button>
-            <Button
-              type={'primary'}
-              icon={<PlusOutlined />}
-              onClick={() => {
-                setCreateAssetType('skill');
-                setCreateOpen(true);
-              }}
-            >
-              {l('button.create')}
-            </Button>
+            <Authorized path={PermissionConstants.REGISTRATION_SKILL_FILE}>
+              <Button
+                icon={<PlusOutlined />}
+                onClick={() => {
+                  setCreateAssetType('doc');
+                  setCreateOpen(true);
+                }}
+              >
+                {l('pages.skill.createDoc')}
+              </Button>
+            </Authorized>
+            <Authorized path={PermissionConstants.REGISTRATION_SKILL_ADD}>
+              <Button
+                type={'primary'}
+                icon={<PlusOutlined />}
+                onClick={() => {
+                  setCreateAssetType('skill');
+                  setCreateOpen(true);
+                }}
+              >
+                {l('button.create')}
+              </Button>
+            </Authorized>
           </Space>
         }
       >
@@ -189,6 +247,10 @@ const SkillOverView = () => {
           dataSource={rows}
           // 列定义由 antd 动态推导，这里放开类型以简化
           columns={columns as any}
+          // 2026-10-14：各固定列合计 960px +「说明」列自适应。用 scroll.x 兜底——
+          // 宽屏时表格铺满容器（多余宽度分给「说明」列），窄屏时横向滚动，
+          // 而不是像之前那样把操作列的按钮直接裁掉。
+          scroll={{ x: 1220 }}
           pagination={{ pageSize: 10, showSizeChanger: false }}
         />
       </Card>
@@ -229,6 +291,41 @@ const SkillOverView = () => {
           >
             <Input placeholder={l('pages.skill.descriptionPlaceholder')} />
           </Form.Item>
+          {/* 2026-10-14 三档可见性：创建时即可选择（默认私有），创建后可在列表行「可见性」中修改 */}
+          <Form.Item name={'visibility'} label={l('pages.skill.visibility')} initialValue={'private'}>
+            <Select
+              options={[
+                { value: 'private', label: l('pages.skill.visibilityPrivate') },
+                { value: 'tenant', label: l('pages.skill.visibilityTenant') },
+                { value: 'public', label: l('pages.skill.visibilityPublic') }
+              ]}
+            />
+          </Form.Item>
+          <div style={{ color: 'rgba(0, 0, 0, 0.45)', fontSize: 12 }}>{l('pages.skill.visibilityHint')}</div>
+        </Form>
+      </Modal>
+
+      {/* 2026-10-14 三档可见性：修改可见性（仅属主；设为「全体公开」还需 registration:skill:share 权限） */}
+      <Modal
+        open={!!visibilityTarget}
+        title={`${l('pages.skill.visibilityChangeTitle')}${visibilityTarget?.name ?? ''}`}
+        confirmLoading={visibilitySaving}
+        okText={l('button.save')}
+        cancelText={l('button.cancel')}
+        onCancel={() => setVisibilityTarget(undefined)}
+        onOk={handleVisibilitySave}
+      >
+        <Form form={visibilityForm} layout={'vertical'}>
+          <Form.Item name={'visibility'} label={l('pages.skill.visibility')} rules={[{ required: true }]}>
+            <Select
+              options={[
+                { value: 'private', label: l('pages.skill.visibilityPrivate') },
+                { value: 'tenant', label: l('pages.skill.visibilityTenant') },
+                { value: 'public', label: l('pages.skill.visibilityPublic') }
+              ]}
+            />
+          </Form.Item>
+          <div style={{ color: 'rgba(0, 0, 0, 0.45)', fontSize: 12 }}>{l('pages.skill.visibilityHint')}</div>
         </Form>
       </Modal>
 

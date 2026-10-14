@@ -27,6 +27,8 @@ import {
 } from '@/pages/DataStudio/Toolbar/DataSource/service';
 import { decideMentionBackspace } from './mentionBackspace';
 import type { MentionBackspaceArm } from './mentionBackspace';
+import { Authorized } from '@/hooks/useAccess';
+import { PermissionConstants } from '@/types/Public/constants';
 import ToolProcess from './components/ToolProcess';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -1780,20 +1782,22 @@ const AiChat = (props: AiChatProps) => {
             <Button onClick={() => handleWriteConfirm(false)}>
               {l('datastudio.aiChat.writeConfirm.reject')}
             </Button>
-            <Button
-              danger
-              type={'primary'}
-              // 阶段 4b：删除类确认要求手输名称与后端下发的目标名完全一致才能点击（防误删）
-              disabled={
-                !!writeConfirm?.requireTypedName &&
-                confirmTypedName.trim() !== (writeConfirm?.targetName ?? '')
-              }
-              onClick={() => handleWriteConfirm(true)}
-            >
-              {writeConfirm?.kind === 'skill_delete'
-                ? l('datastudio.aiChat.confirm.deleteAccept')
-                : l('datastudio.aiChat.writeConfirm.accept')}
-            </Button>
+            <Authorized path={PermissionConstants.DATASTUDIO_AI_CHAT_WRITE}>
+              <Button
+                danger
+                type={'primary'}
+                // 阶段 4b：删除类确认要求手输名称与后端下发的目标名完全一致才能点击（防误删）
+                disabled={
+                  !!writeConfirm?.requireTypedName &&
+                  confirmTypedName.trim() !== (writeConfirm?.targetName ?? '')
+                }
+                onClick={() => handleWriteConfirm(true)}
+              >
+                {writeConfirm?.kind === 'skill_delete'
+                  ? l('datastudio.aiChat.confirm.deleteAccept')
+                  : l('datastudio.aiChat.writeConfirm.accept')}
+              </Button>
+            </Authorized>
           </Space>
         }
       >

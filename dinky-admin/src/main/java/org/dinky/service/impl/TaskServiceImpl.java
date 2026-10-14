@@ -655,6 +655,18 @@ public class TaskServiceImpl extends SuperServiceImpl<TaskMapper, Task> implemen
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean saveOrUpdateTask(Task task) {
+        // 责任人未指定时兜底为当前登录用户（覆盖导入 JSON / 直调 API 等绕过前端的路径）。
+        // taskOwnerLockStrategy 默认 ALL，不受影响；仅当管理员改为 OWNER/OWNER_AND_MAINTAINER 时
+        // 该字段才成为操作门槛，此时默认填自己可避免「责任人留空 → 创建者反被锁」。
+        // ⚠️ 必须吞掉异常：系统初始化 initDefaultFlinkSQLEnv 等**非 web 上下文**没有登录态，
+        //    StpUtil 会抛 NotWebContextException —— 不捕获会导致应用启动失败（首次部署已实测踩到）。
+        if (task.getFirstLevelOwner() == null) {
+            try {
+                task.setFirstLevelOwner(StpUtil.getLoginIdAsInt());
+            } catch (Exception e) {
+                log.debug("Skip firstLevelOwner fallback (no login context): {}", e.getMessage());
+            }
+        }
         Task byId = getById(task.getId());
         if (byId != null && JobLifeCycle.PUBLISH.equalsValue(byId.getStep())) {
             throw new BusException(Status.TASK_IS_ONLINE.getMessage());

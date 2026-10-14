@@ -174,6 +174,34 @@ export enum PermissionConstants {
   REGISTRATION_RESOURCE_UPLOAD = '/registration/resource/upload',
 
   /**
+   * 2026-10-14 菜单与权限登记缺口修复新增
+   *
+   * 说明：常量值必须与 dinky_sys_menu 中对应 F 项的 path **完全一致**
+   * （useAccess 的匹配是精确相等，见 src/hooks/useAccess.tsx）。
+   */
+  // Skills（页面 + 5 个按钮）
+  REGISTRATION_SKILL = '/registration/skill',
+  REGISTRATION_SKILL_VIEW = '/registration/skill/view',
+  REGISTRATION_SKILL_ADD = '/registration/skill/add',
+  REGISTRATION_SKILL_SAVE = '/registration/skill/save',
+  REGISTRATION_SKILL_DELETE = '/registration/skill/delete',
+  REGISTRATION_SKILL_FILE = '/registration/skill/file',
+  /**
+   * 2026-10-14 三档可见性：把 skill/doc 设为「全体公开」。
+   * 值必须等于菜单 F 项的 path（V20261014.1.4.6__skill_visibility.sql）。
+   */
+  REGISTRATION_SKILL_SHARE = '/registration/skill/share',
+  // 集群实例回收（后端已有权限点，此前菜单缺失）
+  REGISTRATION_CLUSTER_INSTANCE_RECYCLE = '/registration/cluster/instance/recycle',
+  // AI Chat（分级：使用 / 写操作）
+  // 注意：保持 3 段式（与后端的 aiChat:panel:use / aiChat:panel:write 自洽）——
+  //       超管通配符 *:*:* 按冒号分段匹配，2 段串会导致连超管都无法通过校验。
+  DATASTUDIO_AI_CHAT = '/aiChat/panel/use',
+  DATASTUDIO_AI_CHAT_WRITE = '/aiChat/panel/write',
+  // 类加载器 Jars
+  SETTINGS_CLASSLOADERJARS_VIEW = '/settings/classloaderjars/view',
+
+  /**
    * auth menu
    */
   AUTH_MENU_ADD_ROOT = '/auth/menu/createRoot',

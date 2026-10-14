@@ -56,4 +56,12 @@ public class SkillCreateDTO implements Serializable {
                     + "二者共用 dinky_skill 表与同一套可见性 / 权限模型，仅目录（skills/ 与 docs/）"
                     + "和主文件名（SKILL.md 与 DOC.md）不同")
     private String assetType;
+
+    @ApiModelProperty(
+            value = "Visibility",
+            dataType = "String",
+            example = "private",
+            notes = "2026-10-14 三档可见性：private（默认，仅自己）/ tenant（同租户共享）/ public（全体公开）。"
+                    + "空值按 private；非法值抛业务异常。创建后可由属主通过 /api/skill/visibility 修改。")
+    private String visibility;
 }
