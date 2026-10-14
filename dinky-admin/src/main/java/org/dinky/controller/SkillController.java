@@ -25,12 +25,15 @@ import org.dinky.data.dto.SkillCreateDTO;
 import org.dinky.data.dto.SkillFileRemoveDTO;
 import org.dinky.data.dto.SkillFileWriteDTO;
 import org.dinky.data.dto.SkillSaveDTO;
+import org.dinky.data.dto.SkillVisibilityDTO;
 import org.dinky.data.enums.BusinessType;
+import org.dinky.data.exception.BusException;
 import org.dinky.data.model.Skill;
 import org.dinky.data.result.Result;
 import org.dinky.data.vo.SkillDetailVO;
 import org.dinky.data.vo.SkillFileNode;
 import org.dinky.service.SkillService;
+import org.dinky.service.impl.SkillServiceImpl;
 
 import java.util.List;
 
@@ -116,7 +119,9 @@ public class SkillController {
                 skillCreateDTO.getDescription(),
                 // 阶段 4b 补（UAT R2）：assetType 为空按 skill 处理，兼容旧前端
                 skillCreateDTO.getAssetType(),
-                StpUtil.getLoginIdAsInt()));
+                StpUtil.getLoginIdAsInt(),
+                // 2026-10-14 三档可见性：private（默认）/ tenant / public，为空按 private
+                skillCreateDTO.getVisibility()));
     }
 
     @PostMapping("/save")
@@ -127,6 +132,23 @@ public class SkillController {
             mode = SaMode.OR)
     public Result<Skill> save(@RequestBody SkillSaveDTO skillSaveDTO) {
         return Result.succeed(skillService.save(skillSaveDTO.getId(), skillSaveDTO.getContent()));
+    }
+
+    @PostMapping("/visibility")
+    @ApiOperation("Update Skill Visibility")
+    @Log(title = "Update Skill Visibility", businessType = BusinessType.UPDATE)
+    @SaCheckPermission(
+            value = {PermissionConstants.REGISTRATION_SKILL_SAVE, PermissionConstants.REGISTRATION_SKILL_SHARE},
+            mode = SaMode.OR)
+    public Result<Skill> updateVisibility(@RequestBody SkillVisibilityDTO skillVisibilityDTO) {
+        String visibility = SkillServiceImpl.normalizeVisibility(skillVisibilityDTO.getVisibility());
+        // 「面向全体公开」是组织级动作：上面的 OR 只是准入门槛，public 必须额外持有 share 权限
+        if (SkillServiceImpl.VISIBILITY_PUBLIC.equals(visibility)
+                && !StpUtil.hasPermission(PermissionConstants.REGISTRATION_SKILL_SHARE)) {
+            throw new BusException("无权将资产设置为「全体公开」，请联系管理员分配 registration:skill:share 权限");
+        }
+        return Result.succeed(
+                skillService.updateVisibility(skillVisibilityDTO.getId(), visibility, StpUtil.getLoginIdAsInt()));
     }
 
     @DeleteMapping("/remove")

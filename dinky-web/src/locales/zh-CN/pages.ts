@@ -696,6 +696,11 @@ export default {
   'pages.skill.visibility': '可见性',
   'pages.skill.visibilityPrivate': '私有',
   'pages.skill.visibilityTenant': '同租户共享',
+  'pages.skill.visibilityPublic': '全体公开',
+  'pages.skill.visibilityChange': '可见性',
+  'pages.skill.visibilityChangeTitle': '修改可见性',
+  'pages.skill.visibilityHint':
+    '私有：仅自己可见；同租户共享：本租户成员可查看；全体公开：所有用户可查看（需相应权限）。共享与公开均为只读，仅创建者可编辑或删除该资产。',
   'pages.skill.version': '版本',
   'pages.skill.updateTime': '更新时间',
   'pages.skill.action': '操作',

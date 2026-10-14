@@ -34,6 +34,7 @@ import org.dinky.resource.BaseResourceManager;
 import org.dinky.service.SkillService;
 import org.dinky.service.resource.ResourcesService;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -75,6 +76,9 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
     /** 可见性：私有（默认） */
     public static final String VISIBILITY_PRIVATE = "private";
 
+    /** 可见性：全体公开（2026-10-14 三档可见性；不限租户，所有登录用户可见） */
+    public static final String VISIBILITY_PUBLIC = "public";
+
     /** 来源：本地创建 */
     public static final String SOURCE_LOCAL = "local";
 
@@ -93,7 +97,20 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
         if (StrUtil.isBlank(name)) {
             return null;
         }
-        return getOne(visibleWrapper().eq(Skill::getName, StrUtil.trim(name)).last("limit 1"), false);
+        // 同名资产可跨属主共存（存储路径已按属主隔离）：先取候选，再按「自己的 > 全体公开 >
+        // 同租户共享 > 最新」挑一条，保证 @skill/<name> 优先命中自己的资产。
+        List<Skill> candidates =
+                list(visibleWrapper().eq(Skill::getName, StrUtil.trim(name)).last("limit 10"));
+        if (candidates.isEmpty()) {
+            return null;
+        }
+        Integer me = currentUserId();
+        Comparator<Skill> byMine = Comparator.comparingInt((Skill s) -> me.equals(s.getOwnerId()) ? 0 : 1);
+        Comparator<Skill> byVisibility = Comparator.comparingInt(s -> visibilityRank(s.getVisibility()));
+        Comparator<Skill> byTime = Comparator.comparing(
+                Skill::getUpdateTime, Comparator.nullsLast(Comparator.<LocalDateTime>reverseOrder()));
+        candidates.sort(byMine.thenComparing(byVisibility).thenComparing(byTime));
+        return candidates.get(0);
     }
 
     @Override
@@ -106,12 +123,17 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
         if (me.equals(skill.getOwnerId())) {
             return skill;
         }
-        Integer tenantId = currentTenantId();
-        if (Boolean.TRUE.equals(skill.getEnabled())
-                && VISIBILITY_TENANT.equals(skill.getVisibility())
-                && tenantId != null
-                && tenantId.equals(skill.getTenantId())) {
-            return skill;
+        if (Boolean.TRUE.equals(skill.getEnabled())) {
+            // 全体公开：不限租户，tenantId 为 null（异步线程 / 未选租户）时同样放行
+            if (VISIBILITY_PUBLIC.equals(skill.getVisibility())) {
+                return skill;
+            }
+            Integer tenantId = currentTenantId();
+            if (VISIBILITY_TENANT.equals(skill.getVisibility())
+                    && tenantId != null
+                    && tenantId.equals(skill.getTenantId())) {
+                return skill;
+            }
         }
         throw new BusException("无权访问该 skill");
     }
@@ -127,12 +149,18 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
     @Override
     @Transactional(rollbackFor = Exception.class)
     public Skill create(String name, String description, Integer actorId) {
-        return create(name, description, SkillDocParser.ASSET_TYPE_SKILL, actorId);
+        return create(name, description, SkillDocParser.ASSET_TYPE_SKILL, actorId, VISIBILITY_PRIVATE);
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public Skill create(String name, String description, String assetType, Integer actorId) {
+        return create(name, description, assetType, actorId, VISIBILITY_PRIVATE);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Skill create(String name, String description, String assetType, Integer actorId, String visibility) {
         String type = SkillDocParser.ASSET_TYPE_DOC.equalsIgnoreCase(StrUtil.trimToEmpty(assetType))
                 ? SkillDocParser.ASSET_TYPE_DOC
                 : SkillDocParser.ASSET_TYPE_SKILL;
@@ -151,17 +179,24 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
             throw new BusException("description 过长（最多 " + SkillDocParser.MAX_DESCRIPTION_LENGTH + " 字符）");
         }
         Integer me = resolveActor(actorId);
+        String vis = normalizeVisibility(visibility);
         long exists = count(
                 new LambdaQueryWrapper<Skill>().eq(Skill::getName, skillName).eq(Skill::getOwnerId, me));
         if (exists > 0) {
             throw new BusException("同名" + label + "已存在：" + skillName);
         }
 
-        // ① 目录：/skills/<name>/ 或 /docs/<name>/（两类资产目录分离，故同名不冲突；幂等创建父目录）
+        // ① 目录：/skills/<u<ownerId>>/<name>/ 或 /docs/<u<ownerId>>/<name>/（幂等创建父目录）
+        //    - 两类资产目录分离（skills/ 与 docs/），故同名不冲突；
+        //    - 2026-10-14 起再按属主分一层：此前所有用户都落在 /skills/<name>/，不同用户建同名资产会
+        //      复用同一目录并撞 dinky_resources 的 (full_name, type) 唯一键（表现为 HTTP 500），
+        //      若只写 references/ 子文件还会静默互相覆盖。
         String rootDir = SkillDocParser.rootDirOf(type);
         String mainFileName = SkillDocParser.mainFileOf(type);
         TreeNodeDTO root = resourcesService.createFolderOrGet(-1, rootDir, isDoc ? "AI 知识文档根目录" : "AI Skills 根目录");
-        TreeNodeDTO skillDir = resourcesService.createFolderOrGet(Convert.toInt(root.getId(), -1), skillName, desc);
+        TreeNodeDTO ownerDir = resourcesService.createFolderOrGet(
+                Convert.toInt(root.getId(), -1), SkillDocParser.ownerDirName(me), "用户 " + me + " 的 AI 资产");
+        TreeNodeDTO skillDir = resourcesService.createFolderOrGet(Convert.toInt(ownerDir.getId(), -1), skillName, desc);
         String dirFullName = StrUtil.nullToEmpty(Convert.toStr(skillDir.getPath()));
 
         // ② 主文件（SKILL.md / DOC.md）：先建资源记录，再写内容（writeContent 负责写文件 + 维护 size + 失效缓存）
@@ -186,7 +221,7 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
         skill.setDirFullName(dirFullName);
         skill.setOwnerId(me);
         skill.setTenantId(currentTenantId());
-        skill.setVisibility(VISIBILITY_PRIVATE);
+        skill.setVisibility(vis);
         skill.setEnabled(true);
         skill.setSource(SOURCE_LOCAL);
         skill.setAssetType(type);
@@ -224,6 +259,38 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
         skill.setContentHash(SecureUtil.sha256(text));
         updateById(skill);
         log.info("Skill saved: name={}, version={}", skill.getName(), skill.getVersion());
+        return skill;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Skill updateVisibility(Long id, String visibility, Integer actorId) {
+        Skill skill = getById(id);
+        if (skill == null) {
+            throw new BusException("skill 不存在");
+        }
+        checkOwner(skill, actorId);
+        String vis = normalizeVisibility(visibility);
+        boolean changed = false;
+        // 「同租户共享」必须带租户：早期在无租户上下文下创建的资产 tenant_id 为空，此处补一次，
+        // 否则同租户成员按「tenant_id 相等」判定会看不到该资产。
+        if (VISIBILITY_TENANT.equals(vis) && skill.getTenantId() == null) {
+            Integer tenantId = currentTenantId();
+            if (tenantId == null) {
+                throw new BusException("当前请求未携带租户上下文，无法设置为「同租户共享」");
+            }
+            skill.setTenantId(tenantId);
+            changed = true;
+        }
+        if (!StrUtil.equals(vis, skill.getVisibility())) {
+            skill.setVisibility(vis);
+            changed = true;
+        }
+        if (!changed) {
+            return skill;
+        }
+        updateById(skill);
+        log.info("Skill visibility updated: id={}, name={}, visibility={}", id, skill.getName(), vis);
         return skill;
     }
 
@@ -425,7 +492,11 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
 
     /**
      * 可见性条件（<b>显式拼接，不依赖插件 / ThreadLocal 过滤</b>）：
-     * {@code enabled = 1 AND asset_type = 'skill' AND (owner_id = :me OR (visibility = 'tenant' AND tenant_id = :myTenant))}
+     * {@code enabled = 1 AND asset_type IN ('skill','doc') AND (owner_id = :me
+     * OR visibility = 'public' OR (visibility = 'tenant' AND tenant_id = :myTenant))}
+     *
+     * <p>注意 {@code public} 分支<b>不依赖 tenantId</b>：公开资产跨租户可见，且在没有租户上下文
+     * （异步线程）时也应命中。
      */
     private LambdaQueryWrapper<Skill> visibleWrapper() {
         Integer me = currentUserId();
@@ -437,11 +508,40 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
                 .in(Skill::getAssetType, Arrays.asList(SkillDocParser.ASSET_TYPE_SKILL, SkillDocParser.ASSET_TYPE_DOC));
         wrapper.and(w -> {
             w.eq(Skill::getOwnerId, me);
+            // 2026-10-14 三档可见性：全体公开，不限租户
+            w.or(x -> x.eq(Skill::getVisibility, VISIBILITY_PUBLIC));
             if (tenantId != null) {
                 w.or(x -> x.eq(Skill::getVisibility, VISIBILITY_TENANT).eq(Skill::getTenantId, tenantId));
             }
         });
         return wrapper;
+    }
+
+    /**
+     * 可见性取值归一化：null / 空 → {@code private}；非法值抛 {@link BusException}。
+     *
+     * <p>声明为 {@code public static} 供 Controller 复用（在「全体公开」动作前做权限收紧判断）。
+     */
+    public static String normalizeVisibility(String visibility) {
+        String value = StrUtil.trimToEmpty(visibility).toLowerCase();
+        if (StrUtil.isBlank(value)) {
+            return VISIBILITY_PRIVATE;
+        }
+        if (VISIBILITY_PRIVATE.equals(value) || VISIBILITY_TENANT.equals(value) || VISIBILITY_PUBLIC.equals(value)) {
+            return value;
+        }
+        throw new BusException("可见性取值不合法：" + visibility + "（仅支持 private / tenant / public）");
+    }
+
+    /** 可见性优先级：公开（0）&gt; 同租户共享（1）&gt; 私有（2）；用于同名资产择优 */
+    private static int visibilityRank(String visibility) {
+        if (VISIBILITY_PUBLIC.equals(visibility)) {
+            return 0;
+        }
+        if (VISIBILITY_TENANT.equals(visibility)) {
+            return 1;
+        }
+        return 2;
     }
 
     private void checkOwner(Skill skill, Integer actorId) {

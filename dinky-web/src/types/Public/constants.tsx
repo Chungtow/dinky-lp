@@ -186,6 +186,11 @@ export enum PermissionConstants {
   REGISTRATION_SKILL_SAVE = '/registration/skill/save',
   REGISTRATION_SKILL_DELETE = '/registration/skill/delete',
   REGISTRATION_SKILL_FILE = '/registration/skill/file',
+  /**
+   * 2026-10-14 三档可见性：把 skill/doc 设为「全体公开」。
+   * 值必须等于菜单 F 项的 path（V20261014.1.4.6__skill_visibility.sql）。
+   */
+  REGISTRATION_SKILL_SHARE = '/registration/skill/share',
   // 集群实例回收（后端已有权限点，此前菜单缺失）
   REGISTRATION_CLUSTER_INSTANCE_RECYCLE = '/registration/cluster/instance/recycle',
   // AI Chat（分级：使用 / 写操作）

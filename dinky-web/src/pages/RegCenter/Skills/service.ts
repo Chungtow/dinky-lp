@@ -26,7 +26,8 @@ import {
   SkillFileTargetParams,
   SkillFileWriteParams,
   SkillInfo,
-  SkillSaveParams
+  SkillSaveParams,
+  SkillVisibilityParams
 } from '@/types/RegCenter/skill';
 import { l } from '@/utils/intl';
 
@@ -40,9 +41,19 @@ export const listSkills = async (): Promise<SkillInfo[]> => {
 export const detailSkill = async (id: number): Promise<SkillDetail | undefined> =>
   queryDataByParams<SkillDetail>(API_CONSTANTS.SKILL_DETAIL, { id });
 
-/** 新建 skill：后端会建目录 /skills/<name>/ 并写入 SKILL.md 模板 */
+/**
+ * 新建 skill：后端会建目录 `/skills/u<ownerId>/<name>/`（2026-10-14 起按属主隔离，
+ * 避免不同用户建同名资产时复用同一目录并撞资源表唯一键）并写入 SKILL.md 模板。
+ */
 export const createSkill = async (params: SkillCreateParams, cb?: () => void) =>
   handleOption(API_CONSTANTS.SKILL_CREATE, l('pages.skill.create'), params, cb);
+
+/**
+ * 修改可见性（2026-10-14 三档：private / tenant / public）。
+ * 仅属主可调；设为「全体公开」还需 `registration:skill:share` 权限（后端二次校验）。
+ */
+export const updateSkillVisibility = async (params: SkillVisibilityParams, cb?: () => void) =>
+  handleOption(API_CONSTANTS.SKILL_VISIBILITY, l('pages.skill.visibilityChange'), params, cb);
 
 /** 保存 SKILL.md 正文（仅属主；后端会重新解析 frontmatter 并回写元数据） */
 export const saveSkill = async (params: SkillSaveParams, cb?: () => void) =>

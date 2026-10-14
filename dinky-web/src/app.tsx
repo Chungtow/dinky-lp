@@ -17,6 +17,7 @@
  *
  */
 
+import ErrorBoundary from '@/components/ErrorBoundary';
 import Footer from '@/components/Footer';
 import RightContent from '@/components/RightContent';
 import { AccessContextProvider } from '@/hooks/useAccess';
@@ -137,7 +138,11 @@ export const layout: RunTimeLayoutConfig = ({ initialState }) => {
       ) : (
         <AccessContextProvider currentUser={initialState?.currentUser}>
           {/* @ts-ignore */}
-          <FullScreenProvider key={location.pathname}>{children}</FullScreenProvider>
+          <FullScreenProvider key={location.pathname}>
+            {/* 2026-10-14：应用级错误边界。key=pathname 使切换路由时边界重建——
+                单页崩溃不再卸载整棵根树，用户从崩溃页切走即可恢复（无需硬刷新）。 */}
+            <ErrorBoundary key={location.pathname}>{children}</ErrorBoundary>
+          </FullScreenProvider>
         </AccessContextProvider>
       );
     }

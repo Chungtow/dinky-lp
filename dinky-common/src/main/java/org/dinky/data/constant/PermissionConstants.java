@@ -269,6 +269,15 @@ public class PermissionConstants {
     public static final String REGISTRATION_SKILL_FILE = "registration:skill:file";
 
     /**
+     * Skills 可见性：把资产设置为「全体公开」所需的权限点（2026-10-14 三档可见性）。
+     *
+     * <p>「私有 / 同租户共享」沿用 {@link #REGISTRATION_SKILL_SAVE}；只有「面向全体公开」这一组织级
+     * 动作单独管控。权限串**必须 ≥ 3 段**，否则连超管 {@code *:*:*} 都匹配不上
+     * （见 V20261014.1.4.5 的实测教训）。
+     */
+    public static final String REGISTRATION_SKILL_SHARE = "registration:skill:share";
+
+    /**
      * AI Chat（分级：使用 / 写操作）
      *
      * <p>aiChat:panel:use → 面板入口、对话、只读工具；aiChat:panel:write → 写审计 / 确认 / 取消（落盘闸门）。

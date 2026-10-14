@@ -202,6 +202,8 @@ export enum API_CONSTANTS {
   SKILL_CREATE = '/api/skill/create',
   SKILL_SAVE = '/api/skill/save',
   SKILL_REMOVE = '/api/skill/remove',
+  // 2026-10-14 三档可见性：修改 skill/doc 可见性（private / tenant / public）
+  SKILL_VISIBILITY = '/api/skill/visibility',
   SKILL_FILES = '/api/skill/files',
   SKILL_FILE_READ = '/api/skill/file/read',
   SKILL_FILE_WRITE = '/api/skill/file/write',

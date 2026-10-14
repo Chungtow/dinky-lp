@@ -37,7 +37,14 @@ export default () => {
   const showServer = useHookRequest(getAllConfig, {
     defaultParams: [],
     onSuccess: (res: any) => {
-      for (const config of res.metrics) {
+      // 2026-10-14 修复（P4）：/api/sysConfig/getAll 未返回 metrics 时，原实现会抛
+      // "Cannot read properties of undefined (reading 'metrics')"。本页自本批起重新成为
+      // /metrics/job 的路由容器页（此前是死代码），必须守卫空值，否则等于把一个崩溃换成另一个。
+      const metrics = res?.metrics;
+      if (!Array.isArray(metrics)) {
+        return false;
+      }
+      for (const config of metrics) {
         if (config.key === 'sys.metrics.settings.sys.enable') {
           return config.value;
         }

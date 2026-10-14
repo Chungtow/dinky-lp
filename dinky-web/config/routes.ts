@@ -316,7 +316,12 @@ export default [
         path: '/metrics/job',
         name: 'job',
         hideInMenu: true,
-        component: './Metrics/JobMetricsList'
+        // 2026-10-14 修复（P4）：此前直接挂子组件 JobMetricsList，而 Umi 渲染路由组件时不传任何 props
+        // （React.createElement(Component, null)）→ 组件内 timeRange 为 undefined → useEffect 里读
+        // timeRange.isReal 抛 TypeError，React 18 下未捕获错误会卸载整棵根树 → 表现为「监控页报错，
+        // 其它页面也一起报错，必须硬刷新」。改挂容器页：它持有 timeRange state、提供时间筛选，
+        // 并在 Dinky 服务未开启时给出降级提示。
+        component: './Metrics'
       }
     ]
   },

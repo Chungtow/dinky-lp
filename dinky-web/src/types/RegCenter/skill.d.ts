@@ -24,7 +24,7 @@ export type SkillInfo = {
   dirFullName?: string;
   ownerId?: number;
   tenantId?: number;
-  /** private | tenant */
+  /** private（仅自己）| tenant（同租户共享）| public（全体公开） */
   visibility?: string;
   enabled?: boolean;
   /** local | third_party */
@@ -44,6 +44,9 @@ export type SkillDetail = {
   editable?: boolean;
 };
 
+/** 可见性（2026-10-14 三档：私有 / 同租户共享 / 全体公开） */
+export type SkillVisibility = 'private' | 'tenant' | 'public';
+
 /** 新建 skill 入参 */
 export type SkillCreateParams = {
   name: string;
@@ -53,6 +56,14 @@ export type SkillCreateParams = {
    * 二者共用后端同一张表与同一套权限模型，仅存放目录（skills/ 与 docs/）和主文件名不同。
    */
   assetType?: 'skill' | 'doc';
+  /** 2026-10-14：可见性；缺省 `private`（后端为空时同样按 private 处理） */
+  visibility?: SkillVisibility;
+};
+
+/** 修改可见性入参（2026-10-14 三档） */
+export type SkillVisibilityParams = {
+  id: number;
+  visibility: SkillVisibility;
 };
 
 /** 保存 skill 正文入参 */
