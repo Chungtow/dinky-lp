@@ -166,7 +166,10 @@ const SkillOverView = () => {
     { title: l('pages.skill.updateTime'), dataIndex: 'updateTime', width: 170 },
     {
       title: l('pages.skill.action'),
-      width: 230,
+      // 2026-10-14：本列为 4 个操作（查看/编辑、文件、可见性、删除），原 230 会裁掉末尾的删除按钮；
+      // 同时给 Table 加了 scroll.x 兜底，窄屏横向滚动而非裁切；右侧固定，滚动时按钮始终可见。
+      width: 300,
+      fixed: 'right' as const,
       render: (_: any, row: SkillInfo) => (
         <Space>
           <Authorized path={PermissionConstants.REGISTRATION_SKILL_SAVE}>
@@ -244,6 +247,10 @@ const SkillOverView = () => {
           dataSource={rows}
           // 列定义由 antd 动态推导，这里放开类型以简化
           columns={columns as any}
+          // 2026-10-14：各固定列合计 960px +「说明」列自适应。用 scroll.x 兜底——
+          // 宽屏时表格铺满容器（多余宽度分给「说明」列），窄屏时横向滚动，
+          // 而不是像之前那样把操作列的按钮直接裁掉。
+          scroll={{ x: 1220 }}
           pagination={{ pageSize: 10, showSizeChanger: false }}
         />
       </Card>
