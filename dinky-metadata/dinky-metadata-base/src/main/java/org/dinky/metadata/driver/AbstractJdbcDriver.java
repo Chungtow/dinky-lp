@@ -645,7 +645,12 @@ public abstract class AbstractJdbcDriver extends AbstractDriver<AbstractJdbcConf
         try (Statement statement = conn.get().createStatement()) {
             // logger.info("执行sql的连接id：" + ((DruidPooledConnection)
             // conn).getTransactionInfo().getId());
-            statement.execute(sql);
+            RunningSqlRegistry.bindStatement(statement, sql);
+            try {
+                statement.execute(sql);
+            } finally {
+                RunningSqlRegistry.unbindStatement();
+            }
         }
         return true;
     }
@@ -655,7 +660,12 @@ public abstract class AbstractJdbcDriver extends AbstractDriver<AbstractJdbcConf
         Asserts.checkNullString(sql, "Sql 语句为空");
         int res = 0;
         try (Statement statement = conn.get().createStatement()) {
-            res = statement.executeUpdate(sql);
+            RunningSqlRegistry.bindStatement(statement, sql);
+            try {
+                res = statement.executeUpdate(sql);
+            } finally {
+                RunningSqlRegistry.unbindStatement();
+            }
         }
         return res;
     }
@@ -704,6 +714,7 @@ public abstract class AbstractJdbcDriver extends AbstractDriver<AbstractJdbcConf
         int count = 0;
         try {
             preparedStatement = conn.get().prepareStatement(sql);
+            RunningSqlRegistry.bindStatement(preparedStatement, sql);
             results = preparedStatement.executeQuery();
             if (Asserts.isNull(results)) {
                 result.setSuccess(true);
@@ -745,6 +756,7 @@ public abstract class AbstractJdbcDriver extends AbstractDriver<AbstractJdbcConf
             result.error(LogUtil.getError(e));
             log.error("Query failed", e);
         } finally {
+            RunningSqlRegistry.unbindStatement();
             close(preparedStatement, results);
         }
         result.setRowData(datas);
@@ -757,6 +769,15 @@ public abstract class AbstractJdbcDriver extends AbstractDriver<AbstractJdbcConf
      */
     @Override
     public JdbcSelectResult executeSql(String sql, Integer limit) {
+        RunningSqlRegistry.begin(conn.get(), config == null ? null : config.getName());
+        try {
+            return doExecuteSql(sql, limit);
+        } finally {
+            RunningSqlRegistry.end();
+        }
+    }
+
+    private JdbcSelectResult doExecuteSql(String sql, Integer limit) {
         // TODO 改为ProcessStep注释
         log.info("Start parse sql...");
         List<SQLStatement> stmtList;
@@ -775,6 +796,12 @@ public abstract class AbstractJdbcDriver extends AbstractDriver<AbstractJdbcConf
         log.info("Start execute sql...");
         for (SQLStatement item : stmtList) {
             item.setAfterSemi(false);
+            if (RunningSqlRegistry.isCancelRequested()) {
+                // 已收到取消请求：不再执行剩余语句，直接返回（由上层映射为 CANCEL 状态）
+                log.warn("Cancel requested, skip the remaining statements.");
+                result.error("SQL execution canceled by user");
+                return result;
+            }
             String type = item.getClass().getSimpleName();
             if (type.toUpperCase().contains("SELECT")
                     || type.toUpperCase().contains("SHOW")

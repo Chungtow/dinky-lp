@@ -693,13 +693,16 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
   }, [currentState, updateAction]);
 
   const handleStop = useCallback(async () => {
-    await cancelTask('', currentState.taskId, false);
-    setCurrentState((prevState) => {
-      return {
-        ...prevState,
-        status: 'CANCEL'
-      };
-    });
+    // 只有后端受理取消（返回成功）才把本地状态置为 CANCEL，避免"假停止"
+    const stopAccepted = await cancelTask('', currentState.taskId, false);
+    if (stopAccepted) {
+      setCurrentState((prevState) => {
+        return {
+          ...prevState,
+          status: 'CANCEL'
+        };
+      });
+    }
     setIsRunning(false);
   }, [currentState.taskId]);
 
