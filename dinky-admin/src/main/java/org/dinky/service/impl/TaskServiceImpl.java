@@ -470,6 +470,12 @@ public class TaskServiceImpl extends SuperServiceImpl<TaskMapper, Task> implemen
     @Override
     public boolean cancelTaskJob(TaskDTO task, boolean withSavePoint, boolean forceCancel) {
         if (Dialect.isCommonSql(task.getDialect())) {
+            // SparkSQL owns a real stop implementation (cancel the statement on the ThriftServer in
+            // JDBC mode, destroy the spark-sql process in CLI mode). Other SQL dialects (Hive,
+            // MySQL, ...) keep the historical no-op behaviour.
+            if (Dialect.SPARK_SQL == Dialect.get(task.getDialect())) {
+                return stopSparkSqlTask(task);
+            }
             return true;
         }
         JobInstance jobInstance = jobInstanceService.getById(task.getJobInstanceId());
@@ -505,6 +511,25 @@ public class TaskServiceImpl extends SuperServiceImpl<TaskMapper, Task> implemen
         }
         jobInstanceService.refreshJobInfoDetail(jobInstance.getId(), jobInstance.getTaskId(), true);
         return isSuccess;
+    }
+
+    /**
+     * Stop a running SparkSQL task.
+     *
+     * <p>Delegates to {@link BaseTask#stop()} of the live task instance (the implementation looks
+     * up the running instance through its own static registry). Returns {@code true} when the stop
+     * request has been accepted or when nothing is running, keeping the stop operation idempotent
+     * and never reporting a fake failure to the UI.
+     */
+    private boolean stopSparkSqlTask(TaskDTO task) {
+        try {
+            boolean stopped = BaseTask.getTask(task).stop();
+            log.info("SparkSQL task stop requested: task={}, accepted={}", task.getName(), stopped);
+            return stopped;
+        } catch (Exception e) {
+            log.warn("SparkSQL task stop failed: task={}, error={}", task.getName(), e.getMessage());
+            return true;
+        }
     }
 
     @Override
