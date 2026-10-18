@@ -87,6 +87,23 @@ const RECENT_MENTION_KEY = 'dinky.ai-chat.recent-mentions';
 /** 纯修饰键（按下它们不算"打断 @串两下删除"） */
 const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Dead']);
 
+/**
+ * 按用户输入的数据源名解析出**真实数据源对象**（大小写不敏感）。
+ *
+ * <p>数据源名允许含大写（如 `STS-lpdw`），而 `@source/` 的层级解析早期把整串小写化后用
+ * `name === typed` 精确匹配，导致第二层（库）永远查不到 → 静默 return、不给候选。
+ * 统一走这里解析，命中后一律使用**规范名** `ds.name`。见 `20261018` 计划 F6。
+ */
+const resolveSourceDs = (list: any[], typed: string) => {
+  if (!typed) {
+    return undefined;
+  }
+  return (
+    list.find((item: any) => item.name === typed) ??
+    list.find((item: any) => `${item.name}`.toLowerCase() === typed.toLowerCase())
+  );
+};
+
 type AiChatProps = {
   tabs: any[];
   activeTab?: string;
@@ -291,7 +308,9 @@ const AiChat = (props: AiChatProps) => {
    * 而 {@code @source/ds/db/} 表示"库已选定，要看表列表"（下一层）——两者字符串接近但语义不同。
    */
   const sourceQuery = useMemo(() => {
-    const m = /^source[-/]([^\s]*)$/.exec(mentionQuery.trim().toLowerCase());
+    // 2026-10-18 修复：**不再整体小写化**。数据源名可能含大写（`STS-lpdw`），整体小写会让
+    // 第二层的精确匹配永远落空（明明有库却不出候选）。大小写不敏感交给 i 标志与逐处比较。
+    const m = /^source[-/]([^\s]*)$/i.exec(mentionQuery.trim());
     if (!m) {
       return null;
     }
@@ -374,12 +393,11 @@ const AiChat = (props: AiChatProps) => {
     if (!sourceQuery || sourceQuery.parts.length < 1) {
       return;
     }
-    const dsName = sourceQuery.parts[0];
-    if (!dsName || sourceTreeRef.current.has(dsName)) {
-      return;
-    }
-    const ds = dataSources.find((item: any) => item.name === dsName);
-    if (!ds) {
+    const typed = sourceQuery.parts[0];
+    // 2026-10-18 修复：按大小写不敏感解析，并以**规范名** `ds.name` 作缓存 key
+    //（此前用精确匹配，`STS-lpdw` 这类含大写的名字直接查不到 → 静默 return → 第二层永远空）。
+    const ds = resolveSourceDs(dataSources, typed);
+    if (!ds || sourceTreeRef.current.has(ds.name)) {
       return;
     }
     let cancelled = false;
@@ -388,13 +406,16 @@ const AiChat = (props: AiChatProps) => {
         if (cancelled) {
           return;
         }
-        sourceTreeRef.current.set(dsName, res ?? []);
+        // 失败时服务层返回 null：**不写缓存**，留给下一次输入重试（此前会缓存成 []，
+        // 配合 has() 判断导致一次失败后整个会话都不再拉取）。
+        if (res === null || res === undefined) {
+          return;
+        }
+        sourceTreeRef.current.set(ds.name, res);
         setSourceTreeTick((tick) => tick + 1);
       })
       .catch(() => {
-        if (!cancelled) {
-          sourceTreeRef.current.set(dsName, []);
-        }
+        // 同上：不缓存失败结果
       });
     return () => {
       cancelled = true;
@@ -482,15 +503,18 @@ const AiChat = (props: AiChatProps) => {
     // provider 6（P1）：@source/ 跨数据源引用——逐层懒加载：数据源 → 库 → 表。
     // 名字存的是"路径"（ds / ds/db / ds/db/tbl），与后端 AiChatMention.name 及（手打时）的文本一致。
     if (sourceQuery) {
-      const tree: any[] = sourceTreeRef.current.get(sourceQuery.parts[0]) ?? [];
+      // 2026-10-18 修复：统一按**规范名**（真实 `ds.name`）取缓存与拼路径，各层关键字大小写不敏感。
+      const ds = resolveSourceDs(dataSources, sourceQuery.parts[0] ?? '');
+      const dsName = ds?.name ?? '';
+      const tree: any[] = dsName ? sourceTreeRef.current.get(dsName) ?? [] : [];
       // 第一层：数据源名（或在数据源名上筛选）
       if (sourceQuery.parts.length <= 1 && !sourceQuery.trailing) {
-        const keyword = sourceQuery.parts[0] ?? '';
+        const keyword = (sourceQuery.parts[0] ?? '').toLowerCase();
         return dataSources
-          .filter((ds: any) => !keyword || `${ds.name}`.toLowerCase().includes(keyword))
-          .map((ds: any) => ({
+          .filter((item: any) => !keyword || `${item.name}`.toLowerCase().includes(keyword))
+          .map((item: any) => ({
             type: 'source' as const,
-            name: ds.name,
+            name: item.name,
             group: l('datastudio.aiChat.mention.groupSource')
           }))
           .slice(0, 20);
@@ -500,12 +524,12 @@ const AiChat = (props: AiChatProps) => {
         (sourceQuery.trailing && sourceQuery.parts.length === 1) ||
         (!sourceQuery.trailing && sourceQuery.parts.length === 2)
       ) {
-        const keyword = sourceQuery.trailing ? '' : sourceQuery.parts[1];
+        const keyword = (sourceQuery.trailing ? '' : sourceQuery.parts[1] ?? '').toLowerCase();
         return tree
           .filter((schema: any) => !keyword || `${schema.name}`.toLowerCase().includes(keyword))
           .map((schema: any) => ({
             type: 'source' as const,
-            name: `${sourceQuery.parts[0]}/${schema.name}`,
+            name: `${dsName}/${schema.name}`,
             group: l('datastudio.aiChat.mention.groupSourceDb')
           }))
           .slice(0, 30);
@@ -515,13 +539,14 @@ const AiChat = (props: AiChatProps) => {
         (sourceQuery.trailing && sourceQuery.parts.length === 2) ||
         (!sourceQuery.trailing && sourceQuery.parts.length === 3)
       ) {
-        const schema = tree.find((item: any) => item.name === sourceQuery.parts[1]);
-        const keyword = sourceQuery.trailing ? '' : sourceQuery.parts[2];
+        const dbKeyword = `${sourceQuery.parts[1] ?? ''}`.toLowerCase();
+        const schema = tree.find((item: any) => `${item.name}`.toLowerCase() === dbKeyword);
+        const keyword = (sourceQuery.trailing ? '' : sourceQuery.parts[2] ?? '').toLowerCase();
         return (schema?.tables ?? [])
           .filter((table: any) => !keyword || `${table.name}`.toLowerCase().includes(keyword))
           .map((table: any) => ({
             type: 'source' as const,
-            name: `${sourceQuery.parts[0]}/${sourceQuery.parts[1]}/${table.name}`,
+            name: `${dsName}/${schema.name}/${table.name}`,
             group: l('datastudio.aiChat.mention.groupSourceTable')
           }))
           .slice(0, 50);
