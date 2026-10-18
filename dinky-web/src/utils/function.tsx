@@ -95,6 +95,19 @@ export function getTenantByLocalStorage() {
 }
 
 /**
+ * 统一租户请求头（umi-request 拦截器与原生 fetch 共用）
+ *
+ * 租户上下文自「20261013 双槽租户交叉污染修复」起由**请求头**传递，前端不再写租户 Cookie。
+ * 因此任何**绕开统一请求层**的原生 fetch 都必须显式合并本头，否则后端租户上下文为空，
+ * 所有带租户过滤的查询会静默返回空——表现为「数据源不存在」「没有可用的数据源快照」
+ * （2026-10-18 AI Chat 元数据不可用事故，见 docs/plan/20261018-Dinky AI Chat 租户请求头丢失修复…）。
+ */
+export function buildTenantHeader(): Record<string, string> {
+  const tenantId = getTenantByLocalStorage();
+  return tenantId ? { tenantId } : {};
+}
+
+/**
  * set cookie by key
  * @param key
  * @param value

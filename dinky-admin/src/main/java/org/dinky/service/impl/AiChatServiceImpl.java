@@ -47,6 +47,7 @@ import org.dinky.ai.skill.SkillBrief;
 import org.dinky.ai.skill.SkillDoc;
 import org.dinky.ai.skill.SkillDocParser;
 import org.dinky.ai.skill.SkillRenderer;
+import org.dinky.context.TenantContextHolder;
 import org.dinky.data.dto.AiChatConfirmRequest;
 import org.dinky.data.dto.AiChatMention;
 import org.dinky.data.dto.AiChatMessage;
@@ -233,6 +234,19 @@ public class AiChatServiceImpl implements AiChatService {
                 ? (timeoutSeconds * (toolRounds + 1L) + toolTimeout * (long) toolRounds + 30L) * 1000L
                 : (timeoutSeconds + 30L) * 1000L;
         SseEmitter emitter = new SseEmitterUTF8(emitterTimeoutMs);
+        // 2026-10-18：租户上下文缺失必须"说出来"，不能静默降级。
+        // 租户标识由前端请求头 tenantId 传递（见 TenantResolver / requestErrorConfig.ts）；AI Chat 的
+        // 流式对话用原生 fetch，一旦漏带头，本线程租户上下文为空 → 下面所有带租户过滤的查询（getById /
+        // listEnabledAll）都会"查不到"，表现为「数据源不存在」「没有可用的数据源快照」，而模型仍会
+        // 正常作答，症状极其隐蔽。此处快速失败，明确告知是租户上下文问题，而非库里没有表。
+        if (TenantContextHolder.get() == null) {
+            log.warn(
+                    "AI Chat rejected: tenant context is empty (tenantId header missing), dialect: {}",
+                    request == null ? null : request.getDialect());
+            sendFrame(emitter, "error", "缺少租户上下文（请刷新页面并重新选择租户后重试）");
+            emitter.complete();
+            return emitter;
+        }
         // 数据源必须在请求线程中解析：对话跑在异步线程，此时租户上下文（ThreadLocal）已丢失，
         // 再按 id 查询会因租户过滤而查不到数据源（此前表现为"数据源不存在"）。
         DataBase dataBase = resolveDataBase(request);

@@ -20,6 +20,14 @@
 import { getData } from '@/services/api';
 import { queryDataByParams } from '@/services/BusinessCrud';
 import { API_CONSTANTS } from '@/services/endpoints';
+import { buildTenantHeader } from '@/utils/function';
+
+/**
+ * ⚠️ 本文件含**原生 fetch**（对话流 / 写确认 / 中断），它们**绕开 umi-request 拦截器**：
+ * 每个 fetch 的 headers **必须**合并 `buildTenantHeader()`，否则后端租户上下文为空 →
+ * 元数据查询静默返回空（「数据源不存在」/「没有可用的数据源快照」/`@source/` 渲染失败）。
+ * 事故与修复见 docs/plan/20261018-Dinky AI Chat 租户请求头丢失修复…。
+ */
 
 export type AiChatRole = 'user' | 'assistant';
 
@@ -364,7 +372,7 @@ export const confirmAiChat = async (
   try {
     const res = await fetch(API_CONSTANTS.AI_CHAT_CONFIRM, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...buildTenantHeader() },
       credentials: 'include',
       body: JSON.stringify({ runId, approve, confirmName })
     });
@@ -379,7 +387,7 @@ export const cancelAiChat = async (runId: string): Promise<boolean> => {
   try {
     const res = await fetch(API_CONSTANTS.AI_CHAT_CANCEL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...buildTenantHeader() },
       credentials: 'include',
       body: JSON.stringify({ runId })
     });
@@ -417,7 +425,7 @@ export const aiChatStream = async (
 ): Promise<void> => {
   const response = await fetch(API_CONSTANTS.AI_CHAT_CHAT, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...buildTenantHeader() },
     credentials: 'include',
     body: JSON.stringify(body),
     signal
