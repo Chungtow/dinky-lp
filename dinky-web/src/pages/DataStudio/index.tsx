@@ -68,6 +68,7 @@ const DataStudio: React.FC = (props: any) => {
     handleToolbarShowDesc,
     handleThemeCompact,
     saveToolbarLayout,
+    syncToolbarTabs,
     handleLayoutChange,
     updateAction,
     removeCenterTab,
@@ -151,6 +152,16 @@ const DataStudio: React.FC = (props: any) => {
       await queryResource();
     }
   }, [enableResource]);
+  /**
+   * 对齐工具栏 tab：redux-persist 会把历史上保存的 allTabs 回灌进 state（IndexedDB 异步），
+   * 不清缓存时新增 tab（如 P2 的「语义项目」）不会出现。挂载即对齐一次，rehydrate 完成后
+   * （800ms）再对齐一次 —— reducer 幂等，重复执行无副作用。
+   */
+  useEffect(() => {
+    syncToolbarTabs();
+    const timer = setTimeout(() => syncToolbarTabs(), 800);
+    return () => clearTimeout(timer);
+  }, []);
   useEffect(() => {
     const { actionType, params } = dataStudioState.action;
     if (actionType?.includes('task-run-')) {
