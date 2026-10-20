@@ -198,6 +198,9 @@ export enum PermissionConstants {
   //       超管通配符 *:*:* 按冒号分段匹配，2 段串会导致连超管都无法通过校验。
   DATASTUDIO_AI_CHAT = '/aiChat/panel/use',
   DATASTUDIO_AI_CHAT_WRITE = '/aiChat/panel/write',
+  // dbt 语义项目在线编辑（P2）：3 段式，与后端 datastudio:semantic:view / edit 自洽
+  DATASTUDIO_SEMANTIC_VIEW = '/datastudio/semantic/view',
+  DATASTUDIO_SEMANTIC_EDIT = '/datastudio/semantic/edit',
   // 类加载器 Jars
   SETTINGS_CLASSLOADERJARS_VIEW = '/settings/classloaderjars/view',
 

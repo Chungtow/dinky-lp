@@ -28,7 +28,7 @@ import {
   ResourceIcon
 } from '@/components/Icons/CustomIcons';
 import { TagAlignCenter } from '@/components/StyledComponents';
-import { ApiOutlined, RobotOutlined } from '@ant-design/icons';
+import { ApiOutlined, FileTextOutlined, RobotOutlined } from '@ant-design/icons';
 import { AuthorizedObject, useAccess } from '@/hooks/useAccess';
 import { SettingConfigKeyEnum } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/constants';
 import { DSConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/DSConfig';
@@ -40,6 +40,7 @@ import { MetricsConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverVi
 import { LLMConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/LLMConfig';
 import { KafkaConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/KafkaConfig';
 import { ResourcesConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/ResourcesConfig';
+import { SemanticConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/SemanticConfig';
 import { handleOption, queryDataByParams } from '@/services/BusinessCrud';
 import { RESPONSE_CODE } from '@/services/constants';
 import { API_CONSTANTS } from '@/services/endpoints';
@@ -65,7 +66,8 @@ const SettingOverView = () => {
     metrics: [],
     resource: [],
     llm: [],
-    kafka: []
+    kafka: [],
+    semantic: []
   });
 
   const fetchData = async () => {
@@ -267,6 +269,25 @@ const SettingOverView = () => {
           />
         ),
         path: PermissionConstants.SETTING_GLOBAL_KAFKA
+      },
+      {
+        // P2：语义层（开关 + 语义根）。编辑权限复用 datastudio:semantic:edit，
+        // 不为配置页单独再开一个权限点（迁移只登记 2 条权限行）
+        key: SettingConfigKeyEnum.SEMANTIC,
+        label: (
+          <TagAlignCenter>
+            <FileTextOutlined />
+            {l('sys.setting.semantic')}
+          </TagAlignCenter>
+        ),
+        children: (
+          <SemanticConfig
+            auth={PermissionConstants.DATASTUDIO_SEMANTIC_EDIT}
+            onSave={handleSaveSubmit}
+            data={data.semantic}
+          />
+        ),
+        path: PermissionConstants.DATASTUDIO_SEMANTIC_EDIT
       }
     ];
   };

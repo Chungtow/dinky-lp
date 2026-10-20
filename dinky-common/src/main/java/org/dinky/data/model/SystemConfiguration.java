@@ -743,6 +743,27 @@ public class SystemConfiguration {
             .defaultValue(true)
             .note(Status.SYS_RESOURCE_SETTINGS_PATH_STYLE_ACCESS_NOTE);
 
+    /**
+     * 语义层（P2）：是否开放「数据开发页 - dbt 语义项目在线编辑」。
+     *
+     * <p>默认 false。关闭时接口直接返回 403、前端不渲染 tab；与 HDFS 连通性无关。
+     */
+    private final Configuration<Boolean> semanticEnable = key(Status.SYS_SEMANTIC_SETTINGS_ENABLE)
+            .booleanType()
+            .defaultValue(false)
+            .note(Status.SYS_SEMANTIC_SETTINGS_ENABLE_NOTE);
+
+    /**
+     * 语义层（P2）：语义根路径（HDFS 绝对路径）。
+     *
+     * <p>与 JupyterLab 侧 `webhdfs.yml:sematic_base` 必须一致（现网 `/semantic`）；
+     * 其下每个一级目录即一个 dbt 语义项目，`_published/**` 只读。
+     */
+    private final Configuration<String> semanticHdfsBasePath = key(Status.SYS_SEMANTIC_SETTINGS_HDFS_BASE_PATH)
+            .stringType()
+            .defaultValue("/semantic")
+            .note(Status.SYS_SEMANTIC_SETTINGS_HDFS_BASE_PATH_NOTE);
+
     private final Configuration<Boolean> isOwnerReference = key(Status.SYS_ENV_SETTINGS_IS_OWNER_REFERENCE)
             .booleanType()
             .defaultValue(true)

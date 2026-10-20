@@ -1,0 +1,121 @@
+/*
+ *
+ *  Licensed to the Apache Software Foundation (ASF) under one or more
+ *  contributor license agreements.  See the NOTICE file distributed with
+ *  this work for additional information regarding copyright ownership.
+ *  The ASF licenses this file to You under the Apache License, Version 2.0
+ *  (the "License"); you may not use this file except in compliance with
+ *  the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ *
+ */
+
+package org.dinky.controller;
+
+import org.dinky.data.annotations.Log;
+import org.dinky.data.constant.PermissionConstants;
+import org.dinky.data.dto.SemanticFileSaveDTO;
+import org.dinky.data.enums.BusinessType;
+import org.dinky.data.result.Result;
+import org.dinky.data.vo.SemanticFileContentVO;
+import org.dinky.data.vo.SemanticFileNode;
+import org.dinky.data.vo.SemanticProjectVO;
+import org.dinky.service.SemanticFileService;
+
+import java.util.List;
+
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import cn.dev33.satoken.annotation.SaCheckLogin;
+import cn.dev33.satoken.annotation.SaCheckPermission;
+import io.swagger.annotations.Api;
+import io.swagger.annotations.ApiImplicitParam;
+import io.swagger.annotations.ApiImplicitParams;
+import io.swagger.annotations.ApiOperation;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+/**
+ * dbt 语义项目在线编辑（P2）。
+ *
+ * <p><b>边界</b>：只提供「看项目 / 看文件树 / 读文件 / 存文件」四个接口。建项目、渲染骨架、
+ * 校验元数据、发布与版本回滚仍归 JupyterLab 侧（{@code /semantic/_published}），本批不重复实现，
+ * 也不新增数据库表。
+ *
+ * <p><b>双写者语义</b>：本接口直接写 HDFS 编辑区（{@code /semantic/<project>/}），写入后
+ * HDFS mtime 变新，JupyterLab 侧 {@code push_semantic.py} 会据此拦截覆盖（避免把 Dinky 的改动
+ * 用本地旧内容盖掉）。反向操作请用户自行执行「从 HDFS 拉取」。
+ *
+ * @since 2026/10/21
+ */
+@Slf4j
+@RestController
+@Api(tags = "Semantic Controller")
+@RequestMapping("/api/semantic")
+@RequiredArgsConstructor
+@SaCheckLogin
+public class SemanticController {
+
+    private final SemanticFileService semanticFileService;
+
+    @GetMapping("/projects")
+    @ApiOperation("List Semantic Projects (HDFS)")
+    @SaCheckPermission(PermissionConstants.DATASTUDIO_SEMANTIC_VIEW)
+    public Result<List<SemanticProjectVO>> listProjects() {
+        return Result.succeed(semanticFileService.listProjects());
+    }
+
+    @GetMapping("/files")
+    @ApiOperation("List Files of a Semantic Project")
+    @ApiImplicitParam(
+            name = "project",
+            value = "Project Name",
+            required = true,
+            dataType = "String",
+            paramType = "query")
+    @SaCheckPermission(PermissionConstants.DATASTUDIO_SEMANTIC_VIEW)
+    public Result<List<SemanticFileNode>> listFiles(@RequestParam String project) {
+        return Result.succeed(semanticFileService.listFiles(project));
+    }
+
+    @GetMapping("/file")
+    @ApiOperation("Read a Semantic File")
+    @ApiImplicitParams({
+        @ApiImplicitParam(
+                name = "project",
+                value = "Project Name",
+                required = true,
+                dataType = "String",
+                paramType = "query"),
+        @ApiImplicitParam(
+                name = "path",
+                value = "Relative Path",
+                required = true,
+                dataType = "String",
+                paramType = "query")
+    })
+    @SaCheckPermission(PermissionConstants.DATASTUDIO_SEMANTIC_VIEW)
+    public Result<SemanticFileContentVO> readFile(@RequestParam String project, @RequestParam String path) {
+        return Result.succeed(semanticFileService.readFile(project, path));
+    }
+
+    @PostMapping("/file")
+    @ApiOperation("Save a Semantic File (optimistic lock on HDFS mtime)")
+    @Log(title = "Save Semantic File", businessType = BusinessType.UPDATE)
+    @SaCheckPermission(PermissionConstants.DATASTUDIO_SEMANTIC_EDIT)
+    public Result<Long> saveFile(@RequestBody SemanticFileSaveDTO dto) {
+        return Result.succeed(semanticFileService.saveFile(dto));
+    }
+}

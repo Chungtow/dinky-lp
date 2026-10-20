@@ -1455,6 +1455,8 @@ export default {
   'sys.setting.metrics.tooltip': 'Monitor monitoring page settings, adjust Metrics detection',
   'sys.setting.modify': 'Modify Settings {key}',
   'sys.setting.resource': 'Resource Configuration',
+  'sys.setting.semantic': 'Semantic Configuration',
+  'sys.setting.tag.semantic': 'Semantic',
   'sys.setting.tag.core': 'Core Configuration',
   'sys.setting.tag.extend': 'Extended Configuration',
   'sys.setting.tag.integration': 'Integration Configuration',
@@ -1619,5 +1621,19 @@ export default {
   'datastudio.toolbar.rightClick.hideToolbarDesc': 'hides the toolbar window name',
   'datastudio.toolbar.rightClick.showToolbarDesc': 'displays the toolbar window name',
   'datastudio.toolbar.rightClick.closeCompact': 'turn off compact mode',
+  // ---------------------------- Semantic project online editing (P2) ----------------------------
+  'datastudio.semantic.selectProject': 'Select semantic project',
+  'datastudio.semantic.refresh': 'Refresh',
+  'datastudio.semantic.retry': 'Retry',
+  'datastudio.semantic.empty': 'No semantic project yet (create one with dbt init in JupyterLab)',
+  'datastudio.semantic.loadFailed': 'Failed to load semantic files',
+  'datastudio.semantic.readOnly': 'Read-only file (meta.json / target are maintained by JupyterLab)',
+  'datastudio.semantic.readOnlyTag': 'Read-only',
+  'datastudio.semantic.unsaved': 'Unsaved',
+  'datastudio.semantic.synced': 'Synced',
+  'datastudio.semantic.save': 'Save to HDFS',
+  'datastudio.semantic.saving': 'Saving...',
+  'datastudio.semantic.saved': 'Saved to HDFS',
+  'datastudio.semantic.saveFailed': 'Save failed',
   'datastudio.toolbar.rightClick.openCompact': 'turn on compact mode'
 };

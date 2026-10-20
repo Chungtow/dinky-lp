@@ -332,5 +332,11 @@ export enum API_CONSTANTS {
   FLINK_CONF_CONFIG_OPTIONS = '/api/flinkConf/configOptions',
 
   // ------------------------------------ suggestion ------------------------------------
-  SUGGESTION_QUERY_ALL_SUGGESTIONS = '/api/suggestion/queryAllSuggestions'
+  SUGGESTION_QUERY_ALL_SUGGESTIONS = '/api/suggestion/queryAllSuggestions',
+
+  // ------------------------------- semantic (dbt on HDFS, P2) -------------------------------
+  SEMANTIC_PROJECTS = '/api/semantic/projects',
+  SEMANTIC_FILES = '/api/semantic/files',
+  SEMANTIC_FILE = '/api/semantic/file',
+  SEMANTIC_FILE_SAVE = '/api/semantic/file'
 }

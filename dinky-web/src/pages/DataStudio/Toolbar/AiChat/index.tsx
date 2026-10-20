@@ -53,6 +53,7 @@ import {
   reportCraftWrite
 } from './service';
 import { DataStudioContext } from '@/pages/DataStudio/DataStudioContext';
+import { resolveEditorKey } from '@/pages/DataStudio/editorKey';
 import { getExecError, getLatestExecError } from '@/services/BusinessCrud';
 import { l } from '@/utils/intl';
 import {
@@ -276,18 +277,23 @@ const AiChat = (props: AiChatProps) => {
   const composingRef = useRef<boolean>(false);
   const { editorRegistry } = useContext(DataStudioContext);
 
-  /** 读取当前作业编辑区的选中片段（无选中时返回空串） */
-  const readSelectedSql = () => editorRegistry?.getSelection(tabParams?.taskId) ?? '';
+  /**
+   * 当前 tab 的编辑器注册键：作业 tab 用 taskId；语义文件 tab 用 semantic:<project>:<path>。
+   * 必须与注册方（SqlTask / SemanticFile）同源，否则选区静默为空。
+   */
+  const editorKey = resolveEditorKey(tabParams);
+
+  /** 读取当前编辑区的选中片段（无选中时返回空串） */
+  const readSelectedSql = () => editorRegistry?.getSelection(editorKey) ?? '';
 
   // 阶段 2b：订阅当前作业编辑区的选区变化，驱动「修复/改写」操作条的显隐
   useEffect(() => {
-    const taskId = tabParams?.taskId;
-    if (!taskId || !editorRegistry) {
+    if (!editorKey || !editorRegistry) {
       setSelectedText('');
       return;
     }
-    return editorRegistry.onSelectionChange(taskId, (text) => setSelectedText(text));
-  }, [editorRegistry, tabParams?.taskId]);
+    return editorRegistry.onSelectionChange(editorKey, (text) => setSelectedText(text));
+  }, [editorRegistry, editorKey]);
 
   /**
    * {@code @} 候选来源：<b>可插拔 provider 注册表</b>。

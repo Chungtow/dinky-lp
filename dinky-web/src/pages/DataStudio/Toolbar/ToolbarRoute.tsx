@@ -22,6 +22,7 @@ import {
   CodeOutlined,
   ConsoleSqlOutlined,
   DatabaseOutlined,
+  FileTextOutlined,
   FileZipOutlined,
   FunctionOutlined,
   RobotOutlined,
@@ -45,6 +46,7 @@ const Catalog = lazy(() => import('@/pages/DataStudio/Toolbar/Catalog'));
 const AiChat = lazy(() => import('@/pages/DataStudio/Toolbar/AiChat'));
 const FlinkSqlClient = lazy(() => import('@/pages/DataStudio/Toolbar/FlinkSqlClient'));
 const Resource = lazy(() => import('@/pages/DataStudio/Toolbar/Resource'));
+const Semantic = lazy(() => import('@/pages/DataStudio/Toolbar/Semantic'));
 export const ToolbarRoutes: ToolbarRoute[] = [
   {
     key: 'quick-start',
@@ -115,6 +117,14 @@ export const ToolbarRoutes: ToolbarRoute[] = [
     icon: <FileZipOutlined />,
     position: 'leftTop',
     content: () => lazyComponent(<Resource />)
+  },
+  {
+    // P2：dbt 语义项目在线编辑（HDFS /semantic）。建项目/发布仍在 JupyterLab
+    key: 'semantic',
+    title: () => l('menu.datastudio.semantic'),
+    icon: <FileTextOutlined />,
+    position: 'leftTop',
+    content: () => lazyComponent(<Semantic />)
   }
 ];
 

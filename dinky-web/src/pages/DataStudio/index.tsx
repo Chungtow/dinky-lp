@@ -58,6 +58,7 @@ import { SysConfigStateType } from '@/pages/SettingCenter/GlobalSetting/model';
 const SqlTask = lazy(() => import('@/pages/DataStudio/CenterTabContent/SqlTask'));
 const DataSourceDetail = lazy(() => import('@/pages/DataStudio/CenterTabContent/DataSourceDetail'));
 const ResourceDetail = lazy(() => import('@/pages/DataStudio/CenterTabContent/ResourceDetail'));
+const SemanticFile = lazy(() => import('@/pages/DataStudio/CenterTabContent/SemanticFile'));
 
 let didMount = false;
 const DataStudio: React.FC = (props: any) => {
@@ -427,6 +428,9 @@ const DataStudio: React.FC = (props: any) => {
           break;
         case 'resource':
           content = <ResourceDetail {...currentData} />;
+          break;
+        case 'semanticFile':
+          content = <SemanticFile tabData={tabData} />;
           break;
       }
       return {
