@@ -29,6 +29,8 @@ import org.dinky.data.result.Result;
 import org.dinky.data.vo.SemanticFileContentVO;
 import org.dinky.data.vo.SemanticFileNode;
 import org.dinky.data.vo.SemanticProjectVO;
+import org.dinky.data.vo.SemanticPublishedAssetVO;
+import org.dinky.data.vo.SemanticPublishedProjectVO;
 import org.dinky.service.SemanticFileService;
 
 import java.util.List;
@@ -77,6 +79,33 @@ public class SemanticController {
     @SaCheckPermission(PermissionConstants.DATASTUDIO_SEMANTIC_VIEW)
     public Result<List<SemanticProjectVO>> listProjects() {
         return Result.succeed(semanticFileService.listProjects());
+    }
+
+    /**
+     * P3b：{@code @semantic/} 一级候选（只列**已发布**项目）。
+     *
+     * <p>与 {@link #listProjects()} 的区别是读 `_published`（不可变快照）而不是编辑区：
+     * AI 只能引用已发布版本，否则「今天引用的口径明天变了」无法复现。
+     */
+    @GetMapping("/published/projects")
+    @ApiOperation("List Published Semantic Projects (candidates of @semantic/)")
+    @SaCheckPermission(PermissionConstants.DATASTUDIO_SEMANTIC_VIEW)
+    public Result<List<SemanticPublishedProjectVO>> listPublishedProjects() {
+        return Result.succeed(semanticFileService.listPublishedProjects());
+    }
+
+    /** P3b：{@code @semantic/<project>/} 二级候选（来自索引 {@code names[]}，索引未就绪时降级） */
+    @GetMapping("/published/assets")
+    @ApiOperation("List Referable Assets of a Published Semantic Project")
+    @ApiImplicitParam(
+            name = "project",
+            value = "Project Name",
+            required = true,
+            dataType = "String",
+            paramType = "query")
+    @SaCheckPermission(PermissionConstants.DATASTUDIO_SEMANTIC_VIEW)
+    public Result<List<SemanticPublishedAssetVO>> listPublishedAssets(@RequestParam String project) {
+        return Result.succeed(semanticFileService.listPublishedAssets(project));
     }
 
     @GetMapping("/files")

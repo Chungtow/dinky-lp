@@ -42,17 +42,21 @@ import org.dinky.ai.mention.EnvRefRenderer;
 import org.dinky.ai.mention.MentionType;
 import org.dinky.ai.mention.SourceRefRenderer;
 import org.dinky.ai.mention.TopicRefRenderer;
+import org.dinky.ai.semantic.SemanticAssetProvider;
+import org.dinky.ai.semantic.SemanticAssetRef;
 import org.dinky.ai.skill.MarkdownSkillRenderer;
 import org.dinky.ai.skill.SkillBrief;
 import org.dinky.ai.skill.SkillDoc;
 import org.dinky.ai.skill.SkillDocParser;
 import org.dinky.ai.skill.SkillRenderer;
 import org.dinky.context.TenantContextHolder;
+import org.dinky.data.constant.PermissionConstants;
 import org.dinky.data.dto.AiChatConfirmRequest;
 import org.dinky.data.dto.AiChatMention;
 import org.dinky.data.dto.AiChatMessage;
 import org.dinky.data.dto.AiChatRequest;
 import org.dinky.data.dto.AiChatWriteAuditRequest;
+import org.dinky.data.exception.BusException;
 import org.dinky.data.model.AiChatLog;
 import org.dinky.data.model.Column;
 import org.dinky.data.model.DataBase;
@@ -95,6 +99,7 @@ import javax.annotation.PreDestroy;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import cn.dev33.satoken.stp.StpUtil;
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONObject;
@@ -193,6 +198,9 @@ public class AiChatServiceImpl implements AiChatService {
 
     /** 阶段 4b：全部渲染器实现（Spring 自动注入，按 {@code assetType} 分派） */
     private final List<SkillRenderer> skillRendererList;
+
+    /** P3b：语义资产只读入口（{@code @semantic/} 引用 + 项目清单常驻） */
+    private final SemanticAssetProvider semanticAssetProvider;
 
     /** 阶段 4b：assetType → 渲染器（初始化时构建一次；见 {@link #initSkillRenderers()}） */
     private Map<String, SkillRenderer> skillRenderers = Collections.emptyMap();
@@ -1245,14 +1253,16 @@ public class AiChatServiceImpl implements AiChatService {
 
     /**
      * P1：路径式引用的匹配模式——{@code @source/<数据源>[/<库>[/<表>[.<字段>]]]} /
-     * {@code @topic/<名>} / {@code @env/<名>}。
+     * {@code @topic/<名>} / {@code @env/<名>}；P3b 追加 {@code @semantic/<项目>[/<名>]}
+     * （长式 {@code @semantic/<项目>/table|metric/<名>} 同为 3 段，一并覆盖）。
      *
      * <p><b>为什么不并入上面那条正则</b>：上面那条是"单段名字"（skill / doc / table），字符类不含 {@code /}；
      * 若把多段路径并进去，就会改动既有三种引用的匹配行为——而那是本批最大的回归风险（P1 计划 §7 R1）。
-     * 两条各自独立、互不影响；第二组最多 4 段，与 {@code SourceRefResolver.parse} 口径一致。
+     * 两条各自独立、互不影响；第二组最多 4 段，与 {@code SourceRefResolver.parse} 口径一致
+     * （语义句柄超过 3 段由 {@code SemanticAssetProvider#resolve} 显式拒绝）。
      */
     private static final Pattern PATH_MENTION_PATTERN = Pattern.compile(
-            "@(source|topic|env)[-/]([\\p{L}\\p{N}_\\-.$]{1,64}(?:/[\\p{L}\\p{N}_\\-.$]{1,64}){0,3})",
+            "@(source|topic|env|semantic)[-/]([\\p{L}\\p{N}_\\-.$]{1,64}(?:/[\\p{L}\\p{N}_\\-.$]{1,64}){0,3})",
             Pattern.CASE_INSENSITIVE);
 
     /**
@@ -1296,9 +1306,7 @@ public class AiChatServiceImpl implements AiChatService {
         Matcher pathMatcher = PATH_MENTION_PATTERN.matcher(message);
         while (pathMatcher.find()) {
             String rawType = pathMatcher.group(1).toLowerCase();
-            String type = "source".equals(rawType)
-                    ? MentionType.SOURCE
-                    : "topic".equals(rawType) ? MentionType.TOPIC : MentionType.ENV;
+            String type = mentionTypeOf(rawType);
             String name = pathMatcher.group(2);
             boolean exists = result.stream()
                     .anyMatch(m -> type.equalsIgnoreCase(m.getType()) && name.equalsIgnoreCase(m.getName()));
@@ -1312,6 +1320,87 @@ public class AiChatServiceImpl implements AiChatService {
             log.info("Path mention recovered from message text: type={}, name={}", type, name);
         }
         return result;
+    }
+
+    /** 路径式引用前缀 → {@link MentionType}（与 {@code PATH_MENTION_PATTERN} 第一组一一对应） */
+    private String mentionTypeOf(String rawType) {
+        switch (rawType) {
+            case "source":
+                return MentionType.SOURCE;
+            case "topic":
+                return MentionType.TOPIC;
+            case "semantic":
+                return MentionType.SEMANTIC;
+            default:
+                return MentionType.ENV;
+        }
+    }
+
+    /**
+     * P3b：追加 {@code @semantic/<项目>[/<名>]} 引用的语义资产正文。
+     *
+     * <p>三件事：① 后端解析句柄（前端只插入文本，不作为安全边界）；② 按
+     * {@code llmSkillMaxChars} 预算渲染（与 skill 正文同一档预算，D18）；③
+     * <b>任何异常都不阻断对话</b>：歧义/未发布转成一行说明交给模型，其余记日志后忽略（§4.6）。
+     */
+    private void appendSemanticDetail(StringBuilder sb, String handlePath) {
+        String handle = StrUtil.nullToEmpty(handlePath);
+        try {
+            SemanticAssetRef ref = semanticAssetProvider.resolve(handle);
+            int budget = SystemConfiguration.getInstances().getLlmSkillMaxChars();
+            String text = semanticAssetProvider.read(ref, budget);
+            sb.append(text);
+            log.info(
+                    "Semantic mention injected: handle={}, type={}, version={}, chars={}",
+                    handle,
+                    ref.getType(),
+                    ref.getVersion(),
+                    text.length());
+        } catch (BusException e) {
+            // 句柄歧义 / 项目未发布：这是"用户可修正"的问题，直接回显给模型说明，不算故障
+            log.info("Semantic mention rejected: handle={}, reason={}", handle, e.getMessage());
+            sb.append("- @semantic/")
+                    .append(handle)
+                    .append("（")
+                    .append(StrUtil.nullToEmpty(e.getMessage()))
+                    .append("）\n");
+        } catch (RuntimeException e) {
+            log.warn("Semantic mention failed: handle={}", handle, e);
+            sb.append("- @semantic/").append(handle).append("（语义资产读取失败，已忽略）\n");
+        }
+    }
+
+    /**
+     * P3b：项目级语义清单常驻（D17）——请求体 {@code semanticProject} 非空、
+     * 语义开关开启、且当前用户有 {@code datastudio:semantic:view} 时才注入。
+     *
+     * <p><b>为何三条件都要</b>：全局常驻所有项目会吃光上下文预算（D17）；开关关闭时语义层
+     * 整体不可用；权限判定不能只靠前端隐藏（§4.7「前端隐藏不作为安全边界」）。
+     */
+    private String buildSemanticProjectContext(AiChatRequest request) {
+        String project = StrUtil.trimToEmpty(request.getSemanticProject());
+        if (StrUtil.isBlank(project)) {
+            return "";
+        }
+        if (!Boolean.TRUE.equals(SystemConfiguration.getInstances().getSemanticEnable().getValue())) {
+            return "";
+        }
+        if (!StpUtil.hasPermission(PermissionConstants.DATASTUDIO_SEMANTIC_VIEW)) {
+            log.info("Semantic project context skipped (no permission): project={}", project);
+            return "";
+        }
+        try {
+            SemanticAssetRef ref = semanticAssetProvider.resolve(project);
+            String text = semanticAssetProvider.read(ref, SemanticAssetProvider.PROJECT_LIST_MAX_CHARS);
+            log.info("Semantic project context injected: project={}, chars={}", project, text.length());
+            return text;
+        } catch (BusException e) {
+            // 未发布 / 项目名非法：给模型一行提示，别让它凭空编造口径
+            return "## 语义资产（@semantic）\n- " + StrUtil.nullToEmpty(e.getMessage()) + "\n";
+        } catch (RuntimeException e) {
+            log.warn("Semantic project context failed: project={}", project, e);
+            return "";
+        }
     }
 
     private String buildMentionContext(
@@ -1379,6 +1468,9 @@ public class AiChatServiceImpl implements AiChatService {
                 // 阶段 4a：@skill/<名>；阶段 4b：@doc/<名>（业务背景知识，与 skill 同构）。
                 // 两者走同一条路径：可见性校验 → 按 asset_type 分派渲染器 → 独立预算渲染。
                 appendAssetDetail(sb, mention.getName());
+            } else if (MentionType.SEMANTIC.equalsIgnoreCase(mention.getType())) {
+                // P3b：@semantic/<项目>[/<名>] —— 只注入元数据（口径 / 维度前缀名 / 出处），不含数据行
+                appendSemanticDetail(sb, mention.getName());
             } else if (StrUtil.isNotBlank(mention.getContent())) {
                 // selection / job：片段正文（仅编辑器文本，不含业务数据行）
                 String content = mention.getContent().trim();
@@ -1668,6 +1760,10 @@ public class AiChatServiceImpl implements AiChatService {
         // 多在已绑定数据源的取数场景下使用，未暴露。
         // 阶段 1a（1.4）：@ 显式引用优先级最高，先于表清单注入
         sb.append(buildMentionContext(request, databaseId, schemaName, snapshot));
+
+        // P3b：项目级语义清单常驻（请求体 semanticProject + 开关 + view 权限三条件，D17）。
+        // 位置：@ 引用之后、skill 清单之前 —— 语义口径优先于技能清单，但低于用户显式引用。
+        sb.append(buildSemanticProjectContext(request));
 
         // 阶段 4a：注入「当前用户可见 skill 清单」（name + description，渐进披露）。
         // 只给清单、不给正文——正文由 @skill/<名> 显式引用时才注入（见 appendAssetDetail）；

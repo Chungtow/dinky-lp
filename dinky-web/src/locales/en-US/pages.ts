@@ -532,8 +532,7 @@ export default {
   'pages.datastudio.label.taskParam.value.required': 'Please input parameter value',
   'pages.datastudio.label.taskParam.value.tip':
     'DolphinScheduler built-in time parameters: $[yyyyMMdd-1] means yesterday, $[yyyyMMdd-N] means N days ago; ${system.biz.curdate} means current business date. ',
-  'pages.datastudio.label.taskParam.value.tip.link':
-    'See DS docs for more',
+  'pages.datastudio.label.taskParam.value.tip.link': 'See DS docs for more',
   'pages.datastudio.label.jobConfig': 'Job Config',
   'pages.datastudio.label.jobConfig.addConfig': 'Add Config item',
   'pages.datastudio.label.jobConfig.addConfig.params': 'parameters',
@@ -619,18 +618,22 @@ export default {
   'datastudio.aiChat.send': 'Send',
   'datastudio.aiChat.stop': 'Stop',
   'datastudio.aiChat.explain': 'Explain SQL',
-  'datastudio.aiChat.explainTip': 'Explain SQL with AI: explains the selected snippet if any, otherwise the whole editor content',
+  'datastudio.aiChat.explainTip':
+    'Explain SQL with AI: explains the selected snippet if any, otherwise the whole editor content',
   'datastudio.aiChat.craft.diffTitle': 'Suggested changes by AI',
-  'datastudio.aiChat.craft.diffTip': 'Left: current editor content; right: rewritten by AI. Accepting replaces the whole content, and you can still undo it with Ctrl+Z or the Undo button.',
+  'datastudio.aiChat.craft.diffTip':
+    'Left: current editor content; right: rewritten by AI. Accepting replaces the whole content, and you can still undo it with Ctrl+Z or the Undo button.',
   'datastudio.aiChat.craft.accept': 'Accept all',
   'datastudio.aiChat.craft.reject': 'Reject',
-  'datastudio.aiChat.craft.noCodeBlock': 'AI did not return a complete code block this time; rewriting skipped',
+  'datastudio.aiChat.craft.noCodeBlock':
+    'AI did not return a complete code block this time; rewriting skipped',
   'datastudio.aiChat.craft.noChange': 'No code change was produced; nothing to accept',
   'datastudio.aiChat.craft.undo': 'Undo AI change',
   'datastudio.aiChat.craft.undoDone': 'AI change undone',
   'datastudio.aiChat.craft.applyFailed': 'Editor not ready; rewrite not applied',
   'datastudio.aiChat.craft.applied': 'AI change applied',
-  'datastudio.aiChat.modeTip': 'Ask: answer only, never edit code; Craft: may rewrite the editor content (shows a diff, applied after your confirmation)',
+  'datastudio.aiChat.modeTip':
+    'Ask: answer only, never edit code; Craft: may rewrite the editor content (shows a diff, applied after your confirmation)',
   'datastudio.aiChat.explainCurrentSql': 'Please explain the current SQL in the editor',
   'datastudio.aiChat.noSqlToExplain': 'There is no SQL to explain in the editor',
   'datastudio.aiChat.insertToEditor': 'Insert',
@@ -647,7 +650,8 @@ export default {
   'datastudio.aiChat.p2b.reject': 'Reject',
   'datastudio.aiChat.p2b.applied': 'Selected snippet replaced',
   'datastudio.aiChat.p2b.applyFailed': 'Editor not ready; replacement not applied',
-  'datastudio.aiChat.writeConfirm.title': 'AI requests to run a write statement (needs your confirmation)',
+  'datastudio.aiChat.writeConfirm.title':
+    'AI requests to run a write statement (needs your confirmation)',
   'datastudio.aiChat.writeConfirm.reject': 'Reject',
   'datastudio.aiChat.writeConfirm.accept': 'Confirm and run',
   'datastudio.aiChat.writeConfirm.dmlTip':
@@ -662,7 +666,8 @@ export default {
   'datastudio.aiChat.writeConfirm.retrySuffix': ' (auto-repair retry)',
   'datastudio.aiChat.writeConfirm.previousError': 'Last failure: ',
   // Stage 4b: the write-confirm channel is reused by skill write tools
-  'datastudio.aiChat.confirm.skillTitle': 'AI requests to write a skill file (needs your confirmation)',
+  'datastudio.aiChat.confirm.skillTitle':
+    'AI requests to write a skill file (needs your confirmation)',
   'datastudio.aiChat.confirm.skillFileTip':
     'It will be written into this skill directly. You can view and edit it later under Data Studio → Skills. Check the target and content first.',
   'datastudio.aiChat.confirm.skillDeleteTip':
@@ -681,7 +686,8 @@ export default {
   'datastudio.aiChat.table': 'Table (optional)',
   'datastudio.aiChat.placeholder': 'Describe what you want to query, eg: count orders by province',
   'datastudio.aiChat.inputPlaceholder': 'Enter to send, Shift + Enter for a new line',
-  'datastudio.aiChat.disabled': 'AI is disabled, please enable and configure it in [Setting Center - Global Setting - LLM]',
+  'datastudio.aiChat.disabled':
+    'AI is disabled, please enable and configure it in [Setting Center - Global Setting - LLM]',
   'datastudio.aiChat.unconfigured': 'No model configured',
   'datastudio.aiChat.noMetaDataContext': 'No datasource context available for the current job',
   'datastudio.aiChat.bindGuide':
@@ -722,8 +728,16 @@ export default {
   'datastudio.aiChat.mention.groupSourceDb': 'Database (cross-source)',
   'datastudio.aiChat.mention.groupSourceTable': 'Table (cross-source)',
   'datastudio.aiChat.mention.groupEnv': 'FlinkSQL env',
+  // P3b: @semantic/ references
+  'datastudio.aiChat.mention.groupSemantic': 'Semantic project (published)',
+  'datastudio.aiChat.mention.groupSemanticAsset': 'Semantic asset (in project)',
+  'datastudio.aiChat.mention.semanticUsage':
+    'Usage: @semantic/<project> (whole project), @semantic/<project>/<asset>; for same-name assets use @semantic/<project>/table|metric/<asset>',
+  'datastudio.aiChat.mention.semanticIndexPending': 'Index not ready (excerpted from YAML)',
+  'datastudio.aiChat.mention.semanticEmpty': 'This project has no referable asset',
   'datastudio.aiChat.mention.groupTopic': 'Topic (used by jobs)',
-  'datastudio.aiChat.mention.sourceUsage': 'Cross-source usage: @source/<datasource>/<db>/<table>[.<column>]; @topic/<topic>; @env/<env name>',
+  'datastudio.aiChat.mention.sourceUsage':
+    'Cross-source usage: @source/<datasource>/<db>/<table>[.<column>]; @topic/<topic>; @env/<env name>',
   'pages.skill.listTitle': 'Skills',
   'pages.skill.fileManage': 'Files',
   'pages.skill.file.title': 'File Management',
@@ -753,9 +767,11 @@ export default {
   'pages.skill.editTitle': 'Edit Skill: ',
   'pages.skill.name': 'Name',
   'pages.skill.nameRequired': 'Please enter a name',
-  'pages.skill.nameRule': 'Lowercase letters, digits and hyphens only, starting with a letter or digit (2-64 chars)',
+  'pages.skill.nameRule':
+    'Lowercase letters, digits and hyphens only, starting with a letter or digit (2-64 chars)',
   'pages.skill.description': 'Description',
-  'pages.skill.descriptionPlaceholder': 'One-line description (injected with the skill list so the model knows when to use it)',
+  'pages.skill.descriptionPlaceholder':
+    'One-line description (injected with the skill list so the model knows when to use it)',
   'pages.skill.descriptionRequired': 'Please enter a description',
   'pages.skill.visibility': 'Visibility',
   'pages.skill.visibilityPrivate': 'Private',
@@ -769,13 +785,15 @@ export default {
   'pages.skill.updateTime': 'Updated At',
   'pages.skill.action': 'Actions',
   'pages.skill.viewOrEdit': 'View / Edit',
-  'pages.skill.removeConfirm': 'Delete this skill? Its directory and files will be removed as well.',
+  'pages.skill.removeConfirm':
+    'Delete this skill? Its directory and files will be removed as well.',
   'pages.skill.editHint':
     'Note: the main file frontmatter must contain name and description, and name must match the directory name. Use the "Files" action on the list row to add references/ and other extra docs. Never store credentials or secrets here.',
   'datastudio.aiChat.mention.selectionName': 'Selected snippet in editor',
   'datastudio.aiChat.mention.recent': 'Recent',
   'datastudio.aiChat.mention.noMatch': 'No match',
-  'datastudio.aiChat.mention.noDataSource': 'No datasource bound; only jobs or selection can be referenced',
+  'datastudio.aiChat.mention.noDataSource':
+    'No datasource bound; only jobs or selection can be referenced',
   // Phase 1b: read-only tool process (neutral phrases; prefix/suffix composed by status)
   'datastudio.aiChat.tool.listTables': 'List tables of the datasource',
   'datastudio.aiChat.tool.describeTable': 'Read table structure',
@@ -1448,7 +1466,8 @@ export default {
   'sys.setting.llm': 'LLM Config',
   'sys.setting.llm.tooltip': 'AI model service configuration',
   'sys.setting.kafka': 'Kafka Config',
-  'sys.setting.kafka.tooltip': 'Platform-level Kafka connection facts (bootstrap servers etc.); AI Chat uses them as the authoritative value for FlinkSQL',
+  'sys.setting.kafka.tooltip':
+    'Platform-level Kafka connection facts (bootstrap servers etc.); AI Chat uses them as the authoritative value for FlinkSQL',
   'sys.setting.maven': 'Maven Configuration',
   'sys.setting.maven.tooltip': 'The main parameters of Maven compilation',
   'sys.setting.metrics': 'Metrics Configuration',
@@ -1627,7 +1646,8 @@ export default {
   'datastudio.semantic.retry': 'Retry',
   'datastudio.semantic.empty': 'No semantic project yet (create one with dbt init in JupyterLab)',
   'datastudio.semantic.loadFailed': 'Failed to load semantic files',
-  'datastudio.semantic.readOnly': 'Read-only file (meta.json / target are maintained by JupyterLab)',
+  'datastudio.semantic.readOnly':
+    'Read-only file (meta.json / target are maintained by JupyterLab)',
   'datastudio.semantic.readOnlyTag': 'Read-only',
   'datastudio.semantic.unsaved': 'Unsaved',
   'datastudio.semantic.synced': 'Synced',
@@ -1635,7 +1655,8 @@ export default {
   'datastudio.semantic.saving': 'Saving...',
   'datastudio.semantic.saved': 'Saved to HDFS',
   'datastudio.semantic.saveFailed': 'Save failed',
-  'datastudio.semantic.noEditPermission': 'You have no permission to edit semantic projects. Please contact your administrator.',
+  'datastudio.semantic.noEditPermission':
+    'You have no permission to edit semantic projects. Please contact your administrator.',
   'datastudio.semantic.ctx.createFile': 'New file',
   'datastudio.semantic.ctx.createDir': 'New folder',
   'datastudio.semantic.ctx.rename': 'Rename',
@@ -1648,7 +1669,8 @@ export default {
   'datastudio.semantic.deleted': 'Moved to trash',
   'datastudio.semantic.opFailed': 'Operation failed',
   'datastudio.semantic.tabsClosed': '{n} invalid file tab(s) closed. Please reopen.',
-  'datastudio.semantic.dirtyBeforeOp': 'This file has unsaved changes. Save it before this operation.',
+  'datastudio.semantic.dirtyBeforeOp':
+    'This file has unsaved changes. Save it before this operation.',
   'datastudio.semantic.deleteDirConfirm': 'Delete directory "{path}"? It contains {n} entries',
   'datastudio.semantic.deleteFileConfirm': 'Delete file "{path}"?',
   'datastudio.semantic.deleteRecursive': 'Delete everything inside the directory (recursive)',

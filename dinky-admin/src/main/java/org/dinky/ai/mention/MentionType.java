@@ -72,5 +72,17 @@ public final class MentionType {
      */
     public static final String ENV = "env";
 
+    /**
+     * 语义资产引用（{@code @semantic/<project>[/<name>]}，P3b）。
+     *
+     * <p><b>名字里存的是路径式句柄</b>（对齐 {@link #SOURCE} 的 {@code ds/db/tbl} 存法，D19）：
+     * {@code "<project>"} 或 {@code "<project>/<asset>"} 或长式
+     * {@code "<project>/table|metric/<asset>"}。句柄解析发生在<b>后端注入时</b>，
+     * 前端只负责候选与插入文本。
+     *
+     * <p>语义资产是**元数据**（表名/列名/口径），不含业务数据行，也不调 {@code mf}（D21）。
+     */
+    public static final String SEMANTIC = "semantic";
+
     private MentionType() {}
 }

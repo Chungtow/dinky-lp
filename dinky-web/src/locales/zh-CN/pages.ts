@@ -475,8 +475,7 @@ export default {
   'pages.datastudio.label.taskParam.value.required': '请输入参数值',
   'pages.datastudio.label.taskParam.value.tip':
     'DolphinScheduler 内置时间参数示例：$[yyyyMMdd-1] 表示昨天，$[yyyyMMdd-N] 表示 N 天前；${system.biz.curdate} 表示当前业务日期。更多参数请参考 ',
-  'pages.datastudio.label.taskParam.value.tip.link':
-    'DolphinScheduler 官方文档',
+  'pages.datastudio.label.taskParam.value.tip.link': 'DolphinScheduler 官方文档',
   'pages.datastudio.label.jobConfig': '作业配置',
   'pages.datastudio.label.jobConfig.addConfig': '添加配置项',
   'pages.datastudio.label.jobConfig.addConfig.params': '参数',
@@ -556,7 +555,8 @@ export default {
   'datastudio.aiChat.explain': '解释当前 SQL',
   'datastudio.aiChat.explainTip': '用 AI 解释 SQL：编辑区有选中片段时解释选中片段，否则解释全文',
   'datastudio.aiChat.craft.diffTitle': 'AI 建议的改动',
-  'datastudio.aiChat.craft.diffTip': '左侧为编辑器当前内容，右侧为 AI 改写后的内容。采纳将整块替换，替换后仍可用 Ctrl+Z 或「撤销」按钮回退。',
+  'datastudio.aiChat.craft.diffTip':
+    '左侧为编辑器当前内容，右侧为 AI 改写后的内容。采纳将整块替换，替换后仍可用 Ctrl+Z 或「撤销」按钮回退。',
   'datastudio.aiChat.craft.accept': '全部采纳',
   'datastudio.aiChat.craft.reject': '拒绝',
   'datastudio.aiChat.craft.noCodeBlock': 'AI 本次未给出完整代码块，已跳过改写',
@@ -565,7 +565,8 @@ export default {
   'datastudio.aiChat.craft.undoDone': '已撤销 AI 改动',
   'datastudio.aiChat.craft.applyFailed': '编辑器未就绪，改写未生效',
   'datastudio.aiChat.craft.applied': '已采纳 AI 改动',
-  'datastudio.aiChat.modeTip': 'Ask：只回答，不改动代码；Craft：可改写编辑器内容（出 diff，需你确认后写入）',
+  'datastudio.aiChat.modeTip':
+    'Ask：只回答，不改动代码；Craft：可改写编辑器内容（出 diff，需你确认后写入）',
   'datastudio.aiChat.explainCurrentSql': '请解释当前编辑器中的 SQL',
   'datastudio.aiChat.noSqlToExplain': '编辑器中没有可解释的 SQL',
   'datastudio.aiChat.insertToEditor': '插入编辑器',
@@ -637,7 +638,8 @@ export default {
   'datastudio.aiChat.verify.rejected': '已跳过执行校验',
   'datastudio.aiChat.modelTip': '当前使用的模型，可在 系统配置 → AI 设置 中修改',
   // 阶段 3：多 LLM 实例
-  'datastudio.aiChat.profileTip': '模型实例：可切换不同模型（如写 SQL 用 DeepSeek、离线调试用本地模型）',
+  'datastudio.aiChat.profileTip':
+    '模型实例：可切换不同模型（如写 SQL 用 DeepSeek、离线调试用本地模型）',
   'datastudio.aiChat.profileNoTools': '不支持工具调用',
   'datastudio.aiChat.profileNoToolsTip':
     '该模型实例不支持工具调用，本次将退化为纯问答（无法自行查表 / 执行 SQL）',
@@ -658,7 +660,15 @@ export default {
   'datastudio.aiChat.mention.groupSourceTable': '表（跨源引用）',
   'datastudio.aiChat.mention.groupEnv': 'FlinkSQL 环境',
   'datastudio.aiChat.mention.groupTopic': 'topic（已被作业使用）',
-  'datastudio.aiChat.mention.sourceUsage': '跨源引用用法：@source/数据源/库/表[.字段]；@topic/topic名；@env/环境名',
+  'datastudio.aiChat.mention.sourceUsage':
+    '跨源引用用法：@source/数据源/库/表[.字段]；@topic/topic名；@env/环境名',
+  // P3b：@semantic/ 语义资产
+  'datastudio.aiChat.mention.groupSemantic': '语义项目（已发布）',
+  'datastudio.aiChat.mention.groupSemanticAsset': '语义资产（项目内）',
+  'datastudio.aiChat.mention.semanticUsage':
+    '语义引用用法：@semantic/项目（整项目清单）、@semantic/项目/资产名；同名时用 @semantic/项目/table|metric/资产名',
+  'datastudio.aiChat.mention.semanticIndexPending': '索引未就绪（按 YAML 原文摘录）',
+  'datastudio.aiChat.mention.semanticEmpty': '该项目没有可引用资产',
   'pages.skill.listTitle': 'Skills 管理',
   'pages.skill.fileManage': '文件',
   'pages.skill.file.title': '文件管理',
@@ -691,7 +701,8 @@ export default {
   'pages.skill.nameRequired': '请输入名称',
   'pages.skill.nameRule': '只允许小写字母、数字与连字符，且以字母或数字开头（2~64 字符）',
   'pages.skill.description': '说明',
-  'pages.skill.descriptionPlaceholder': '一句话说明用途（会随 skill 清单注入 AI，便于其判断何时引用）',
+  'pages.skill.descriptionPlaceholder':
+    '一句话说明用途（会随 skill 清单注入 AI，便于其判断何时引用）',
   'pages.skill.descriptionRequired': '请输入说明',
   'pages.skill.visibility': '可见性',
   'pages.skill.visibilityPrivate': '私有',
@@ -1362,7 +1373,8 @@ export default {
   'sys.setting.llm': 'LLM 配置',
   'sys.setting.llm.tooltip': 'AI 大模型服务配置',
   'sys.setting.kafka': 'Kafka 配置',
-  'sys.setting.kafka.tooltip': 'Kafka 接入地址等平台级连接事实；AI Chat 生成 / 解读 FlinkSQL 时取此处的权威值',
+  'sys.setting.kafka.tooltip':
+    'Kafka 接入地址等平台级连接事实；AI Chat 生成 / 解读 FlinkSQL 时取此处的权威值',
   'sys.setting.ldap.tooltip': 'LDAP统一认证配置',
   'sys.setting.maven': 'Maven 配置',
   'sys.setting.maven.tooltip': 'Maven 编译的主要参数',

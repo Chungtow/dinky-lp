@@ -48,6 +48,8 @@ import {
   getAiChatConfig,
   listFlinkSqlEnvs,
   listMentionTopics,
+  listPublishedSemanticAssets,
+  listPublishedSemanticProjects,
   listSkills,
   listTableColumns,
   reportCraftWrite
@@ -266,6 +268,15 @@ const AiChat = (props: AiChatProps) => {
   const [topicOptions, setTopicOptions] = useState<AiChatMentionItem[]>([]);
   /** 数据源名 → 该数据源的 schemas（含 tables）缓存 */
   const sourceTreeRef = useRef<Map<string, any[]>>(new Map());
+  /**
+   * P3b：{@code @semantic/} 候选——已发布项目（一级）与所选项目内的资产（二级）。
+   *
+   * <p>只读 `_published`：AI 只能引用不可变快照，编辑区内容不进候选。
+   */
+  const [semanticProjects, setSemanticProjects] = useState<any[]>([]);
+  const [semanticAssets, setSemanticAssets] = useState<AiChatMentionItem[]>([]);
+  /** 已发布项目清单只拉一次（体量小、与输入关键字无关） */
+  const semanticProjectsLoadedRef = useRef<boolean>(false);
   /** 缓存写入后触发候选重算（ref 本身不会触发重渲染） */
   const [sourceTreeTick, setSourceTreeTick] = useState<number>(0);
   const [recentMentions, setRecentMentions] = useState<string[]>(() => {
@@ -328,6 +339,54 @@ const AiChat = (props: AiChatProps) => {
       parts: raw.split('/').filter((part) => part !== '')
     };
   }, [mentionQuery]);
+
+  /**
+   * P3b：解析 {@code @semantic/} 的层级查询（两级：已发布项目 → 项目内资产）。
+   *
+   * <p>与 {@code @source/} 的差异：语义项目没有"库"这一级（只有两段），且第二层的
+   * name 要拼成 {@code <project>/<asset>} 路径——后端 {@code AiChatMention.name} 就是这个存法（D19）。
+   */
+  const semanticQuery = useMemo(() => {
+    const m = /^semantic[-/]([^\s]*)$/i.exec(mentionQuery.trim());
+    if (!m) {
+      return null;
+    }
+    const raw = m[1] ?? '';
+    return {
+      trailing: raw.endsWith('/'),
+      parts: raw.split('/').filter((part) => part !== '')
+    };
+  }, [mentionQuery]);
+
+  /** 一级：首次输入 {@code @semantic/} 时拉取"已发布项目"（只拉一次，与关键字无关） */
+  useEffect(() => {
+    if (!semanticQuery || semanticProjectsLoadedRef.current) {
+      return;
+    }
+    semanticProjectsLoadedRef.current = true;
+    listPublishedSemanticProjects()
+      .then((rows) => setSemanticProjects(rows ?? []))
+      .catch(() => setSemanticProjects([]));
+  }, [semanticQuery]);
+
+  /** 二级：项目名确定后拉该项目资产；切换项目时重拉（列表小，不做缓存） */
+  const semanticProjectName = semanticQuery?.parts[0] ?? '';
+  useEffect(() => {
+    if (!semanticProjectName) {
+      setSemanticAssets([]);
+      return;
+    }
+    listPublishedSemanticAssets(semanticProjectName)
+      .then((rows) =>
+        setSemanticAssets(
+          (rows ?? []).map((row: any) => ({
+            type: 'semantic' as const,
+            name: `${semanticProjectName}/${row.name}`
+          }))
+        )
+      )
+      .catch(() => setSemanticAssets([]));
+  }, [semanticProjectName]);
 
   useEffect(() => {
     if (!columnQuery || !databaseId || !schemaName) {
@@ -514,7 +573,7 @@ const AiChat = (props: AiChatProps) => {
       // 2026-10-18 修复：统一按**规范名**（真实 `ds.name`）取缓存与拼路径，各层关键字大小写不敏感。
       const ds = resolveSourceDs(dataSources, sourceQuery.parts[0] ?? '');
       const dsName = ds?.name ?? '';
-      const tree: any[] = dsName ? sourceTreeRef.current.get(dsName) ?? [] : [];
+      const tree: any[] = dsName ? (sourceTreeRef.current.get(dsName) ?? []) : [];
       // 第一层：数据源名（或在数据源名上筛选）
       if (sourceQuery.parts.length <= 1 && !sourceQuery.trailing) {
         const keyword = (sourceQuery.parts[0] ?? '').toLowerCase();
@@ -532,7 +591,7 @@ const AiChat = (props: AiChatProps) => {
         (sourceQuery.trailing && sourceQuery.parts.length === 1) ||
         (!sourceQuery.trailing && sourceQuery.parts.length === 2)
       ) {
-        const keyword = (sourceQuery.trailing ? '' : sourceQuery.parts[1] ?? '').toLowerCase();
+        const keyword = (sourceQuery.trailing ? '' : (sourceQuery.parts[1] ?? '')).toLowerCase();
         return tree
           .filter((schema: any) => !keyword || `${schema.name}`.toLowerCase().includes(keyword))
           .map((schema: any) => ({
@@ -549,7 +608,7 @@ const AiChat = (props: AiChatProps) => {
       ) {
         const dbKeyword = `${sourceQuery.parts[1] ?? ''}`.toLowerCase();
         const schema = tree.find((item: any) => `${item.name}`.toLowerCase() === dbKeyword);
-        const keyword = (sourceQuery.trailing ? '' : sourceQuery.parts[2] ?? '').toLowerCase();
+        const keyword = (sourceQuery.trailing ? '' : (sourceQuery.parts[2] ?? '')).toLowerCase();
         return (schema?.tables ?? [])
           .filter((table: any) => !keyword || `${table.name}`.toLowerCase().includes(keyword))
           .map((table: any) => ({
@@ -593,15 +652,66 @@ const AiChat = (props: AiChatProps) => {
         assetPrefix === 'table'
           ? l('datastudio.aiChat.mention.groupTable')
           : l('datastudio.aiChat.mention.groupSkill');
-      return source
-        .filter((item) => item.type === assetPrefix)
-        .map((item) => ({ ...item, group }));
+      return source.filter((item) => item.type === assetPrefix).map((item) => ({ ...item, group }));
+    }
+    // provider 9（P3b）：@semantic/ 语义资产——两级：已发布项目 → 项目内资产。
+    // 名字存"路径"（project 或 project/asset），与后端 AiChatMention.name 一致（D19）。
+    if (semanticQuery) {
+      const project = semanticQuery.parts[0] ?? '';
+      const projectGroup = (item: any) =>
+        item?.indexState && item.indexState !== 'ready'
+          ? `${l('datastudio.aiChat.mention.groupSemantic')}·${l(
+              'datastudio.aiChat.mention.semanticIndexPending'
+            )}`
+          : l('datastudio.aiChat.mention.groupSemantic');
+      // 第二层：项目内资产（已选定项目，可继续按资产名筛选）
+      if (project && (semanticQuery.trailing || semanticQuery.parts.length > 1)) {
+        const keyword = (
+          semanticQuery.trailing ? '' : (semanticQuery.parts[1] ?? '')
+        ).toLowerCase();
+        return semanticAssets
+          .filter((item) => {
+            const asset = item.name.split('/').pop() ?? '';
+            return !keyword || asset.toLowerCase().includes(keyword);
+          })
+          .map((item) => ({
+            ...item,
+            group: l('datastudio.aiChat.mention.groupSemanticAsset')
+          }))
+          .slice(0, 50);
+      }
+      // 第一层（含"在项目名上继续筛选"）：已发布项目
+      const keyword = project.toLowerCase();
+      return semanticProjects
+        .filter((item: any) => !keyword || `${item.name}`.toLowerCase().includes(keyword))
+        .map((item: any) => ({
+          type: 'semantic' as const,
+          name: item.name,
+          group: projectGroup(item)
+        }))
+        .slice(0, 30);
     }
     return list;
     // mentionOpen 作为依赖：每次打开浮层都重新读取最新的选中片段
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [schemas, schemaName, tabs, activeTab, tabParams?.taskId, mentionOpen, mentionQuery, skillOptions,
-      sourceQuery, dataSources, envOptions, topicOptions, sourceTreeTick]);
+  }, [
+    schemas,
+    schemaName,
+    tabs,
+    activeTab,
+    tabParams?.taskId,
+    mentionOpen,
+    mentionQuery,
+    skillOptions,
+    sourceQuery,
+    dataSources,
+    envOptions,
+    topicOptions,
+    sourceTreeTick,
+    semanticQuery,
+    semanticProjects,
+    semanticAssets
+  ]);
 
   /** 过滤 + 排序：最近用过 > 前缀匹配 > 其余 */
   const filteredMentions = useMemo(() => {
@@ -620,11 +730,14 @@ const AiChat = (props: AiChatProps) => {
               ? 'topic'
               : /^env[-/]/.test(q)
                 ? 'env'
-                : '';
+                : /^semantic[-/]/.test(q)
+                  ? 'semantic'
+                  : '';
     if (assetPrefix) {
-      if (assetPrefix === 'source') {
-        // P1：@source/ 的候选已在 mentionCandidates 里按「层级 + 该层关键字」算好，
-        // 而名字是路径（ds/db/tbl）——再拿整串 query 过滤一次只会把候选全过滤掉。
+      if (assetPrefix === 'source' || assetPrefix === 'semantic') {
+        // P1/P3b：路径式前缀的候选已在 mentionCandidates 里按「层级 + 该层关键字」算好，
+        // 而名字是路径（ds/db/tbl 或 project/asset）——再拿整串 query 过滤一次只会把候选全过滤掉。
+        // （历史教训：@table/ 曾因漏这个特例而恒空。）
         return mentionCandidates.slice(0, 20);
       }
       const assetKey = q.slice(assetPrefix.length + 1);
@@ -644,7 +757,9 @@ const AiChat = (props: AiChatProps) => {
         const ra = recentMentions.indexOf(a.name);
         const rb = recentMentions.indexOf(b.name);
         if (ra !== -1 || rb !== -1) {
-          return (ra === -1 ? Number.MAX_SAFE_INTEGER : ra) - (rb === -1 ? Number.MAX_SAFE_INTEGER : rb);
+          return (
+            (ra === -1 ? Number.MAX_SAFE_INTEGER : ra) - (rb === -1 ? Number.MAX_SAFE_INTEGER : rb)
+          );
         }
         const pa = a.name?.toLowerCase().startsWith(q) ? 0 : 1;
         const pb = b.name?.toLowerCase().startsWith(q) ? 0 : 1;
@@ -674,6 +789,9 @@ const AiChat = (props: AiChatProps) => {
         return `@topic/${m.name}`;
       case 'env':
         return `@env/${m.name}`;
+      case 'semantic':
+        // P3b：name 已是路径（project 或 project/asset），直接拼前缀即可
+        return `@semantic/${m.name}`;
       default:
         return `@${m.name}`;
     }
@@ -732,8 +850,7 @@ const AiChat = (props: AiChatProps) => {
     setInputValue(inputValue.replace(/@[^\s@]*$/, `${token} `));
     setMentions((prev) =>
       prev.some(
-        (m) =>
-          m.type === item.type && m.name === item.name && m.columnName === item.columnName
+        (m) => m.type === item.type && m.name === item.name && m.columnName === item.columnName
       )
         ? prev
         : [...prev, item]
@@ -920,9 +1037,22 @@ const AiChat = (props: AiChatProps) => {
           // 阶段 2：Craft 改写模式。后端仍会独立校验配置开关，未开启一律回落 ask
           mode,
           // 阶段 3：所选 LLM 实例；不传 / 传不存在的值 → 后端回落默认实例
-          profileId
+          profileId,
+          // P3b：当前 tab 是语义文件（无 taskId、有 project）时，把所属项目作为
+          // 「项目级资产清单常驻」（D17）；普通作业 tab 不传，行为与改造前完全一致
+          semanticProject: tabParams?.taskId ? undefined : tabParams?.project
         },
-        ({ content, reasoning, sql, status, execResult, toolCall, toolResult, runId, confirmRequest }) => {
+        ({
+          content,
+          reasoning,
+          sql,
+          status,
+          execResult,
+          toolCall,
+          toolResult,
+          runId,
+          confirmRequest
+        }) => {
           // 阶段 2c-0：记录运行 id；收到写语句确认请求即弹框
           if (runId) {
             runIdRef.current = runId;
@@ -1212,9 +1342,10 @@ const AiChat = (props: AiChatProps) => {
    */
   const copyToClipboard = (text: string) => {
     if (navigator.clipboard?.writeText) {
-      navigator.clipboard
-        .writeText(text)
-        .then(() => message.success(l('datastudio.aiChat.copySuccess')), () => fallbackCopy(text));
+      navigator.clipboard.writeText(text).then(
+        () => message.success(l('datastudio.aiChat.copySuccess')),
+        () => fallbackCopy(text)
+      );
       return;
     }
     fallbackCopy(text);
@@ -1349,9 +1480,7 @@ const AiChat = (props: AiChatProps) => {
         <Empty
           image={<RobotOutlined style={{ fontSize: 40 }} />}
           description={
-            <Typography.Text type={'secondary'}>
-              {l('datastudio.aiChat.disabled')}
-            </Typography.Text>
+            <Typography.Text type={'secondary'}>{l('datastudio.aiChat.disabled')}</Typography.Text>
           }
         />
       </div>
@@ -1362,19 +1491,11 @@ const AiChat = (props: AiChatProps) => {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: 8 }}>
       <Space direction={'vertical'} size={4} style={{ width: '100%' }}>
         {!metaDataAvailable && !flinkContextAvailable && (
-          <Alert
-            type={'warning'}
-            showIcon
-            message={l('datastudio.aiChat.bindGuide')}
-          />
+          <Alert type={'warning'} showIcon message={l('datastudio.aiChat.bindGuide')} />
         )}
         {/* P0：FlinkSQL 有其专属上下文（无数据源也要给出「已加载」的正确预期，而不是「请绑定数据源」） */}
         {flinkContextAvailable && (
-          <Alert
-            type={'info'}
-            showIcon
-            message={l('datastudio.aiChat.flinkContextLoaded')}
-          />
+          <Alert type={'info'} showIcon message={l('datastudio.aiChat.flinkContextLoaded')} />
         )}
         {/*
           阶段 2 前置（1.2 多数据源切换）：始终显示，不受 metaDataAvailable 约束——
@@ -1802,7 +1923,7 @@ const AiChat = (props: AiChatProps) => {
       <Modal
         title={
           isSkillConfirm
-            ? writeConfirm?.title ?? l('datastudio.aiChat.confirm.skillTitle')
+            ? (writeConfirm?.title ?? l('datastudio.aiChat.confirm.skillTitle'))
             : l('datastudio.aiChat.writeConfirm.title')
         }
         open={!!writeConfirm}
@@ -1911,67 +2032,67 @@ const AiChat = (props: AiChatProps) => {
                 }
               />
             </div>
-        {/* 阶段 2c-1：变更风险块（语句类型 / 目标对象 / AI 估计影响）——
+            {/* 阶段 2c-1：变更风险块（语句类型 / 目标对象 / AI 估计影响）——
             「AI 估计」必须显式标注，不得渲染成精确值 */}
-        <div style={{ marginBottom: 8, fontSize: 12, lineHeight: '22px' }}>
-          {/* 阶段 2c-2：自动纠错重试中——告知这是第几次尝试、上次为什么失败，
+            <div style={{ marginBottom: 8, fontSize: 12, lineHeight: '22px' }}>
+              {/* 阶段 2c-2：自动纠错重试中——告知这是第几次尝试、上次为什么失败，
               让用户在「每次写库仍必确认」的前提下知情决策 */}
-          {writeConfirm?.attempt && writeConfirm.attempt > 1 ? (
-            <div style={{ marginBottom: 4 }}>
-              <Typography.Text type={'warning'}>
-                {l('datastudio.aiChat.writeConfirm.retryPrefix')}
-                {writeConfirm.attempt}
-                {l('datastudio.aiChat.writeConfirm.retrySuffix')}
-              </Typography.Text>
-              {writeConfirm.previousError ? (
+              {writeConfirm?.attempt && writeConfirm.attempt > 1 ? (
+                <div style={{ marginBottom: 4 }}>
+                  <Typography.Text type={'warning'}>
+                    {l('datastudio.aiChat.writeConfirm.retryPrefix')}
+                    {writeConfirm.attempt}
+                    {l('datastudio.aiChat.writeConfirm.retrySuffix')}
+                  </Typography.Text>
+                  {writeConfirm.previousError ? (
+                    <Typography.Text type={'secondary'}>
+                      {' '}
+                      {l('datastudio.aiChat.writeConfirm.previousError')}
+                      {writeConfirm.previousError}
+                    </Typography.Text>
+                  ) : null}
+                </div>
+              ) : null}
+              <div>
                 <Typography.Text type={'secondary'}>
-                  {' '}
-                  {l('datastudio.aiChat.writeConfirm.previousError')}
-                  {writeConfirm.previousError}
+                  {l('datastudio.aiChat.writeConfirm.risk.sqlType')}
                 </Typography.Text>
+                <Tag color={writeConfirm?.sqlType === 'DDL' ? 'red' : 'orange'}>
+                  {writeConfirm?.sqlType ?? '-'}
+                </Tag>
+                {writeConfirm?.risk?.target ? (
+                  <>
+                    <Typography.Text type={'secondary'}>
+                      {l('datastudio.aiChat.writeConfirm.risk.target')}
+                    </Typography.Text>
+                    <Typography.Text code>{writeConfirm.risk.target}</Typography.Text>
+                  </>
+                ) : null}
+              </div>
+              {writeConfirm?.risk?.modelEstimate ? (
+                <div>
+                  <Typography.Text type={'secondary'}>
+                    {l('datastudio.aiChat.writeConfirm.risk.estimate')}
+                  </Typography.Text>
+                  <Typography.Text>{writeConfirm.risk.modelEstimate}</Typography.Text>
+                  <Typography.Text type={'secondary'}>
+                    {l('datastudio.aiChat.writeConfirm.risk.estimateNote')}
+                  </Typography.Text>
+                </div>
               ) : null}
             </div>
-          ) : null}
-          <div>
-            <Typography.Text type={'secondary'}>
-              {l('datastudio.aiChat.writeConfirm.risk.sqlType')}
-            </Typography.Text>
-            <Tag color={writeConfirm?.sqlType === 'DDL' ? 'red' : 'orange'}>
-              {writeConfirm?.sqlType ?? '-'}
-            </Tag>
-            {writeConfirm?.risk?.target ? (
-              <>
-                <Typography.Text type={'secondary'}>
-                  {l('datastudio.aiChat.writeConfirm.risk.target')}
-                </Typography.Text>
-                <Typography.Text code>{writeConfirm.risk.target}</Typography.Text>
-              </>
-            ) : null}
-          </div>
-          {writeConfirm?.risk?.modelEstimate ? (
-            <div>
-              <Typography.Text type={'secondary'}>
-                {l('datastudio.aiChat.writeConfirm.risk.estimate')}
-              </Typography.Text>
-              <Typography.Text>{writeConfirm.risk.modelEstimate}</Typography.Text>
-              <Typography.Text type={'secondary'}>
-                {l('datastudio.aiChat.writeConfirm.risk.estimateNote')}
-              </Typography.Text>
-            </div>
-          ) : null}
-        </div>
-        <pre
-          style={{
-            maxHeight: '40vh',
-            overflow: 'auto',
-            background: 'rgba(0,0,0,0.04)',
-            padding: 8,
-            borderRadius: 4,
-            margin: 0,
-            whiteSpace: 'pre-wrap'
-          }}
-        >
-          {writeConfirm?.sql}
+            <pre
+              style={{
+                maxHeight: '40vh',
+                overflow: 'auto',
+                background: 'rgba(0,0,0,0.04)',
+                padding: 8,
+                borderRadius: 4,
+                margin: 0,
+                whiteSpace: 'pre-wrap'
+              }}
+            >
+              {writeConfirm?.sql}
             </pre>
           </>
         )}

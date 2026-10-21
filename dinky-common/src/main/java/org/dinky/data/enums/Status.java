@@ -542,6 +542,15 @@ public enum Status {
     SEMANTIC_NOT_EMPTY(438, "semantic.not.empty"),
     SEMANTIC_PARENT_NOT_FOUND(439, "semantic.parent.not.found"),
     SEMANTIC_MOVE_INTO_SELF(440, "semantic.move.into.self"),
+
+    /** P3b：`@semantic/<p>/<name>` 同名（TABLE 与 METRIC 都有）→ 报歧义，不猜 */
+    SEMANTIC_HANDLE_AMBIGUOUS(441, "semantic.handle.ambiguous"),
+
+    /** P3b：项目没有任何 `_published/<p>/<ver>/` → 明确提示"尚未发布" */
+    SEMANTIC_PUBLISHED_NOT_FOUND(442, "semantic.published.not.found"),
+
+    /** P3b：索引未就绪（index_state != ready）→ 降级直读 YAML，通常只作提示不抛错 */
+    SEMANTIC_INDEX_PENDING_INFO(443, "semantic.index.pending.info"),
     SYS_METRICS_SETTINGS_SYS_ENABLE(148, "sys.metrics.settings.sys.enable"),
     SYS_METRICS_SETTINGS_SYS_ENABLE_NOTE(149, "sys.metrics.settings.sys.enable.note"),
     SYS_METRICS_SETTINGS_SYS_GATHERTIMING(150, "sys.metrics.settings.sys.gatherTiming"),

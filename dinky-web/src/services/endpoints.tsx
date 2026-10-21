@@ -342,4 +342,7 @@ export enum API_CONSTANTS {
   SEMANTIC_DIR_CREATE = '/api/semantic/dir',
   SEMANTIC_RENAME = '/api/semantic/rename',
   SEMANTIC_DELETE = '/api/semantic/delete',
+  // P3b：AI Chat 的 @semantic/ 候选（只读，读 _published 不可变快照）
+  SEMANTIC_PUBLISHED_PROJECTS = '/api/semantic/published/projects',
+  SEMANTIC_PUBLISHED_ASSETS = '/api/semantic/published/assets'
 }

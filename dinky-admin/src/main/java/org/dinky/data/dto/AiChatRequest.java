@@ -146,6 +146,18 @@ public class AiChatRequest {
     private String profileId;
 
     /**
+     * 项目级语义资产常驻（P3b，D17）：语义项目名（非句柄，不含 {@code /}）。
+     *
+     * <p>非空 = 本轮对话要把该项目的**资产清单**（表名 + 指标名 + 一句话口径）常驻进上下文；
+     * 为空等价于关闭（不是"全局常驻所有项目"——那样会吃光预算）。
+     *
+     * <p>生效还需：语义开关开启 + 当前用户有 {@code datastudio:semantic:view}（§4.7，
+     * 前端隐藏不作为安全边界）。单资产精确引用走 {@code mentions} 里的 {@code @semantic/...}。
+     */
+    @ApiModelProperty(value = "项目级语义资产常驻：语义项目名（可空）", example = "sem_demo2")
+    private String semanticProject;
+
+    /**
      * 服务端填充的当前用户 id（限流 / 配额 / 审计用）。
      *
      * <p><b>不接受前端传入</b>：Controller 会用 Sa-Token 的登录 id 覆盖，防止伪造绕过限流。

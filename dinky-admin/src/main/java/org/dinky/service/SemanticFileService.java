@@ -25,6 +25,8 @@ import org.dinky.data.dto.SemanticRenameDTO;
 import org.dinky.data.vo.SemanticFileContentVO;
 import org.dinky.data.vo.SemanticFileNode;
 import org.dinky.data.vo.SemanticProjectVO;
+import org.dinky.data.vo.SemanticPublishedAssetVO;
+import org.dinky.data.vo.SemanticPublishedProjectVO;
 
 import java.util.List;
 
@@ -56,4 +58,21 @@ public interface SemanticFileService {
 
     /** 软删除到项目内回收站，返回回收站内的相对路径（供恢复使用） */
     String deleteEntry(SemanticEntryOpDTO dto);
+
+    /**
+     * 已发布项目清单（P3b，{@code @semantic/} 一级候选）。
+     *
+     * <p>只列**有发布版本**的项目：AI 只能引用不可变快照，编辑区内容不在候选内。
+     */
+    List<SemanticPublishedProjectVO> listPublishedProjects();
+
+    /**
+     * 已发布项目内可引用资产（P3b，{@code @semantic/<p>/} 二级候选）。
+     *
+     * <p>来自索引 {@code names[]}；索引未就绪时降级为 YAML 文件级列表（{@code oneLiner} 为空）。
+     *
+     * @throws org.dinky.data.exception.BusException
+     *     {@code semantic.published.not.found}——项目从未发布
+     */
+    List<SemanticPublishedAssetVO> listPublishedAssets(String project);
 }
