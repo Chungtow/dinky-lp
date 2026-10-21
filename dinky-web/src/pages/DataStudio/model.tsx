@@ -63,7 +63,7 @@ import { API_CONSTANTS } from '@/services/endpoints';
  *  zh: 中间tab 类型
  *  en: Center tab type
  */
-export type CenterTabType = 'web' | 'task' | 'dataSource' | 'resource';
+export type CenterTabType = 'web' | 'task' | 'dataSource' | 'resource' | 'semanticFile';
 
 /**
  * @description:
@@ -222,6 +222,8 @@ export type StudioModelType = {
     handleThemeCompact: Reducer<DataStudioState>;
     // 保存工具栏布局
     saveToolbarLayout: Reducer<DataStudioState, SaveToolbarLayoutDTO>;
+    // 对齐工具栏 tab 列表（补齐新增 tab / 剔除已删除 tab）
+    syncToolbarTabs: Reducer<DataStudioState>;
     // 更新中间tab
     updateCenterTab: Reducer<DataStudioState, CenterTabDTO>;
     // 添加中间tab
@@ -522,6 +524,43 @@ const StudioModel: StudioModelType = {
           }
         }
       };
+    },
+
+    /**
+     * 对齐工具栏 tab 列表。
+     *
+     * <p>为什么需要：`app.tsx` 的 `persistReducer` 未设白名单，整个 dva state（含
+     * `toolbar.{leftTop,leftBottom,right}.allTabs`）会被 redux-persist 写进浏览器
+     * IndexedDB 并在启动时回灌。**新增的 tab（如 P2 的「语义项目」）在历史用户的持久化
+     * 布局里并不存在**，于是入口永远不出现（清缓存才会出现），且该列表还参与
+     * `index.tsx` 的 tab 定位判断。
+     *
+     * <p>语义：保留用户既有顺序与位置（含手动拖到别的位置的 tab），仅
+     * ① 剔除已从 `ToolbarRoutes` 移除的 key；② 把 routes 中有、但任何位置都没有的 key
+     * 追加到它的默认位置末尾。幂等，可重复 dispatch。
+     */
+    syncToolbarTabs(state) {
+      const positions: ToolbarPosition[] = ['leftTop', 'leftBottom', 'right'];
+      const validKeys = new Set(ToolbarRoutes.map((route) => route.key));
+      const present = new Set<string>();
+      positions.forEach((position) =>
+        (state.toolbar[position]?.allTabs ?? []).forEach((key) => present.add(key))
+      );
+      let changed = false;
+      const toolbar = { ...state.toolbar };
+      positions.forEach((position) => {
+        const current = state.toolbar[position]?.allTabs ?? [];
+        const kept = current.filter((key) => validKeys.has(key));
+        const defaults = ToolbarRoutes.filter((route) => route.position === position).map(
+          (route) => route.key
+        );
+        const missing = defaults.filter((key) => !present.has(key) && !kept.includes(key));
+        if (missing.length > 0 || kept.length !== current.length) {
+          changed = true;
+          toolbar[position] = { ...state.toolbar[position], allTabs: [...kept, ...missing] };
+        }
+      });
+      return changed ? { ...state, toolbar } : state;
     },
     updateCenterTab(state, { id, tabType, title, params, isUpdate }) {
       return {

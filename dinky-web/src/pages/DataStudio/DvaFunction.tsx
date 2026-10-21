@@ -55,6 +55,10 @@ export const mapDispatchToProps = (dispatch: Dispatch) => {
         ...payload,
         type: STUDIO_MODEL.saveToolbarLayout
       }),
+    syncToolbarTabs: () =>
+      dispatch({
+        type: STUDIO_MODEL.syncToolbarTabs
+      }),
     addCenterTab: (payload: CenterTabDTO) =>
       dispatch({
         ...payload,

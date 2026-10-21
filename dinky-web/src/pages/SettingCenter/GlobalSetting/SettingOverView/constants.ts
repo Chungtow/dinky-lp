@@ -27,7 +27,9 @@ export enum SettingConfigKeyEnum {
   KAFKA = 'Kafka',
   METRIC = 'Metric',
   RESOURCE = 'Resource',
-  ENV = 'Env'
+  ENV = 'Env',
+  /** P2：语义层（sys.semantic.settings.*） */
+  SEMANTIC = 'Semantic'
 }
 
 export enum ButtonFrontendType {

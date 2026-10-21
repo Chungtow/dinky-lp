@@ -125,6 +125,12 @@ public enum Status {
     TOKEN_FREEZED(10025, "token.freezed"),
     NO_PREFIX(10026, "no.prefix"),
     USER_SUPERADMIN_CANNOT_DELETE(10027, "user.superadmin.cannot.delete"),
+    /**
+     * 预期内的权限拒绝（Sa-Token @SaCheckPermission / 角色校验未通过）。
+     *
+     * <p>这是"配置没开通"而不是系统故障：不打印堆栈、不回传权限码与异常详情，只给用户一句可读提示。
+     */
+    PERMISSION_DENIED(10028, "permission.denied"),
 
     // role
     ROLE_ALREADY_EXISTS(10101, "role.already.exists"),
@@ -517,6 +523,20 @@ public enum Status {
     SYS_LLM_SETTINGS_MENTIONSOURCEMAXEXPANSIONS_NOTE(422, "sys.llm.settings.mentionSourceMaxExpansions.note"),
     SYS_LLM_SETTINGS_SOURCEEXPANDMAXCHARS(423, "sys.llm.settings.sourceExpandMaxChars"),
     SYS_LLM_SETTINGS_SOURCEEXPANDMAXCHARS_NOTE(424, "sys.llm.settings.sourceExpandMaxChars.note"),
+    /** 语义层（P2）：语义项目在线编辑开关 + 语义根。分组名取 key 第 2 段（semantic） */
+    SYS_SEMANTIC_SETTINGS_ENABLE(425, "sys.semantic.settings.enable"),
+    SYS_SEMANTIC_SETTINGS_ENABLE_NOTE(426, "sys.semantic.settings.enable.note"),
+    SYS_SEMANTIC_SETTINGS_HDFS_BASE_PATH(427, "sys.semantic.settings.hdfs.base.path"),
+    SYS_SEMANTIC_SETTINGS_HDFS_BASE_PATH_NOTE(428, "sys.semantic.settings.hdfs.base.path.note"),
+    /** 语义层（P2）：错误码，五类可读错误 + 两类 IO 失败 */
+    SEMANTIC_DISABLED(429, "semantic.disabled"),
+    SEMANTIC_PATH_ILLEGAL(430, "semantic.path.illegal"),
+    SEMANTIC_FILE_NOT_FOUND(431, "semantic.file.not.found"),
+    SEMANTIC_FILE_TOO_LARGE(432, "semantic.file.too.large"),
+    SEMANTIC_TOO_MANY_FILES(433, "semantic.too.many.files"),
+    SEMANTIC_WRITE_CONFLICT(434, "semantic.write.conflict"),
+    SEMANTIC_READ_FAILED(435, "semantic.read.failed"),
+    SEMANTIC_WRITE_FAILED(436, "semantic.write.failed"),
     SYS_METRICS_SETTINGS_SYS_ENABLE(148, "sys.metrics.settings.sys.enable"),
     SYS_METRICS_SETTINGS_SYS_ENABLE_NOTE(149, "sys.metrics.settings.sys.enable.note"),
     SYS_METRICS_SETTINGS_SYS_GATHERTIMING(150, "sys.metrics.settings.sys.gatherTiming"),

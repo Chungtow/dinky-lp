@@ -30,7 +30,11 @@ export default React.memo((props: ToolbarProp) => {
   const { showDesc, onClick, toolbarSelect, position, saveToolbarLayout, height } = props;
   // 2026-10-14 权限登记：无 aiChat:use 权限时不展示 AI Chat 面板（hooks 须在组件顶层调用）
   const canUseAiChat = HasAuthority(PermissionConstants.DATASTUDIO_AI_CHAT);
-  const routes = toolbarSelect.allTabs.filter((key) => key !== 'aiChat' || canUseAiChat);
+  // P2：无 datastudio:semantic:view 时不展示 dbt 语义项目面板（与 AI Chat 同一套可见性约定）
+  const canUseSemantic = HasAuthority(PermissionConstants.DATASTUDIO_SEMANTIC_VIEW);
+  const routes = toolbarSelect.allTabs.filter(
+    (key) => (key !== 'aiChat' || canUseAiChat) && (key !== 'semantic' || canUseSemantic)
+  );
   const currentRoutes = routes
     .map((value) => ToolbarRoutes.find((item) => item.key === value)!!)
     .map((item) => ({

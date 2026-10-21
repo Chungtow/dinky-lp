@@ -293,4 +293,15 @@ public class PermissionConstants {
      * classloader jars
      */
     public static final String SETTINGS_CLASSLOADERJARS_VIEW = "settings:classloaderjars:view";
+
+    /**
+     * dbt 语义项目在线编辑（P2）。
+     *
+     * <p><b>必须保持 3 段式</b>：超管通配 {@code *:*:*} 按冒号分段匹配，2 段串连超管都匹配不上。
+     * 这两条权限挂在「数据开发」菜单（dinky_sys_menu id=5）下，只登记功能权限、不新增菜单行
+     * （「dbt」是数据开发页内的前端 tab，不是左侧菜单）。
+     */
+    public static final String DATASTUDIO_SEMANTIC_VIEW = "datastudio:semantic:view";
+
+    public static final String DATASTUDIO_SEMANTIC_EDIT = "datastudio:semantic:edit";
 }
