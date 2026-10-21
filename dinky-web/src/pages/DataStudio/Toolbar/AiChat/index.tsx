@@ -141,6 +141,8 @@ const AiChat = (props: AiChatProps) => {
   const databaseId: number | undefined = datasourceId ?? tabDatabaseId;
   const [datasourceList, setDatasourceList] = useState<any[]>([]);
   const currentSql: string = tabParams?.statement ?? '';
+  /** 语义文件 tab（dbt on HDFS）不是 SQL 作业：EXPLAIN / 执行对它无意义，AI 仍可读写全文 */
+  const isSqlJobTab = currentTab?.tabType === 'task';
   const metaDataAvailable = Boolean(databaseId) && isSql(dialect?.toLowerCase());
   /**
    * P0：FlinkSQL 上下文可用性（与 metaDataAvailable 正交）。
@@ -962,7 +964,7 @@ const AiChat = (props: AiChatProps) => {
       if (mode === 'craft') {
         const modified = extractFirstCodeBlock(streamed);
         if (modified) {
-          const original = editorRegistry?.getContent(tabParams?.taskId) ?? '';
+          const original = editorRegistry?.getContent(editorKey) ?? '';
           // 阶段 2c-2 收尾：内容**未发生实际变化**时不弹采纳框。
           // Craft 模板要求模型「输出有且仅有一个完整代码块」，因此在执行类 / 咨询类提问下，
           // 模型常原样返回编辑器内容，此前会无意义地弹出采纳框（即使采纳也不会改变任何内容）。
@@ -1074,12 +1076,11 @@ const AiChat = (props: AiChatProps) => {
 
   /** 阶段 2b：采纳——仅替换编辑器中选中的片段（选区外不动，保留 undo 栈） */
   const handleP2bAccept = () => {
-    const taskId = tabParams?.taskId;
-    if (!p2bDiff || taskId === undefined) {
+    if (!p2bDiff || !editorKey) {
       setP2bDiff(null);
       return;
     }
-    const ok = editorRegistry?.applyToSelection(taskId, p2bDiff.modified) ?? false;
+    const ok = editorRegistry?.applyToSelection(editorKey, p2bDiff.modified) ?? false;
     if (ok) {
       message.success(l('datastudio.aiChat.p2b.applied'));
       setSelectedText('');
@@ -1102,23 +1103,23 @@ const AiChat = (props: AiChatProps) => {
 
   /** 阶段 2（Craft）：采纳——整块替换编辑器内容，并留改动前快照供撤销 */
   const handleCraftAccept = () => {
-    const taskId = tabParams?.taskId;
-    if (!craftDiff || taskId === undefined) {
+    if (!craftDiff || !editorKey) {
       setCraftDiff(null);
       return;
     }
-    const key = String(taskId);
+    const key = editorKey;
     // 连续多轮 Craft 时保留最初的原文，撤销一次回到最初的模样
     if (craftBeforeRef.current[key] === undefined) {
       craftBeforeRef.current[key] = craftDiff.original;
     }
-    const ok = editorRegistry?.applyFullContent(taskId, craftDiff.modified) ?? false;
+    const ok = editorRegistry?.applyFullContent(editorKey, craftDiff.modified) ?? false;
     if (ok) {
       setCraftApplied((prev) => ({ ...prev, [key]: true }));
       message.success(l('datastudio.aiChat.craft.applied'));
       // 阶段 2（T2-5）：落写入审计——谁、哪个作业、改动前后 hash 与字符数变化
       reportCraftWrite({
-        taskId,
+        // 语义文件 tab 没有作业 id（任务态才写审计关联），此处允许为空
+        taskId: tabParams?.taskId,
         sessionId: sessionIdRef.current,
         before: craftDiff.original,
         after: craftDiff.modified
@@ -1134,14 +1135,13 @@ const AiChat = (props: AiChatProps) => {
 
   /** 阶段 2（Craft）：撤销——回退到 AI 改动前的内容 */
   const handleCraftUndo = () => {
-    const taskId = tabParams?.taskId;
-    if (taskId === undefined) {
+    if (!editorKey) {
       return;
     }
-    const key = String(taskId);
+    const key = editorKey;
     const before = craftBeforeRef.current[key];
     if (before !== undefined) {
-      editorRegistry?.applyFullContent(taskId, before);
+      editorRegistry?.applyFullContent(editorKey, before);
       delete craftBeforeRef.current[key];
       message.success(l('datastudio.aiChat.craft.undoDone'));
     }
@@ -1745,7 +1745,7 @@ const AiChat = (props: AiChatProps) => {
             />
           </Tooltip>
         )}
-        {craftApplied[String(tabParams?.taskId ?? '')] && (
+        {craftApplied[editorKey ?? ''] && (
           <Tooltip title={l('datastudio.aiChat.craft.undo')}>
             <Button icon={<RollbackOutlined />} onClick={handleCraftUndo}>
               {l('datastudio.aiChat.craft.undo')}
@@ -1755,7 +1755,7 @@ const AiChat = (props: AiChatProps) => {
         <Tooltip title={l('datastudio.aiChat.explainTip')}>
           <Button
             icon={<PlayCircleOutlined />}
-            disabled={loading || !currentSql?.trim()}
+            disabled={loading || !isSqlJobTab || !currentSql?.trim()}
             onClick={() => handleSend('EXPLAIN')}
           >
             {l('datastudio.aiChat.explain')}
