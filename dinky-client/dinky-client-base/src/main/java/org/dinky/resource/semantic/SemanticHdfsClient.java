@@ -36,8 +36,10 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 import java.util.regex.Pattern;
@@ -87,6 +89,23 @@ public class SemanticHdfsClient {
 
     /** 只读目录（相对项目根） */
     private static final String TARGET_DIR = "target/";
+
+    /** 历史快照目录（相对项目根）：不下钻、不入列、不可写，语义同 target/ */
+    private static final String VERSIONS_DIR = "_versions/";
+
+    /** 回收站目录（相对项目根）：P2.5 软删落点，不下钻、不入列、不可写 */
+    private static final String TRASH_DIR = ".trash/";
+
+    /** 目录名（walk 剪枝按名字判定，见 {@link #isInternalDir}） */
+    private static final String TARGET_NAME = "target";
+
+    private static final String VERSIONS_NAME = "_versions";
+
+    /** 发布区（语义根下一级）：只在 ensureWritable 里做越权拦截 */
+    private static final String PUBLISHED_DIR = "_published/";
+
+    /** 回收站保留天数（仅用于提示文案，purge 由父仓库脚本执行） */
+    public static final int TRASH_KEEP_DAYS = 7;
 
     private static final SemanticHdfsClient INSTANCE = new SemanticHdfsClient();
 
@@ -188,6 +207,12 @@ public class SemanticHdfsClient {
         }
         for (FileStatus status : children) {
             String name = status.getPath().getName();
+            // 内部目录（dbt 产物 / 历史快照 / 回收站 / 隐藏目录）：不入列也不下钻。
+            // 不下钻：target 体积大；_versions 与 .trash 属内部数据且会撑爆 300 文件上限。
+            // 不入列：.trash 是 P2.5 软删落点，出现在文件树里会误导用户去删回收站。
+            if (status.isDirectory() && isInternalDir(name)) {
+                continue;
+            }
             String rel = prefix.isEmpty() ? name : prefix + "/" + name;
             boolean readOnly = isReadOnly(rel);
             if (entries.size() >= MAX_PROJECT_FILES) {
@@ -195,11 +220,19 @@ public class SemanticHdfsClient {
             }
             entries.add(new SemanticFileEntry(
                     rel, status.isDirectory(), status.getLen(), status.getModificationTime(), readOnly));
-            // 只读目录（target/）不下钻：产物体积大且无需展示
-            if (status.isDirectory() && !readOnly) {
+            if (status.isDirectory()) {
                 walk(status.getPath(), rel, entries, depth + 1);
             }
         }
+    }
+
+    /** 内部目录判定：dbt 产物 / 历史快照 / 回收站，以及一切隐藏目录（`.` 开头） */
+    private boolean isInternalDir(String name) {
+        return name.startsWith(".")
+                || TARGET_NAME.equals(name)
+                || VERSIONS_NAME.equals(name)
+                || "logs".equals(name)
+                || "dbt_packages".equals(name);
     }
 
     /** 读文件内容（≤1MB），同时返回 mtime 供前端做乐观锁 */
@@ -282,6 +315,158 @@ public class SemanticHdfsClient {
         }
     }
 
+    // ------------------------------------------------------------------ 文件 CRUD（P2.5）
+
+    /**
+     * 新建目录（父目录必须已存在）。
+     *
+     * <p>刻意不用 {@code fs.mkdirs} 的"自动建父目录"语义：语义项目里目录层级本身就是信息，
+     * 拼错父目录名时静默生成整条链路比直接报错更难排查。
+     */
+    public void mkdirs(String project, String rel) {
+        requireEnabled();
+        String clean = normalizeRel(rel);
+        ensureWritable(clean);
+        Path target = new Path(absoluteOf(project, clean));
+        try {
+            FileSystem fileSystem = fs();
+            if (fileSystem.exists(target)) {
+                throw new BusException(Status.SEMANTIC_TARGET_EXISTS);
+            }
+            if (!isExistingDir(fileSystem, target.getParent())) {
+                throw new BusException(Status.SEMANTIC_PARENT_NOT_FOUND);
+            }
+            if (!fileSystem.mkdirs(target)) {
+                throw new BusException(Status.SEMANTIC_WRITE_FAILED);
+            }
+        } catch (IOException e) {
+            throw new BusException(e, Status.SEMANTIC_WRITE_FAILED);
+        }
+    }
+
+    /**
+     * 软删：把条目移入项目内回收站 {@code .trash/<yyyyMMddHHmmss>-<uuid8>/<rel>}。
+     *
+     * <p>用 {@code rename} 而不是 {@code delete}：单次 NameNode 元数据操作、同项目内原子，
+     * 误删可秒级还原（{@code hdfs dfs -mv} 搬回原位）。真删由父仓库清理脚本按保留期执行，
+     * Dinky 不提供"永久删除"。
+     *
+     * @param baseMtime 仅对**文件**生效：目录 mtime 只随子项增删变化，语义不稳定，参与乐观锁会频繁误报
+     * @return 回收站内的相对路径（供前端提示与人工恢复）
+     */
+    public String delete(String project, String rel, boolean recursive, Long baseMtime) {
+        requireEnabled();
+        String clean = normalizeRel(rel);
+        ensureWritable(clean);
+        Path source = new Path(absoluteOf(project, clean));
+        try {
+            FileSystem fileSystem = fs();
+            FileStatus status;
+            try {
+                status = fileSystem.getFileStatus(source);
+            } catch (FileNotFoundException e) {
+                throw new BusException(Status.SEMANTIC_FILE_NOT_FOUND);
+            }
+            if (status.isDirectory()) {
+                if (!recursive && fileSystem.listStatus(source).length > 0) {
+                    throw new BusException(Status.SEMANTIC_NOT_EMPTY);
+                }
+            } else if (baseMtime != null && baseMtime > 0 && status.getModificationTime() != baseMtime.longValue()) {
+                throw new BusException(Status.SEMANTIC_WRITE_CONFLICT);
+            }
+            String trashRel = TRASH_DIR + trashStamp() + "/" + clean;
+            Path trashTarget = new Path(absoluteOf(project, trashRel));
+            Path trashDir = trashTarget.getParent();
+            if (!fileSystem.mkdirs(trashDir) && !fileSystem.exists(trashDir)) {
+                throw new BusException(Status.SEMANTIC_WRITE_FAILED);
+            }
+            // 回收站目录名含时间戳 + uuid，目标不可能已存在，因此不需要 OVERWRITE
+            if (!fileSystem.rename(source, trashTarget)) {
+                throw new BusException(Status.SEMANTIC_WRITE_FAILED);
+            }
+            return trashRel;
+        } catch (IOException e) {
+            throw new BusException(e, Status.SEMANTIC_WRITE_FAILED);
+        }
+    }
+
+    /**
+     * 项目内改名 / 移动（目标必须不存在）。
+     *
+     * <p>用 {@link FileSystem#rename} 而不是 {@link #write} 里的
+     * {@code FileContext.rename(OVERWRITE)}：前者目标存在时返回 false（据此报
+     * {@code SEMANTIC_TARGET_EXISTS}），后者是"原子替换"语义，会静默覆盖目标内容。
+     */
+    public void renameInProject(String project, String from, String to, Long baseMtime) {
+        requireEnabled();
+        String srcClean = normalizeRel(from);
+        String dstClean = normalizeRel(to);
+        ensureWritable(srcClean);
+        ensureWritable(dstClean);
+        if (srcClean.equals(dstClean)) {
+            return;
+        }
+        Path source = new Path(absoluteOf(project, srcClean));
+        Path target = new Path(absoluteOf(project, dstClean));
+        try {
+            FileSystem fileSystem = fs();
+            FileStatus sourceStatus;
+            try {
+                sourceStatus = fileSystem.getFileStatus(source);
+            } catch (FileNotFoundException e) {
+                throw new BusException(Status.SEMANTIC_FILE_NOT_FOUND);
+            }
+            if (sourceStatus.isDirectory()) {
+                if (dstClean.startsWith(srcClean + "/")) {
+                    throw new BusException(Status.SEMANTIC_MOVE_INTO_SELF);
+                }
+            } else if (baseMtime != null
+                    && baseMtime > 0
+                    && sourceStatus.getModificationTime() != baseMtime.longValue()) {
+                // 与 write/delete 同判据：文件被别人改过就不让改名
+                throw new BusException(Status.SEMANTIC_WRITE_CONFLICT);
+            }
+            if (fileSystem.exists(target)) {
+                throw new BusException(Status.SEMANTIC_TARGET_EXISTS);
+            }
+            if (!isExistingDir(fileSystem, target.getParent())) {
+                throw new BusException(Status.SEMANTIC_PARENT_NOT_FOUND);
+            }
+            if (!fileSystem.rename(source, target)) {
+                throw new BusException(Status.SEMANTIC_WRITE_FAILED);
+            }
+        } catch (IOException e) {
+            throw new BusException(e, Status.SEMANTIC_WRITE_FAILED);
+        }
+    }
+
+    /** 单条目状态（mtime / size / 是否目录），供乐观锁与"目录非空"判断 */
+    public FileStatus statOf(String project, String rel) {
+        requireEnabled();
+        String clean = normalizeRel(rel);
+        try {
+            return fs().getFileStatus(new Path(absoluteOf(project, clean)));
+        } catch (FileNotFoundException e) {
+            throw new BusException(Status.SEMANTIC_FILE_NOT_FOUND);
+        } catch (IOException e) {
+            throw new BusException(e, Status.SEMANTIC_READ_FAILED);
+        }
+    }
+
+    /** 父目录存在且是目录（新建/改名共用） */
+    private boolean isExistingDir(FileSystem fileSystem, Path path) throws IOException {
+        return path != null
+                && fileSystem.exists(path)
+                && fileSystem.getFileStatus(path).isDirectory();
+    }
+
+    /** 回收站子目录名：{@code yyyyMMddHHmmss-<uuid8>}，字典序即时间序，便于清理脚本按天裁剪 */
+    private String trashStamp() {
+        return new SimpleDateFormat("yyyyMMddHHmmss").format(new Date())
+                + "-"
+                + UUID.randomUUID().toString().substring(0, 8);
+    }
+
     // ------------------------------------------------------------------ 守卫 / 工具
 
     /** 项目名校验 */
@@ -315,15 +500,23 @@ public class SemanticHdfsClient {
         return rel;
     }
 
-    /** 只读判定：meta.json 与 target/ 下的一切 */
+    /** 只读判定：meta.json 与 target/、_versions/、.trash/ 下的一切 */
     public boolean isReadOnly(String rel) {
-        return META_FILE.equals(rel) || rel.startsWith(TARGET_DIR);
+        return META_FILE.equals(rel)
+                || rel.startsWith(TARGET_DIR)
+                || rel.startsWith(VERSIONS_DIR)
+                || rel.startsWith(TRASH_DIR);
     }
 
-    /** 写前守卫：只读项、导出目录一律拒绝（含 {@code _published} 之类的越权路径） */
+    /**
+     * 写 / 改前守卫：只读项、发布区、导出目录一律拒绝。
+     *
+     * <p>P2.5 起 {@code rename / delete / move} 的**源路径**也要过这里——只守"写"不守"删"
+     * 等于让受保护项换个方式被销毁。
+     */
     private void ensureWritable(String rel) {
         String lower = rel.toLowerCase();
-        if (isReadOnly(rel) || lower.startsWith("_published/") || lower.startsWith(".git/")) {
+        if (isReadOnly(rel) || lower.startsWith(PUBLISHED_DIR) || lower.startsWith(".git/")) {
             throw new BusException(Status.SEMANTIC_PATH_ILLEGAL);
         }
     }

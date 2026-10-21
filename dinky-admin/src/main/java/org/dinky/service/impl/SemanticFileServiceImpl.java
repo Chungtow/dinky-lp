@@ -19,7 +19,11 @@
 
 package org.dinky.service.impl;
 
+import org.dinky.data.dto.SemanticEntryOpDTO;
 import org.dinky.data.dto.SemanticFileSaveDTO;
+import org.dinky.data.dto.SemanticRenameDTO;
+import org.dinky.data.enums.Status;
+import org.dinky.data.exception.BusException;
 import org.dinky.data.vo.SemanticFileContentVO;
 import org.dinky.data.vo.SemanticFileNode;
 import org.dinky.data.vo.SemanticProjectVO;
@@ -96,5 +100,56 @@ public class SemanticFileServiceImpl implements SemanticFileService {
                 dto.getBaseMtime(),
                 mtime);
         return mtime;
+    }
+
+    @Override
+    public String createDir(SemanticEntryOpDTO dto) {
+        String rel = client.normalizeRel(dto.getPath());
+        client.mkdirs(dto.getProject(), rel);
+        log.info("semantic dir created, project={}, path={}", dto.getProject(), rel);
+        return rel;
+    }
+
+    @Override
+    public void rename(SemanticRenameDTO dto) {
+        String from = client.normalizeRel(dto.getPath());
+        String newName = dto.getNewName() == null ? "" : dto.getNewName().trim();
+        if (!isSingleSegment(newName)) {
+            throw new BusException(Status.SEMANTIC_PATH_ILLEGAL);
+        }
+        int idx = from.lastIndexOf('/');
+        // 只改最后一段（同目录改名）；父目录保持原样
+        String to = idx < 0 ? newName : from.substring(0, idx + 1) + newName;
+        client.renameInProject(dto.getProject(), from, to, dto.getBaseMtime());
+        log.info(
+                "semantic entry renamed, project={}, from={}, to={}, isDir={}",
+                dto.getProject(),
+                from,
+                to,
+                dto.getIsDir());
+    }
+
+    @Override
+    public String deleteEntry(SemanticEntryOpDTO dto) {
+        String rel = client.normalizeRel(dto.getPath());
+        String trashRel =
+                client.delete(dto.getProject(), rel, Boolean.TRUE.equals(dto.getRecursive()), dto.getBaseMtime());
+        log.info(
+                "semantic entry moved to trash, project={}, path={}, trash={}, keepDays={}",
+                dto.getProject(),
+                rel,
+                trashRel,
+                SemanticHdfsClient.TRASH_KEEP_DAYS);
+        return trashRel;
+    }
+
+    /** 名称必须是单段：非空、不含路径分隔符、不是 {@code .}/{@code ..}、不超长 */
+    private boolean isSingleSegment(String name) {
+        return !name.isEmpty()
+                && !name.contains("/")
+                && !name.contains("\\")
+                && !".".equals(name)
+                && !"..".equals(name)
+                && name.length() <= 128;
     }
 }

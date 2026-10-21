@@ -47,3 +47,26 @@ export type SemanticFileSaveParams = {
   content: string;
   baseMtime?: number;
 };
+
+/** 新建目录请求 */
+export type SemanticCreateDirParams = {
+  project: string;
+  path: string;
+};
+
+/** 改名请求（同目录内，目标存在则拒绝，不覆盖） */
+export type SemanticRenameParams = {
+  project: string;
+  path: string;
+  newName: string;
+  isDir?: boolean;
+  baseMtime?: number;
+};
+
+/** 软删请求（默认移入项目内 .trash，可恢复） */
+export type SemanticDeleteParams = {
+  project: string;
+  path: string;
+  recursive?: boolean;
+  baseMtime?: number;
+};

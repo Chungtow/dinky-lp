@@ -1548,5 +1548,25 @@ export default {
   'datastudio.semantic.saved': '已保存到 HDFS',
   'datastudio.semantic.saveFailed': '保存失败',
   'datastudio.semantic.noEditPermission': '您没有语义项目的编辑权限，请联系管理员开通',
+  'datastudio.semantic.ctx.createFile': '新建文件',
+  'datastudio.semantic.ctx.createDir': '新建子目录',
+  'datastudio.semantic.ctx.rename': '重命名',
+  'datastudio.semantic.ctx.delete': '删除',
+  'datastudio.semantic.nameInvalid': '名称非法（不能为空、不能含 / 或 \\、不能是 . 或 ..）',
+  'datastudio.semantic.namePlaceholder': '输入名称（单段，不含 /）',
+  'datastudio.semantic.createUnder': '父目录：{path}',
+  'datastudio.semantic.created': '已创建',
+  'datastudio.semantic.renamed': '已重命名',
+  'datastudio.semantic.deleted': '已移入回收站',
+  'datastudio.semantic.opFailed': '操作失败',
+  'datastudio.semantic.tabsClosed': '已关闭 {n} 个失效的文件标签，请重新打开',
+  'datastudio.semantic.dirtyBeforeOp': '该文件有未保存的修改，请先保存后再操作',
+  'datastudio.semantic.deleteDirConfirm': '确定删除目录「{path}」？该目录下有 {n} 个条目',
+  'datastudio.semantic.deleteFileConfirm': '确定删除文件「{path}」？',
+  'datastudio.semantic.deleteRecursive': '同时删除目录内的全部内容（递归）',
+  'datastudio.semantic.deleteTrashHint':
+    '删除为软删除：内容移入项目内 .trash 回收站并保留 7 天，期间可由运维脚本或 hdfs dfs -mv 还原。',
+  'datastudio.semantic.deletePullHint':
+    '删除后请在 JupyterLab 执行「从 HDFS 拉取」，否则本地再次推送会把该文件恢复（复活）。',
   'datastudio.toolbar.rightClick.openCompact': '打开紧凑模式'
 };

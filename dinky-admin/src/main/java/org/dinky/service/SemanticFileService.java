@@ -19,7 +19,9 @@
 
 package org.dinky.service;
 
+import org.dinky.data.dto.SemanticEntryOpDTO;
 import org.dinky.data.dto.SemanticFileSaveDTO;
+import org.dinky.data.dto.SemanticRenameDTO;
 import org.dinky.data.vo.SemanticFileContentVO;
 import org.dinky.data.vo.SemanticFileNode;
 import org.dinky.data.vo.SemanticProjectVO;
@@ -45,4 +47,13 @@ public interface SemanticFileService {
 
     /** 保存文件，返回写入后的新 mtime；mtime 冲突抛 {@code semantic.write.conflict} */
     long saveFile(SemanticFileSaveDTO dto);
+
+    /** 新建目录（父目录必须已存在），返回规范化后的相对路径 */
+    String createDir(SemanticEntryOpDTO dto);
+
+    /** 改名（同目录内），目标已存在则拒绝，不覆盖 */
+    void rename(SemanticRenameDTO dto);
+
+    /** 软删除到项目内回收站，返回回收站内的相对路径（供恢复使用） */
+    String deleteEntry(SemanticEntryOpDTO dto);
 }
