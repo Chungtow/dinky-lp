@@ -125,6 +125,12 @@ public enum Status {
     TOKEN_FREEZED(10025, "token.freezed"),
     NO_PREFIX(10026, "no.prefix"),
     USER_SUPERADMIN_CANNOT_DELETE(10027, "user.superadmin.cannot.delete"),
+    /**
+     * 预期内的权限拒绝（Sa-Token @SaCheckPermission / 角色校验未通过）。
+     *
+     * <p>这是"配置没开通"而不是系统故障：不打印堆栈、不回传权限码与异常详情，只给用户一句可读提示。
+     */
+    PERMISSION_DENIED(10028, "permission.denied"),
 
     // role
     ROLE_ALREADY_EXISTS(10101, "role.already.exists"),

@@ -1635,5 +1635,6 @@ export default {
   'datastudio.semantic.saving': 'Saving...',
   'datastudio.semantic.saved': 'Saved to HDFS',
   'datastudio.semantic.saveFailed': 'Save failed',
+  'datastudio.semantic.noEditPermission': 'You have no permission to edit semantic projects. Please contact your administrator.',
   'datastudio.toolbar.rightClick.openCompact': 'turn on compact mode'
 };

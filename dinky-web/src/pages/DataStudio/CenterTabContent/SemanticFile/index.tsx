@@ -24,9 +24,11 @@ import { DataStudioContext } from '@/pages/DataStudio/DataStudioContext';
 import { semanticEditorKey } from '@/pages/DataStudio/editorKey';
 import { saveSemanticFile } from '@/pages/DataStudio/Toolbar/Semantic/service';
 import CodeEdit from '@/components/CustomEditor/CodeEdit';
+import { HasAuthority } from '@/hooks/useAccess';
+import { PermissionConstants } from '@/types/Public/constants';
 import { l } from '@/utils/intl';
 import { SuccessMessage, WarningMessage } from '@/utils/messages';
-import { Space, Tag, Typography } from 'antd';
+import { Space, Tag, Tooltip, Typography } from 'antd';
 import { SaveOutlined } from '@ant-design/icons';
 import { editor } from 'monaco-editor';
 import React, { useContext, useEffect, useRef, useState } from 'react';
@@ -61,6 +63,8 @@ const SemanticFile = (props: {
   const [saving, setSaving] = useState<boolean>(false);
   const [baseMtime, setBaseMtime] = useState<number>(mtime ?? 0);
   const editorKey = semanticEditorKey(project, path);
+  /** 无 datastudio:semantic:edit 时不允许保存（前端先拦一次，避免把预期内的权限拒绝打成"服务器错误"） */
+  const canEdit = HasAuthority(PermissionConstants.DATASTUDIO_SEMANTIC_EDIT);
 
   useEffect(() => {
     setCode(statement ?? '');
@@ -84,6 +88,10 @@ const SemanticFile = (props: {
   };
 
   const onSave = async () => {
+    if (!canEdit) {
+      await WarningMessage(l('datastudio.semantic.noEditPermission'));
+      return;
+    }
     if (readOnly) {
       await WarningMessage(l('datastudio.semantic.readOnly'));
       return;
@@ -129,13 +137,22 @@ const SemanticFile = (props: {
           {dirty && <Tag color='processing'>{l('datastudio.semantic.unsaved')}</Tag>}
           {!dirty && !readOnly && <Tag color='success'>{l('datastudio.semantic.synced')}</Tag>}
         </Space>
-        <Text
-          type='success'
-          strong
-          style={{ cursor: readOnly ? 'not-allowed' : 'pointer' }}
-          onClick={onSave}>
-          <SaveOutlined /> {saving ? l('datastudio.semantic.saving') : l('datastudio.semantic.save')}
-        </Text>
+        <Tooltip
+          title={
+            !canEdit
+              ? l('datastudio.semantic.noEditPermission')
+              : readOnly
+                ? l('datastudio.semantic.readOnly')
+                : l('datastudio.semantic.save')
+          }>
+          <Text
+            type={canEdit && !readOnly ? 'success' : 'secondary'}
+            strong
+            style={{ cursor: canEdit && !readOnly ? 'pointer' : 'not-allowed' }}
+            onClick={onSave}>
+            <SaveOutlined /> {saving ? l('datastudio.semantic.saving') : l('datastudio.semantic.save')}
+          </Text>
+        </Tooltip>
       </Space>
       <div style={{ flex: 1, minHeight: 0 }}>
         <CodeEdit

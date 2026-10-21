@@ -1547,5 +1547,6 @@ export default {
   'datastudio.semantic.saving': '保存中…',
   'datastudio.semantic.saved': '已保存到 HDFS',
   'datastudio.semantic.saveFailed': '保存失败',
+  'datastudio.semantic.noEditPermission': '您没有语义项目的编辑权限，请联系管理员开通',
   'datastudio.toolbar.rightClick.openCompact': '打开紧凑模式'
 };
