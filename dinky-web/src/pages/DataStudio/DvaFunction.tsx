@@ -74,6 +74,15 @@ export const mapDispatchToProps = (dispatch: Dispatch) => {
         id,
         type: STUDIO_MODEL.removeCenterTab
       }),
+    /**
+     * 激活已存在的中间 tab（P3c / BUG-1）：只切 activeTab，不重写 tabs 内容，
+     * 因此不会冲掉编辑区里未保存的修改。见 model.tsx 的同名 reducer 注释。
+     */
+    activateCenterTab: (id: string) =>
+      dispatch({
+        id,
+        type: STUDIO_MODEL.activateCenterTab
+      }),
     updateProject: (payload: ProjectDTO) =>
       dispatch({
         ...payload,

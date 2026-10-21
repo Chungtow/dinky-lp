@@ -137,8 +137,11 @@ const Semantic = (props: {
   addCenterTab: (payload: any) => void;
   updateCenterTab: (payload: any) => void;
   removeCenterTab: (id: string) => void;
+  /** P3c：只切 activeTab（不重写 tabs），用于"点已打开的文件要定位过去" */
+  activateCenterTab: (id: string) => void;
 }) => {
-  const { centerContent, addCenterTab, updateCenterTab, removeCenterTab } = props;
+  // updateCenterTab 当前不再使用（打开文件已改为"存在即激活"），保留在 props 类型里供后续复用
+  const { centerContent, addCenterTab, removeCenterTab, activateCenterTab } = props;
   const access = useAccess();
   const [projects, setProjects] = useState<SemanticProject[]>([]);
   const [project, setProject] = useState<string | undefined>();
@@ -219,9 +222,27 @@ const Semantic = (props: {
 
   const treeData = useMemo(() => buildTree(nodes), [nodes]);
 
-  /** 打开文件：先读正文，再按「项目+路径」去重开/激活中心 tab */
+  /**
+   * 打开文件：**已打开则只激活、不重读**；未打开才读正文并新建 tab。
+   *
+   * <p><b>为什么"已打开"不能重读</b>（P3c / BUG-1，两个毛病同一个根因）：
+   * <ol>
+   *   <li>旧实现走 {@code updateCenterTab}，而该 reducer <b>不动 {@code activeTab}</b>，
+   *       编辑区面板由 activeTab 驱动 ⇒ 点了树也不切过去（用户报的"定位不到"）；</li>
+   *   <li>旧实现还会用 HDFS 最新内容覆盖 {@code params.statement} 且把 {@code isUpdate} 置 false，
+   *       编辑器 {@code useEffect([statement])} 会把本地内容重置 ⇒ <b>未保存的修改被静默丢弃</b>。</li>
+   * </ol>
+   * 因此这里先判存在：存在 → {@code activateCenterTab} 后直接返回（顺带省掉一次
+   * {@code GET /api/semantic/file}）。要重新拉取 HDFS 最新内容，走顶部的「刷新」按钮。
+   */
   const openFile = async (path: string, readOnly = false) => {
     if (!project) {
+      return;
+    }
+    const tabId = `semantic_${project}_${path}`;
+    const existed = (centerContent?.tabs ?? []).some((tab) => tab.id === tabId);
+    if (existed) {
+      activateCenterTab(tabId);
       return;
     }
     setLoading(true);
@@ -232,24 +253,21 @@ const Semantic = (props: {
         return;
       }
       const data = res.data ?? {};
-      const tabId = `semantic_${project}_${path}`;
-      const tabParams = {
-        project,
-        path,
-        // AI Chat 直接复用 statement 作为「当前编辑内容」，无需改协议
-        statement: data.content ?? '',
-        mtime: data.modifiedAt ?? 0,
-        readOnly: Boolean(readOnly)
-      };
-      const existed = (centerContent?.tabs ?? []).some((tab) => tab.id === tabId);
       const payload: CenterTab = {
         id: tabId,
         tabType: 'semanticFile',
         title: `${project}/${path}`,
         isUpdate: false,
-        params: tabParams
+        params: {
+          project,
+          path,
+          // AI Chat 直接复用 statement 作为「当前编辑内容」，无需改协议
+          statement: data.content ?? '',
+          mtime: data.modifiedAt ?? 0,
+          readOnly: Boolean(readOnly)
+        }
       };
-      existed ? updateCenterTab(payload) : addCenterTab(payload);
+      addCenterTab(payload);
     } catch (e: any) {
       setError(e?.message ?? l('datastudio.semantic.loadFailed'));
     } finally {

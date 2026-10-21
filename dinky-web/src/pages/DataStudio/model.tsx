@@ -230,6 +230,14 @@ export type StudioModelType = {
     addCenterTab: Reducer<DataStudioState, CenterTabDTO>;
     // 删除中间tab
     removeCenterTab: Reducer<DataStudioState>;
+    /**
+     * 激活（切到）已存在的中间 tab：只改 {@code activeTab}，不触碰 tabs。
+     *
+     * <p>⚠️ 为什么不复用 updateCenterTab：编辑器每次击键都会调它（SemanticFile/index.tsx 的 onChange），
+     * 若让它顺手设 activeTab，正在编辑的 tab 会反复抢焦点，且波及全站所有 tabType。
+     * 该 reducer 是为「目录树点已打开的文件要定位过去」而单独开的口子（P3c / BUG-1）。
+     */
+    activateCenterTab: Reducer<DataStudioState, { id: string }>;
     //更新 project
     updateProject: Reducer<DataStudioState, ProjectDTO>;
     // 更新操作
@@ -616,6 +624,32 @@ const StudioModel: StudioModelType = {
             prevState.centerContent.activeTab === id
               ? tabs[0]?.id
               : prevState.centerContent.activeTab
+        }
+      };
+    },
+    /**
+     * 激活已存在的中间 tab（P3c / BUG-1 修复）。
+     *
+     * <p>只改 {@code centerContent.activeTab}，<b>不碰 tabs</b>——因此不会覆盖任何 tab 的
+     * params/statement（不会像 updateCenterTab 那样把未保存的修改冲掉）。
+     * 中间内容区由 {@code DataStudio/index.tsx} 里「监听 activeTab 去切换 dock 面板」的
+     * effect 驱动，所以改这一个字段就够了。
+     *
+     * <p>tab 不存在时原样返回：调用方（如目录树点开文件）可能带着过期状态，
+     * 这里不做隐式新增，避免出现"空 tab"。
+     */
+    activateCenterTab(state, { id }) {
+      if (!id || !state.centerContent.tabs.some((x) => x.id === id)) {
+        return state;
+      }
+      if (state.centerContent.activeTab === id) {
+        return state;
+      }
+      return {
+        ...state,
+        centerContent: {
+          ...state.centerContent,
+          activeTab: id
         }
       };
     },
