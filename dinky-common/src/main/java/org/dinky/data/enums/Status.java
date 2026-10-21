@@ -537,6 +537,11 @@ public enum Status {
     SEMANTIC_WRITE_CONFLICT(434, "semantic.write.conflict"),
     SEMANTIC_READ_FAILED(435, "semantic.read.failed"),
     SEMANTIC_WRITE_FAILED(436, "semantic.write.failed"),
+    /** 语义层（P2.5）：文件 CRUD 错误码 */
+    SEMANTIC_TARGET_EXISTS(437, "semantic.target.exists"),
+    SEMANTIC_NOT_EMPTY(438, "semantic.not.empty"),
+    SEMANTIC_PARENT_NOT_FOUND(439, "semantic.parent.not.found"),
+    SEMANTIC_MOVE_INTO_SELF(440, "semantic.move.into.self"),
     SYS_METRICS_SETTINGS_SYS_ENABLE(148, "sys.metrics.settings.sys.enable"),
     SYS_METRICS_SETTINGS_SYS_ENABLE_NOTE(149, "sys.metrics.settings.sys.enable.note"),
     SYS_METRICS_SETTINGS_SYS_GATHERTIMING(150, "sys.metrics.settings.sys.gatherTiming"),

@@ -19,6 +19,7 @@
 
 import { getData, postAll } from '@/services/api';
 import { API_CONSTANTS } from '@/services/endpoints';
+import { SemanticCreateDirParams, SemanticDeleteParams, SemanticRenameParams } from './data.d';
 
 /**
  * 语义项目接口。
@@ -46,4 +47,19 @@ export async function saveSemanticFile(params: {
   baseMtime?: number;
 }) {
   return (await postAll(API_CONSTANTS.SEMANTIC_FILE_SAVE, params)) as any;
+}
+
+/** 新建目录（父目录必须已存在） */
+export async function createSemanticDir(params: SemanticCreateDirParams) {
+  return (await postAll(API_CONSTANTS.SEMANTIC_DIR_CREATE, params)) as any;
+}
+
+/** 改名（同目录内；目标已存在则拒绝，不覆盖） */
+export async function renameSemanticEntry(params: SemanticRenameParams) {
+  return (await postAll(API_CONSTANTS.SEMANTIC_RENAME, params)) as any;
+}
+
+/** 软删除（移入项目内 .trash，可由运维脚本按保留期清理） */
+export async function deleteSemanticEntry(params: SemanticDeleteParams) {
+  return (await postAll(API_CONSTANTS.SEMANTIC_DELETE, params)) as any;
 }

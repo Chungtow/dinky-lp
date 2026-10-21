@@ -21,7 +21,9 @@ package org.dinky.controller;
 
 import org.dinky.data.annotations.Log;
 import org.dinky.data.constant.PermissionConstants;
+import org.dinky.data.dto.SemanticEntryOpDTO;
 import org.dinky.data.dto.SemanticFileSaveDTO;
+import org.dinky.data.dto.SemanticRenameDTO;
 import org.dinky.data.enums.BusinessType;
 import org.dinky.data.result.Result;
 import org.dinky.data.vo.SemanticFileContentVO;
@@ -117,5 +119,30 @@ public class SemanticController {
     @SaCheckPermission(PermissionConstants.DATASTUDIO_SEMANTIC_EDIT)
     public Result<Long> saveFile(@RequestBody SemanticFileSaveDTO dto) {
         return Result.succeed(semanticFileService.saveFile(dto));
+    }
+
+    @PostMapping("/dir")
+    @ApiOperation("Create a Directory in a Semantic Project")
+    @Log(title = "Create Semantic Dir", businessType = BusinessType.INSERT)
+    @SaCheckPermission(PermissionConstants.DATASTUDIO_SEMANTIC_EDIT)
+    public Result<String> createDir(@RequestBody SemanticEntryOpDTO dto) {
+        return Result.succeed(semanticFileService.createDir(dto));
+    }
+
+    @PostMapping("/rename")
+    @ApiOperation("Rename an Entry of a Semantic Project (target must not exist)")
+    @Log(title = "Rename Semantic Entry", businessType = BusinessType.UPDATE)
+    @SaCheckPermission(PermissionConstants.DATASTUDIO_SEMANTIC_EDIT)
+    public Result<Boolean> rename(@RequestBody SemanticRenameDTO dto) {
+        semanticFileService.rename(dto);
+        return Result.succeed(true);
+    }
+
+    @PostMapping("/delete")
+    @ApiOperation("Move an Entry of a Semantic Project to Trash (soft delete, restorable)")
+    @Log(title = "Delete Semantic Entry", businessType = BusinessType.DELETE)
+    @SaCheckPermission(PermissionConstants.DATASTUDIO_SEMANTIC_EDIT)
+    public Result<String> delete(@RequestBody SemanticEntryOpDTO dto) {
+        return Result.succeed(semanticFileService.deleteEntry(dto));
     }
 }

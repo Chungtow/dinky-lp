@@ -1636,5 +1636,25 @@ export default {
   'datastudio.semantic.saved': 'Saved to HDFS',
   'datastudio.semantic.saveFailed': 'Save failed',
   'datastudio.semantic.noEditPermission': 'You have no permission to edit semantic projects. Please contact your administrator.',
+  'datastudio.semantic.ctx.createFile': 'New file',
+  'datastudio.semantic.ctx.createDir': 'New folder',
+  'datastudio.semantic.ctx.rename': 'Rename',
+  'datastudio.semantic.ctx.delete': 'Delete',
+  'datastudio.semantic.nameInvalid': 'Invalid name (required, no / or \\, not . or ..)',
+  'datastudio.semantic.namePlaceholder': 'Enter a name (single segment, no /)',
+  'datastudio.semantic.createUnder': 'Parent directory: {path}',
+  'datastudio.semantic.created': 'Created',
+  'datastudio.semantic.renamed': 'Renamed',
+  'datastudio.semantic.deleted': 'Moved to trash',
+  'datastudio.semantic.opFailed': 'Operation failed',
+  'datastudio.semantic.tabsClosed': '{n} invalid file tab(s) closed. Please reopen.',
+  'datastudio.semantic.dirtyBeforeOp': 'This file has unsaved changes. Save it before this operation.',
+  'datastudio.semantic.deleteDirConfirm': 'Delete directory "{path}"? It contains {n} entries',
+  'datastudio.semantic.deleteFileConfirm': 'Delete file "{path}"?',
+  'datastudio.semantic.deleteRecursive': 'Delete everything inside the directory (recursive)',
+  'datastudio.semantic.deleteTrashHint':
+    'This is a soft delete: the entry is moved into the project .trash and kept for 7 days, restorable with hdfs dfs -mv.',
+  'datastudio.semantic.deletePullHint':
+    'Run "Pull from HDFS" in JupyterLab afterwards, otherwise the next local push will bring this file back.',
   'datastudio.toolbar.rightClick.openCompact': 'turn on compact mode'
 };

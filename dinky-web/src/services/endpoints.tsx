@@ -338,5 +338,8 @@ export enum API_CONSTANTS {
   SEMANTIC_PROJECTS = '/api/semantic/projects',
   SEMANTIC_FILES = '/api/semantic/files',
   SEMANTIC_FILE = '/api/semantic/file',
-  SEMANTIC_FILE_SAVE = '/api/semantic/file'
+  SEMANTIC_FILE_SAVE = '/api/semantic/file',
+  SEMANTIC_DIR_CREATE = '/api/semantic/dir',
+  SEMANTIC_RENAME = '/api/semantic/rename',
+  SEMANTIC_DELETE = '/api/semantic/delete',
 }
