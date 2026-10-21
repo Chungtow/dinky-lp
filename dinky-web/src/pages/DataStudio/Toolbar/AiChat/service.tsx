@@ -17,7 +17,7 @@
  *
  */
 
-import { getData } from '@/services/api';
+import { getData, postAll } from '@/services/api';
 import { queryDataByParams } from '@/services/BusinessCrud';
 import { API_CONSTANTS } from '@/services/endpoints';
 import { buildTenantHeader } from '@/utils/function';
@@ -290,7 +290,9 @@ export const reportCraftWrite = async (params: {
   after: string;
 }): Promise<void> => {
   try {
-    await queryDataByParams(API_CONSTANTS.AI_CHAT_WRITE_AUDIT, {
+    // 后端是 @PostMapping + @RequestBody；此前用 queryDataByParams（GET）→ 每次采纳都会
+    // 405 "Request method 'GET' not supported"，被全局 errorHandler 弹成「服务器错误」。
+    await postAll(API_CONSTANTS.AI_CHAT_WRITE_AUDIT, {
       taskId: params.taskId,
       sessionId: params.sessionId,
       mode: 'craft',

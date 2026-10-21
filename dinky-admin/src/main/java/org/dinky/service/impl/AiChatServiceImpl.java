@@ -832,9 +832,10 @@ public class AiChatServiceImpl implements AiChatService {
             audit.setUserId(request.getUserId());
             audit.setSessionId(request.getSessionId());
             audit.setAction(ACTION_CRAFT_WRITE);
+            // 非作业编辑器（如 P2 的语义文件 tab）没有 taskId，避免审计文本落成「作业 #null」
             audit.setSqlText(StrUtil.format(
-                    "Craft 整块改写作业 #{}：字符变化 {}（before={} / after={}）",
-                    request.getTaskId(),
+                    "Craft 整块改写{}：字符变化 {}（before={} / after={}）",
+                    request.getTaskId() == null ? "（非作业编辑器）" : "作业 #" + request.getTaskId(),
                     request.getChars(),
                     request.getBeforeHash(),
                     request.getAfterHash()));
