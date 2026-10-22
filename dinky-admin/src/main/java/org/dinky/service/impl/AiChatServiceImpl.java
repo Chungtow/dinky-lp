@@ -1382,7 +1382,8 @@ public class AiChatServiceImpl implements AiChatService {
         if (StrUtil.isBlank(project)) {
             return "";
         }
-        if (!Boolean.TRUE.equals(SystemConfiguration.getInstances().getSemanticEnable().getValue())) {
+        if (!Boolean.TRUE.equals(
+                SystemConfiguration.getInstances().getSemanticEnable().getValue())) {
             return "";
         }
         if (!StpUtil.hasPermission(PermissionConstants.DATASTUDIO_SEMANTIC_VIEW)) {
