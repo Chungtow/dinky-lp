@@ -139,9 +139,17 @@ const Semantic = (props: {
   removeCenterTab: (id: string) => void;
   /** P3c：只切 activeTab（不重写 tabs），用于"点已打开的文件要定位过去" */
   activateCenterTab: (id: string) => void;
+  /** P3b：把"当前语义项目"同步到 model，AI Chat 的项目级注入据此跟随语义树切换 */
+  saveCurrentSemanticProject: (project?: string) => void;
 }) => {
   // updateCenterTab 当前不再使用（打开文件已改为"存在即激活"），保留在 props 类型里供后续复用
-  const { centerContent, addCenterTab, removeCenterTab, activateCenterTab } = props;
+  const {
+    centerContent,
+    addCenterTab,
+    removeCenterTab,
+    activateCenterTab,
+    saveCurrentSemanticProject
+  } = props;
   const access = useAccess();
   const [projects, setProjects] = useState<SemanticProject[]>([]);
   const [project, setProject] = useState<string | undefined>();
@@ -218,6 +226,10 @@ const Semantic = (props: {
 
   useEffect(() => {
     loadFiles(project);
+    // P3b：项目切换同步到 model（UAT 2026-10-22：AI Chat 的项目级注入要跟随语义树，
+    // 而切换语义项目并不会切中间 tab，tabParams.project 会一直停在上一个项目）
+    saveCurrentSemanticProject(project);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project]);
 
   const treeData = useMemo(() => buildTree(nodes), [nodes]);
@@ -346,7 +358,10 @@ const Semantic = (props: {
     if (!rightClicked) {
       return [];
     }
-    return getSemanticContextMenu({ isDir: rightClicked.isDir, readOnly: rightClicked.readOnly }).filter(
+    return getSemanticContextMenu({
+      isDir: rightClicked.isDir,
+      readOnly: rightClicked.readOnly
+    }).filter(
       (menu: any) => !menu.path || !!AuthorizedObject({ path: menu.path, children: menu, access })
     );
   }, [rightClicked, access]);
@@ -515,7 +530,8 @@ const Semantic = (props: {
     <ProCard
       style={{ height: '100%' }}
       className={'datastudio-theme'}
-      bodyStyle={{ paddingTop: 8, paddingInline: 6, display: 'flex', flexDirection: 'column' }}>
+      bodyStyle={{ paddingTop: 8, paddingInline: 6, display: 'flex', flexDirection: 'column' }}
+    >
       <Space.Compact style={{ width: '100%', marginBottom: 8 }}>
         <Select
           style={{ width: '100%' }}
@@ -526,7 +542,12 @@ const Semantic = (props: {
             label: item.fileCount ? `${item.name} (${item.fileCount})` : item.name
           }))}
           onChange={(value) => setProject(value)}
-          notFoundContent={<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={l('datastudio.semantic.empty')} />}
+          notFoundContent={
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={l('datastudio.semantic.empty')}
+            />
+          }
         />
         <Tooltip title={l('datastudio.semantic.refresh')}>
           <Button icon={<ReloadOutlined />} loading={loading} onClick={() => refresh()} />
@@ -578,7 +599,8 @@ const Semantic = (props: {
         onCancel={() => setEditMode(undefined)}
         onOk={submitEdit}
         confirmLoading={submitting}
-        destroyOnClose>
+        destroyOnClose
+      >
         <Input
           autoFocus
           value={editValue}
@@ -601,7 +623,8 @@ const Semantic = (props: {
         onCancel={() => setDeleteTarget(undefined)}
         onOk={submitDelete}
         confirmLoading={submitting}
-        destroyOnClose>
+        destroyOnClose
+      >
         {deleteTarget && (
           <Space direction='vertical' style={{ width: '100%' }}>
             <Text>
@@ -613,7 +636,10 @@ const Semantic = (props: {
                 : l('datastudio.semantic.deleteFileConfirm', undefined, { path: deleteTarget.key })}
             </Text>
             {deleteTarget.isDir && (
-              <Checkbox checked={deleteRecursive} onChange={(e) => setDeleteRecursive(e.target.checked)}>
+              <Checkbox
+                checked={deleteRecursive}
+                onChange={(e) => setDeleteRecursive(e.target.checked)}
+              >
                 {l('datastudio.semantic.deleteRecursive')}
               </Checkbox>
             )}

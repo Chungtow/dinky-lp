@@ -83,6 +83,15 @@ export const mapDispatchToProps = (dispatch: Dispatch) => {
         id,
         type: STUDIO_MODEL.activateCenterTab
       }),
+    /**
+     * P3b：记录语义面板当前项目。AI Chat 的项目级注入据此跟随语义树切换
+     * （切换项目不会切 tab，所以不能只看 tabParams.project）。
+     */
+    saveCurrentSemanticProject: (project?: string) =>
+      dispatch({
+        project,
+        type: STUDIO_MODEL.saveCurrentSemanticProject
+      }),
     updateProject: (payload: ProjectDTO) =>
       dispatch({
         ...payload,

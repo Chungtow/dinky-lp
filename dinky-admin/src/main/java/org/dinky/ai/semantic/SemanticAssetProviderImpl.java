@@ -24,6 +24,7 @@ import org.dinky.data.exception.BusException;
 import org.dinky.resource.semantic.SemanticHdfsClient;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -141,6 +142,14 @@ public class SemanticAssetProviderImpl implements SemanticAssetProvider {
                 .filter(r -> wantedType == null || wantedType.equals(r.getType()))
                 .collect(Collectors.toList());
         if (matches.isEmpty()) {
+            // 索引降级（发布副本缺 index/ 或 index_state 未就绪）时根本读不到资产名清单，
+            // 此时"未找到"是假象：YAML 里明明有该资产。按 U25 判据①「仍能回答」，
+            // 退化为"整项目 YAML 原文注入 + 标注未就绪"，而不是报未找到。
+            SemanticAssetRef degraded = degradedProjectRef(project, version, all);
+            if (degraded != null) {
+                log.info("semantic index degraded, fallback to project YAML: project={}, handle={}", project, raw);
+                return degraded;
+            }
             throw new BusException(notFoundMessage(raw, all));
         }
         if (matches.size() > 1) {
@@ -159,13 +168,26 @@ public class SemanticAssetProviderImpl implements SemanticAssetProvider {
     }
 
     private String notFoundMessage(String raw, List<SemanticAssetRef> all) {
-        List<String> candidates = all.stream()
-                .map(SemanticAssetRef::getName)
-                .distinct()
-                .limit(3)
-                .collect(Collectors.toList());
+        List<String> candidates =
+                all.stream().map(SemanticAssetRef::getName).distinct().limit(3).collect(Collectors.toList());
         return "未找到语义资产 " + raw
                 + (candidates.isEmpty() ? "（该项目下没有可引用资产）" : "（该项目的候选：" + String.join("、", candidates) + "）");
+    }
+
+    /**
+     * 索引降级时把"未命中资产"转成**项目级降级引用**（整项目 YAML 原文注入）。
+     *
+     * <p>索引正常时返回 {@code null}，保持"未找到 + 给候选"的原有语义——不能因为降级
+     * 就静默把一个错误名字当成"整个项目"，那会掩盖用户的拼写错误。
+     */
+    private SemanticAssetRef degradedProjectRef(String project, String version, List<SemanticAssetRef> all) {
+        if (all.isEmpty() || all.stream().noneMatch(SemanticAssetRef::isDegraded)) {
+            return null;
+        }
+        SemanticAssetRef ref = SemanticAssetRef.project(project, version);
+        ref.setPath(INDEX_PROJECT);
+        ref.setDegraded(true);
+        return ref;
     }
 
     private String requireVersion(String project) {
@@ -179,7 +201,9 @@ public class SemanticAssetProviderImpl implements SemanticAssetProvider {
     /** 索引优先枚举；索引缺失/未就绪时退化为"扫发布副本 YAML"（只有文件名，无口径） */
     private List<SemanticAssetRef> enumerateRefs(String project, String version) {
         JsonNode projectIndex = readJson(project, version, INDEX_PROJECT);
-        if (projectIndex != null && projectIndex.path("names").isArray() && projectIndex.path("names").size() > 0) {
+        if (projectIndex != null
+                && projectIndex.path("names").isArray()
+                && projectIndex.path("names").size() > 0) {
             Map<String, String> oneLiners = new LinkedHashMap<>();
             Map<String, String> sourceYamls = new LinkedHashMap<>();
             collectProjectEntries(projectIndex.path("tables"), SemanticAssetRef.TYPE_TABLE, oneLiners, sourceYamls);
@@ -187,7 +211,8 @@ public class SemanticAssetProviderImpl implements SemanticAssetProvider {
 
             List<SemanticAssetRef> refs = new ArrayList<>();
             for (JsonNode node : projectIndex.path("names")) {
-                String type = SemanticAssetRef.TYPE_METRIC.equalsIgnoreCase(node.path("type").asText())
+                String type = SemanticAssetRef.TYPE_METRIC.equalsIgnoreCase(
+                                node.path("type").asText())
                         ? SemanticAssetRef.TYPE_METRIC
                         : SemanticAssetRef.TYPE_TABLE;
                 String name = node.path("name").asText("");
@@ -203,21 +228,43 @@ public class SemanticAssetProviderImpl implements SemanticAssetProvider {
             return refs;
         }
 
-        // 降级：扫 YAML 文件（文件名当资产名，明确标注无口径）
-        List<SemanticAssetRef> refs = new ArrayList<>();
+        // 降级：扫 YAML 文件（文件名当资产名，明确标注无口径）。
+        // 优先 metrics/ 目录：dbt 语义模型与指标基本都在这里；把 dbt_project.yml 之类的
+        // 工程配置也算成"可引用资产"只会污染候选（U25 实测：候选项出现了 dbt_project）。
+        List<String> yamlFiles = new ArrayList<>();
+        List<String> otherYaml = new ArrayList<>();
         for (String rel : client.listPublishedFiles(project, version)) {
             String lower = rel.toLowerCase(Locale.ROOT);
             if (!lower.endsWith(YML) && !lower.endsWith(YAML)) {
                 continue;
             }
-            SemanticAssetRef ref = SemanticAssetRef.of(SemanticAssetRef.TYPE_TABLE, project, baseName(rel), version, rel);
+            if (lower.startsWith("metrics/")) {
+                yamlFiles.add(rel);
+            } else {
+                otherYaml.add(rel);
+            }
+        }
+        if (yamlFiles.isEmpty()) {
+            yamlFiles.addAll(otherYaml);
+        }
+        List<SemanticAssetRef> refs = new ArrayList<>();
+        for (String rel : yamlFiles) {
+            String lower = rel.toLowerCase(Locale.ROOT);
+            if (!lower.endsWith(YML) && !lower.endsWith(YAML)) {
+                continue;
+            }
+            SemanticAssetRef ref =
+                    SemanticAssetRef.of(SemanticAssetRef.TYPE_TABLE, project, baseName(rel), version, rel);
             ref.setSourceYaml(rel);
             ref.setDegraded(true);
             refs.add(ref);
         }
         if (!refs.isEmpty()) {
-            log.info("semantic index missing, degraded to YAML listing: project={}, version={}, files={}",
-                    project, version, refs.size());
+            log.info(
+                    "semantic index missing, degraded to YAML listing: project={}, version={}, files={}",
+                    project,
+                    version,
+                    refs.size());
         }
         return refs;
     }
@@ -281,31 +328,30 @@ public class SemanticAssetProviderImpl implements SemanticAssetProvider {
 
     /** 项目级清单：表名 + 指标名 + 一句话口径（**不含**完整定义，D18 预算 6000） */
     private String renderProject(SemanticAssetRef ref, int budget) {
+        if (ref.isDegraded()) {
+            // 索引缺失/未就绪：按 U25 判据①「仍能回答」——直接给 YAML 原文，不拒答、不臆测
+            return renderDegradedProject(ref, budget);
+        }
         List<SemanticAssetRef> refs = enumerateRefs(ref.getProject(), ref.getVersion());
+        if (refs.isEmpty() || refs.stream().allMatch(SemanticAssetRef::isDegraded)) {
+            // 索引缺失/未就绪：给 YAML 原文比给"文件名清单"有用得多（U25 判据①）
+            return renderDegradedProject(ref, budget);
+        }
         Meta meta = meta(ref.getProject());
         StringBuilder sb = new StringBuilder(1024);
         sb.append("## 语义资产（@semantic 引用，口径以此为准）\n");
-        sb.append("### 项目 ")
-                .append(ref.getProject())
-                .append("（published ")
-                .append(ref.getVersion());
+        sb.append("### 项目 ").append(ref.getProject()).append("（published ").append(ref.getVersion());
         if (meta != null && StrUtil.isNotBlank(meta.getIndexState())) {
             sb.append("，index ").append(meta.getIndexState());
         }
         sb.append("）\n");
-        if (refs.isEmpty() || refs.stream().allMatch(SemanticAssetRef::isDegraded)) {
-            sb.append("- ")
-                    .append(StrUtil.format(Status.SEMANTIC_INDEX_PENDING_INFO.getMessage(), ref.getProject()))
-                    .append("\n");
-        }
         appendSection(sb, refs, SemanticAssetRef.TYPE_METRIC, "指标", budget);
         appendSection(sb, refs, SemanticAssetRef.TYPE_TABLE, "表", budget);
         sb.append("- 精确引用单个资产：`@semantic/").append(ref.getProject()).append("/<名>`\n");
         return sb.toString();
     }
 
-    private void appendSection(
-            StringBuilder sb, List<SemanticAssetRef> refs, String type, String label, int budget) {
+    private void appendSection(StringBuilder sb, List<SemanticAssetRef> refs, String type, String label, int budget) {
         List<SemanticAssetRef> items =
                 refs.stream().filter(r -> type.equals(r.getType())).collect(Collectors.toList());
         if (items.isEmpty()) {
@@ -358,7 +404,8 @@ public class SemanticAssetProviderImpl implements SemanticAssetProvider {
         } else {
             appendTable(sb, slice, ref);
         }
-        sb.append("- 来源：").append(ref.getProject())
+        sb.append("- 来源：")
+                .append(ref.getProject())
                 .append(" / ")
                 .append(ref.getVersion())
                 .append(" / ")
@@ -366,8 +413,14 @@ public class SemanticAssetProviderImpl implements SemanticAssetProvider {
         if (StrUtil.isNotBlank(sha)) {
             sb.append("（yaml_sha256 ").append(shortSha(sha)).append("）");
         }
-        sb.append("  ← ").append("semantic://").append(ref.getProject()).append("/").append(ref.getVersion())
-                .append("/").append(slicePath).append("\n");
+        sb.append("  ← ")
+                .append("semantic://")
+                .append(ref.getProject())
+                .append("/")
+                .append(ref.getVersion())
+                .append("/")
+                .append(slicePath)
+                .append("\n");
         return sb.toString();
     }
 
@@ -423,7 +476,8 @@ public class SemanticAssetProviderImpl implements SemanticAssetProvider {
             if (StrUtil.isBlank(name)) {
                 continue;
             }
-            measures.add(name + "(" + measure.path("agg").asText("") + " = " + measure.path("expr").asText("") + ")");
+            measures.add(name + "(" + measure.path("agg").asText("") + " = "
+                    + measure.path("expr").asText("") + ")");
         }
         appendIfPresent(sb, "度量", String.join("、", limit(measures)));
         List<String> metrics = new ArrayList<>();
@@ -463,6 +517,48 @@ public class SemanticAssetProviderImpl implements SemanticAssetProvider {
         return cleaned.size() > MAX_ITEMS_PER_FIELD ? cleaned.subList(0, MAX_ITEMS_PER_FIELD) : cleaned;
     }
 
+    /**
+     * 项目级降级渲染：没有索引时读不到资产名，只能把该项目**指标/语义模型相关 YAML** 原文摘录进来。
+     *
+     * <p>{@code metrics/} 目录优先（dbt 项目的指标与语义模型通常放这里），每文件限额，总量受
+     * {@code budget} 约束；末尾显式提示"请勿臆测未出现的内容"，避免模型拿半截 YAML 编口径。
+     */
+    private String renderDegradedProject(SemanticAssetRef ref, int budget) {
+        StringBuilder sb = new StringBuilder(1024);
+        sb.append("## 语义资产 ")
+                .append(ref.getProject())
+                .append("（published ")
+                .append(ref.getVersion())
+                .append("，索引未就绪）\n");
+        sb.append("- ")
+                .append(StrUtil.format(Status.SEMANTIC_INDEX_PENDING_INFO.getMessage(), ref.getProject()))
+                .append("\n");
+        List<String> yamls = new ArrayList<>();
+        for (String rel : client.listPublishedFiles(ref.getProject(), ref.getVersion())) {
+            String lower = rel.toLowerCase(Locale.ROOT);
+            if (lower.endsWith(YML) || lower.endsWith(YAML)) {
+                yamls.add(rel);
+            }
+        }
+        yamls.sort(Comparator.comparing(
+                (String rel) -> !rel.toLowerCase(Locale.ROOT).startsWith("metrics/")));
+        int perFile = Math.max(256, budget / 4);
+        for (String rel : yamls) {
+            if (sb.length() >= budget - 256) {
+                break;
+            }
+            try {
+                String content = client.readPublished(ref.getProject(), ref.getVersion(), rel);
+                String body = content.length() > perFile ? content.substring(0, perFile) + "\n…（已截断）" : content;
+                sb.append("### ").append(rel).append("\n```yaml\n").append(body).append("\n```\n");
+            } catch (RuntimeException e) {
+                log.warn("read published yaml failed: {}/{}/{}", ref.getProject(), ref.getVersion(), rel, e);
+            }
+        }
+        sb.append("- 说明：索引未就绪，无法按名精确取指标口径；以上为 YAML 原文，未出现的内容不要臆测。\n");
+        return sb.toString();
+    }
+
     /** 索引缺失时的降级：读发布副本 YAML 原文，截断后包成代码块并说明"口径未就绪" */
     private String renderYamlFallback(SemanticAssetRef ref, int budget) {
         String rel = StrUtil.isNotBlank(ref.getSourceYaml()) ? ref.getSourceYaml() : ref.getPath();
@@ -479,7 +575,8 @@ public class SemanticAssetProviderImpl implements SemanticAssetProvider {
             String yaml = client.readPublished(ref.getProject(), ref.getVersion(), rel);
             int bodyBudget = Math.max(budget - sb.length() - 64, 256);
             String body = yaml.length() > bodyBudget ? yaml.substring(0, bodyBudget) + "\n…（已截断）" : yaml;
-            sb.append("- 来源：").append(ref.getProject())
+            sb.append("- 来源：")
+                    .append(ref.getProject())
                     .append(" / ")
                     .append(ref.getVersion())
                     .append(" / ")
@@ -488,7 +585,9 @@ public class SemanticAssetProviderImpl implements SemanticAssetProvider {
             sb.append("```yaml\n").append(body).append("\n```\n");
         } catch (RuntimeException e) {
             log.warn("read published yaml failed: {}/{}/{}", ref.getProject(), ref.getVersion(), rel, e);
-            sb.append("- 读取 YAML 失败：").append(StrUtil.nullToEmpty(e.getMessage())).append("\n");
+            sb.append("- 读取 YAML 失败：")
+                    .append(StrUtil.nullToEmpty(e.getMessage()))
+                    .append("\n");
         }
         return sb.toString();
     }

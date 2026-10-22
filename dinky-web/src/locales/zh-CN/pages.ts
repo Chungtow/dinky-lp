@@ -669,6 +669,8 @@ export default {
     '语义引用用法：@semantic/项目（整项目清单）、@semantic/项目/资产名；同名时用 @semantic/项目/table|metric/资产名',
   'datastudio.aiChat.mention.semanticIndexPending': '索引未就绪（按 YAML 原文摘录）',
   'datastudio.aiChat.mention.semanticEmpty': '该项目没有可引用资产',
+  'datastudio.aiChat.mention.kindMetric': '指标',
+  'datastudio.aiChat.mention.kindTable': '表',
   'pages.skill.listTitle': 'Skills 管理',
   'pages.skill.fileManage': '文件',
   'pages.skill.file.title': '文件管理',

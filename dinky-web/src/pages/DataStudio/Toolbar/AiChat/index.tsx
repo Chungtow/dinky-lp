@@ -111,10 +111,17 @@ type AiChatProps = {
   tabs: any[];
   activeTab?: string;
   updateAction: (payload: any) => void;
+  /**
+   * P3b：语义面板当前选中的项目（来自 model）。
+   *
+   * <p>为何不直接用 {@code tabParams.project}：在语义目录树上切项目**不会**切中间 tab，
+   * tabParams 会一直停在上次打开的文件所属项目上（UAT 2026-10-22）。
+   */
+  currentSemanticProject?: string;
 };
 
 const AiChat = (props: AiChatProps) => {
-  const { tabs, activeTab, updateAction } = props;
+  const { tabs, activeTab, updateAction, currentSemanticProject } = props;
 
   const [messages, setMessages] = useState<AiChatMessage[]>([]);
   const [inputValue, setInputValue] = useState<string>('');
@@ -399,7 +406,9 @@ const AiChat = (props: AiChatProps) => {
         setSemanticAssets(
           (rows ?? []).map((row: any) => ({
             type: 'semantic' as const,
-            name: `${semanticProjectName}/${row.name}`
+            name: `${semanticProjectName}/${row.name}`,
+            // 记住资产类别：同名（表 / 指标）时用于生成长式句柄（见 mentionCandidates 第 9 个 provider）
+            assetType: `${row.type ?? ''}`.toUpperCase() === 'METRIC' ? 'metric' : 'table'
           }))
         );
       })
@@ -691,15 +700,39 @@ const AiChat = (props: AiChatProps) => {
         const keyword = (
           semanticQuery.trailing ? '' : (semanticQuery.parts[1] ?? '')
         ).toLowerCase();
+        // UAT 2026-10-22：表与指标可能同名（U23 场景）。同名时若仍插入短式，两者文本完全一样，
+        // 既分不清也无法命中——直接生成**长式句柄**（@semantic/<p>/table|metric/<名>），选中即无歧义。
+        const seen = new Set<string>();
+        const duplicated = new Set<string>();
+        semanticAssets.forEach((item) => {
+          const asset = item.name.split('/').pop() ?? '';
+          if (seen.has(asset)) {
+            duplicated.add(asset);
+          } else {
+            seen.add(asset);
+          }
+        });
         return semanticAssets
           .filter((item) => {
             const asset = item.name.split('/').pop() ?? '';
             return !keyword || asset.toLowerCase().includes(keyword);
           })
-          .map((item) => ({
-            ...item,
-            group: l('datastudio.aiChat.mention.groupSemanticAsset')
-          }))
+          .map((item) => {
+            const asset = item.name.split('/').pop() ?? '';
+            if (!duplicated.has(asset)) {
+              return { ...item, group: l('datastudio.aiChat.mention.groupSemanticAsset') };
+            }
+            const kind = item.assetType === 'metric' ? 'metric' : 'table';
+            return {
+              ...item,
+              name: `${project}/${kind}/${asset}`,
+              group: `${l('datastudio.aiChat.mention.groupSemanticAsset')}·${
+                kind === 'metric'
+                  ? l('datastudio.aiChat.mention.kindMetric')
+                  : l('datastudio.aiChat.mention.kindTable')
+              }`
+            };
+          })
           .slice(0, 50);
       }
       // 第一层（含"在项目名上继续筛选"）：已发布项目
@@ -712,6 +745,23 @@ const AiChat = (props: AiChatProps) => {
           group: projectGroup(item)
         }))
         .slice(0, 30);
+    }
+    // UAT 2026-10-22：只输入 `@` 时（query 为空）候选框一片空白，用户不知道能引用什么。
+    // 给一组"前缀入口"，选中后保持浮层打开、继续选下一级（见 pickMention 的 type='prefix' 分支）。
+    if (!mentionQuery.trim()) {
+      const prefixItem = (name: string, group: string): AiChatMentionItem & { group: string } => ({
+        type: 'prefix',
+        name,
+        group
+      });
+      return [
+        prefixItem('source/', l('datastudio.aiChat.mention.groupSource')),
+        prefixItem('skill/', l('datastudio.aiChat.mention.groupSkill')),
+        prefixItem('semantic/', l('datastudio.aiChat.mention.groupSemantic')),
+        prefixItem('topic/', l('datastudio.aiChat.mention.groupTopic')),
+        prefixItem('env/', l('datastudio.aiChat.mention.groupEnv')),
+        ...list
+      ].slice(0, 30);
     }
     return list;
     // mentionOpen 作为依赖：每次打开浮层都重新读取最新的选中片段
@@ -863,6 +913,15 @@ const AiChat = (props: AiChatProps) => {
 
   /** 选中候选：把 {@code @query} 替换为 {@code @name}，并记录为已引用 */
   const pickMention = (item: AiChatMentionItem) => {
+    // UAT 2026-10-22：选中"一级前缀入口"（`@` → `@source/` 等）时不生成 chip，
+    // 而是把前缀补进输入框并**保持浮层打开**，让用户接着选下一级（与手打前缀完全等价）
+    if (item.type === 'prefix') {
+      setInputValue(inputValue.replace(/@[^\s@]*$/, `@${item.name}`));
+      setMentionQuery(item.name);
+      setMentionIndex(0);
+      setMentionOpen(true);
+      return;
+    }
     // 阶段 4b 补：以 @table/ 前缀输入时生成 `@table/<表名>`；旧语法（直接 @ 选表）仍生成
     // `@<表名>`——保证 C2「与迭代前完全一致」这条兼容性红线不被破坏。
     // 2026-10-06：分隔符统一为斜杠，选中后一律生成新语法；手打旧语法（连字符）后端仍解析。
@@ -1060,9 +1119,11 @@ const AiChat = (props: AiChatProps) => {
           mode,
           // 阶段 3：所选 LLM 实例；不传 / 传不存在的值 → 后端回落默认实例
           profileId,
-          // P3b：当前 tab 是语义文件（无 taskId、有 project）时，把所属项目作为
-          // 「项目级资产清单常驻」（D17）；普通作业 tab 不传，行为与改造前完全一致
-          semanticProject: tabParams?.taskId ? undefined : tabParams?.project
+          // P3b：「项目级资产清单常驻」（D17）。
+          // 优先语义面板当前项目（跟随语义树切换）；未打开过语义面板时回退到当前语义文件 tab 的项目；
+          // 都没有则不注入（普通作业 tab 行为与改造前一致）
+          semanticProject:
+            currentSemanticProject || (tabParams?.taskId ? undefined : tabParams?.project)
         },
         ({
           content,
@@ -2126,7 +2187,9 @@ const AiChat = (props: AiChatProps) => {
 export default connect(
   ({ DataStudio }: { DataStudio: any }) => ({
     tabs: DataStudio.centerContent.tabs,
-    activeTab: DataStudio.centerContent.activeTab
+    activeTab: DataStudio.centerContent.activeTab,
+    // P3b：语义树当前项目（切换语义项目不切 tab，见 model.tsx 的 saveCurrentSemanticProject 注释）
+    currentSemanticProject: DataStudio.currentSemanticProject
   }),
   mapDispatchToProps
 )(AiChat);

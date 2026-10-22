@@ -101,6 +101,11 @@ export type CenterTab = {
  */
 export type DataStudioState = {
   /**
+   * zh: 语义面板当前选中的 dbt 语义项目（P3b，供 AI Chat 项目级注入跟随语义树切换）
+   * en: Currently selected dbt semantic project in the semantic panel (P3b)
+   */
+  currentSemanticProject?: string;
+  /**
    * zh: 基础布局数据
    * en: Basic layout data
    */
@@ -238,6 +243,10 @@ export type StudioModelType = {
      * 该 reducer 是为「目录树点已打开的文件要定位过去」而单独开的口子（P3c / BUG-1）。
      */
     activateCenterTab: Reducer<DataStudioState, { id: string }>;
+    /**
+     * P3b：记录语义面板当前选中的项目，供 AI Chat 的项目级注入跟随语义树切换。
+     */
+    saveCurrentSemanticProject: Reducer<DataStudioState, { project?: string }>;
     //更新 project
     updateProject: Reducer<DataStudioState, ProjectDTO>;
     // 更新操作
@@ -282,6 +291,8 @@ const StudioModel: StudioModelType = {
     theme: {
       compact: false
     },
+    // P3b：语义面板当前项目（未打开过语义面板时为 undefined → AI Chat 不注入项目清单）
+    currentSemanticProject: undefined,
     centerContent: {
       tabs: [],
       activeTab: undefined
@@ -331,12 +342,14 @@ const StudioModel: StudioModelType = {
         getClusterConfigurationData,
         payload
       );
-      const flinkClusterData = [...(sessionData ?? []), ...(clusterConfigurationData ?? [])].map((x) => ({
-        id: x.id,
-        name: x.name,
-        enabled: x.enabled,
-        type: x.type
-      }));
+      const flinkClusterData = [...(sessionData ?? []), ...(clusterConfigurationData ?? [])].map(
+        (x) => ({
+          id: x.id,
+          name: x.name,
+          enabled: x.enabled,
+          type: x.type
+        })
+      );
       // 移除数据，并保留当前类别的属性
       yield put({
         type: 'saveTempData',
@@ -651,6 +664,23 @@ const StudioModel: StudioModelType = {
           ...state.centerContent,
           activeTab: id
         }
+      };
+    },
+    /**
+     * 记录语义面板当前项目（P3b）。
+     *
+     * <p><b>为什么不能只看 activeTab.params.project</b>（UAT 2026-10-22 反馈）：在语义目录树上
+     * 切换项目<b>不会</b>切换中间 tab，所以 AI Chat 的 {@code tabParams} 一直停在上次打开的文件所属
+     * 项目上——用户切到 sem_demo3 后提问，AI 仍认为在 sem_demo2。语义树是"当前关注哪个语义项目"
+     * 的唯一可信来源，故由它写入这里，AI Chat 读这里。
+     */
+    saveCurrentSemanticProject(state, { project }) {
+      if (state.currentSemanticProject === project) {
+        return state;
+      }
+      return {
+        ...state,
+        currentSemanticProject: project
       };
     },
     updateProject(state, { expandKeys, selectedKeys }) {

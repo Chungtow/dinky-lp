@@ -735,6 +735,8 @@ export default {
     'Usage: @semantic/<project> (whole project), @semantic/<project>/<asset>; for same-name assets use @semantic/<project>/table|metric/<asset>',
   'datastudio.aiChat.mention.semanticIndexPending': 'Index not ready (excerpted from YAML)',
   'datastudio.aiChat.mention.semanticEmpty': 'This project has no referable asset',
+  'datastudio.aiChat.mention.kindMetric': 'metric',
+  'datastudio.aiChat.mention.kindTable': 'table',
   'datastudio.aiChat.mention.groupTopic': 'Topic (used by jobs)',
   'datastudio.aiChat.mention.sourceUsage':
     'Cross-source usage: @source/<datasource>/<db>/<table>[.<column>]; @topic/<topic>; @env/<env name>',

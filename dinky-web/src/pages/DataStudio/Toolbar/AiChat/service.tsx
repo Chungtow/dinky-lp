@@ -194,9 +194,20 @@ export type AiChatMentionItem = {
      * P3b：语义资产引用。{@code name} 存**路径式句柄**（{@code project} 或 {@code project/asset}），
      * 与后端 {@code MentionType.SEMANTIC} 及 {@code AiChatMention.name} 的存法一致（D19）。
      */
-    | 'semantic';
+    | 'semantic'
+    /**
+     * 仅候选面板使用的"一级前缀入口"（`@` → `@source/` 等）：
+     * 选中后只把前缀补进输入框并保持浮层打开，不生成 chip、也不进入请求体。
+     */
+    | 'prefix';
   schemaName?: string;
   name: string;
+  /**
+   * 语义资产的类别（来自索引 {@code names[].type}）。
+   *
+   * <p>同名的表与指标需要生成长式句柄区分（UAT 2026-10-22 / U23），短名不足以定位。
+   */
+  assetType?: 'table' | 'metric';
   /**
    * 字段名（type=column 时有效）。
    *
