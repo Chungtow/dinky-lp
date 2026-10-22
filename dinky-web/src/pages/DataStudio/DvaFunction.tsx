@@ -74,6 +74,24 @@ export const mapDispatchToProps = (dispatch: Dispatch) => {
         id,
         type: STUDIO_MODEL.removeCenterTab
       }),
+    /**
+     * 激活已存在的中间 tab（P3c / BUG-1）：只切 activeTab，不重写 tabs 内容，
+     * 因此不会冲掉编辑区里未保存的修改。见 model.tsx 的同名 reducer 注释。
+     */
+    activateCenterTab: (id: string) =>
+      dispatch({
+        id,
+        type: STUDIO_MODEL.activateCenterTab
+      }),
+    /**
+     * P3b：记录语义面板当前项目。AI Chat 的项目级注入据此跟随语义树切换
+     * （切换项目不会切 tab，所以不能只看 tabParams.project）。
+     */
+    saveCurrentSemanticProject: (project?: string) =>
+      dispatch({
+        project,
+        type: STUDIO_MODEL.saveCurrentSemanticProject
+      }),
     updateProject: (payload: ProjectDTO) =>
       dispatch({
         ...payload,

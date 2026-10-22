@@ -39,6 +39,7 @@ import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.Date;
 import java.util.List;
 import java.util.UUID;
@@ -103,6 +104,12 @@ public class SemanticHdfsClient {
 
     /** 发布区（语义根下一级）：只在 ensureWritable 里做越权拦截 */
     private static final String PUBLISHED_DIR = "_published/";
+
+    /** 发布区目录名（不带结尾 /，拼路径用） */
+    private static final String PUBLISHED_NAME = "_published";
+
+    /** 发布版本目录名：`yyyyMMddHHmmss` 或 `yyyyMMddHHmmss_<n>`（同秒冲突后缀，见 release_semantic.py） */
+    private static final Pattern PUBLISHED_VERSION = Pattern.compile("^\\d{14}(_\\d{1,2})?$");
 
     /** 回收站保留天数（仅用于提示文案，purge 由父仓库脚本执行） */
     public static final int TRASH_KEEP_DAYS = 7;
@@ -450,6 +457,141 @@ public class SemanticHdfsClient {
             throw new BusException(Status.SEMANTIC_FILE_NOT_FOUND);
         } catch (IOException e) {
             throw new BusException(e, Status.SEMANTIC_READ_FAILED);
+        }
+    }
+
+    // ------------------------------------------------------------------ 发布区（P3b，只读）
+
+    /**
+     * 已发布版本列表（{@code _published/<p>/} 下的目录名）。
+     *
+     * <p>按**名称降序**返回：版本号是 {@code yyyyMMddHHmmss}，字典序即时间序（D16：
+     * 不引入 latest 指针文件，避免多一个写入真相信）。
+     */
+    public List<String> listPublishedVersions(String project) {
+        requireEnabled();
+        List<String> versions = new ArrayList<>();
+        Path dir = new Path(publishedProjectDir(project));
+        try {
+            for (FileStatus status : fs().listStatus(dir)) {
+                String name = status.getPath().getName();
+                if (status.isDirectory() && PUBLISHED_VERSION.matcher(name).matches()) {
+                    versions.add(name);
+                }
+            }
+        } catch (FileNotFoundException e) {
+            // 从未发布过：空列表（调用方据此提示"尚未发布"，不猜版本）
+            return versions;
+        } catch (IOException e) {
+            throw new BusException(e, Status.SEMANTIC_READ_FAILED);
+        }
+        versions.sort(Comparator.reverseOrder());
+        return versions;
+    }
+
+    /** 最新发布版本；从未发布返回 {@code null} */
+    public String latestPublishedVersion(String project) {
+        List<String> versions = listPublishedVersions(project);
+        return versions.isEmpty() ? null : versions.get(0);
+    }
+
+    /** 发布区内某相对路径是否存在（版本目录必须已存在，否则 false） */
+    public boolean publishedExists(String project, String version, String rel) {
+        requireEnabled();
+        try {
+            return fs().exists(new Path(publishedFile(project, version, rel)));
+        } catch (IOException e) {
+            throw new BusException(e, Status.SEMANTIC_READ_FAILED);
+        }
+    }
+
+    /**
+     * 只读发布区文件内容（≤1MB）。发布区不可变，因此无 mtime 乐观锁。
+     *
+     * <p>守卫同项目区：{@code version} 必须匹配版本目录格式、相对路径禁止穿越
+     * （发布区只读，任何写/删入口都在 {@code ensureWritable} 拦掉）。
+     */
+    public String readPublished(String project, String version, String rel) {
+        requireEnabled();
+        String clean = normalizeRel(rel);
+        Path path = new Path(publishedFile(project, version, clean));
+        try {
+            FileStatus status = fs().getFileStatus(path);
+            if (status.isDirectory()) {
+                throw new BusException(Status.SEMANTIC_PATH_ILLEGAL);
+            }
+            if (status.getLen() > MAX_FILE_BYTES) {
+                throw new BusException(Status.SEMANTIC_FILE_TOO_LARGE);
+            }
+            try (FSDataInputStream in = fs().open(path)) {
+                return new String(IoUtil.readBytes(in, (int) status.getLen()), StandardCharsets.UTF_8);
+            }
+        } catch (FileNotFoundException e) {
+            throw new BusException(Status.SEMANTIC_FILE_NOT_FOUND);
+        } catch (IOException e) {
+            throw new BusException(e, Status.SEMANTIC_READ_FAILED);
+        }
+    }
+
+    /** {@code <base>/_published/<project>} */
+    private String publishedProjectDir(String project) {
+        return basePath() + "/" + PUBLISHED_NAME + "/" + normalizeProject(project);
+    }
+
+    /** {@code <base>/_published/<project>/<version>} */
+    private String publishedVersionDir(String project, String version) {
+        String ver = StrUtil.trimToEmpty(version);
+        if (!PUBLISHED_VERSION.matcher(ver).matches()) {
+            throw new BusException(Status.SEMANTIC_PATH_ILLEGAL);
+        }
+        return publishedProjectDir(project) + "/" + ver;
+    }
+
+    /** {@code <base>/_published/<project>/<version>/<rel>} */
+    private String publishedFile(String project, String version, String rel) {
+        return publishedVersionDir(project, version) + "/" + normalizeRel(rel);
+    }
+
+    /**
+     * 发布版本内的文件相对路径（递归，跳过 {@code target/} 等内部目录与隐藏目录）。
+     *
+     * <p>用途：索引缺失/未就绪时的**降级枚举**——没有索引也要能列出"这个项目里有哪些
+     * YAML"，否则 AI 侧只能报"不知道"。上限沿用 {@link #MAX_PROJECT_FILES}，超限直接报错
+     * （不做静默截断：截断会让消费方以为"就这些"）。
+     */
+    public List<String> listPublishedFiles(String project, String version) {
+        requireEnabled();
+        List<String> files = new ArrayList<>();
+        walkPublished(new Path(publishedVersionDir(project, version)), "", files, 0);
+        return files;
+    }
+
+    private void walkPublished(Path dir, String prefix, List<String> files, int depth) {
+        if (depth > MAX_DEPTH) {
+            return;
+        }
+        FileStatus[] children;
+        try {
+            children = fs().listStatus(dir);
+        } catch (FileNotFoundException e) {
+            return;
+        } catch (IOException e) {
+            throw new BusException(e, Status.SEMANTIC_READ_FAILED);
+        }
+        for (FileStatus status : children) {
+            String name = status.getPath().getName();
+            if (status.isDirectory() && isInternalDir(name)) {
+                continue;
+            }
+            String rel = prefix.isEmpty() ? name : prefix + "/" + name;
+            if (status.isDirectory()) {
+                walkPublished(status.getPath(), rel, files, depth + 1);
+                continue;
+            }
+            if (files.size() >= MAX_PROJECT_FILES) {
+                throw new BusException(Status.SEMANTIC_TOO_MANY_FILES);
+            }
+            files.add(rel);
         }
     }
 

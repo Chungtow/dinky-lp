@@ -189,9 +189,25 @@ export type AiChatMentionItem = {
     | 'doc'
     | 'source'
     | 'topic'
-    | 'env';
+    | 'env'
+    /**
+     * P3b：语义资产引用。{@code name} 存**路径式句柄**（{@code project} 或 {@code project/asset}），
+     * 与后端 {@code MentionType.SEMANTIC} 及 {@code AiChatMention.name} 的存法一致（D19）。
+     */
+    | 'semantic'
+    /**
+     * 仅候选面板使用的"一级前缀入口"（`@` → `@source/` 等）：
+     * 选中后只把前缀补进输入框并保持浮层打开，不生成 chip、也不进入请求体。
+     */
+    | 'prefix';
   schemaName?: string;
   name: string;
+  /**
+   * 语义资产的类别（来自索引 {@code names[].type}）。
+   *
+   * <p>同名的表与指标需要生成长式句柄区分（UAT 2026-10-22 / U23），短名不足以定位。
+   */
+  assetType?: 'table' | 'metric';
   /**
    * 字段名（type=column 时有效）。
    *
@@ -242,6 +258,14 @@ export type AiChatRequestBody = {
    * <p>不传时行为与改造前完全一致（评测脚本即不传）。
    */
   profileId?: string;
+  /**
+   * P3b：项目级语义资产常驻（D17）。
+   *
+   * <p>语义项目名（不含 {@code /}）：非空时后端把该已发布项目的**资产清单**
+   * （表名 + 指标名 + 一句话口径）常驻进上下文；不传等价于关闭。
+   * 单资产精确引用走 {@code mentions} 里的 {@code type='semantic'}。
+   */
+  semanticProject?: string;
 };
 
 /**
@@ -355,6 +379,28 @@ export const listSkills = async (): Promise<AiChatMentionItem[]> => {
     name: s.name,
     content: s.description
   }));
+};
+
+/**
+ * P3b：{@code @semantic/} 一级候选——**已发布**的语义项目。
+ *
+ * <p>只列有 `_published` 版本的项目：AI 只能引用不可变快照（编辑区内容不作为候选，
+ * 否则"今天引用的口径明天变了"无法复现）。返回项含 {@code name/version/indexState}。
+ */
+export const listPublishedSemanticProjects = async (): Promise<any[]> => {
+  const res: any = await getData(API_CONSTANTS.SEMANTIC_PUBLISHED_PROJECTS);
+  return (res?.data ?? res ?? []) as any[];
+};
+
+/**
+ * P3b：{@code @semantic/<项目>/} 二级候选——该项目内的可引用资产。
+ *
+ * <p>来自索引 {@code names[]}（{@code {name, type, oneLiner}}）；索引未就绪时后端降级为
+ * YAML 文件级列表（{@code oneLiner} 为空），候选仍可用。
+ */
+export const listPublishedSemanticAssets = async (project: string): Promise<any[]> => {
+  const res: any = await getData(API_CONSTANTS.SEMANTIC_PUBLISHED_ASSETS, { project });
+  return (res?.data ?? res ?? []) as any[];
 };
 
 /**

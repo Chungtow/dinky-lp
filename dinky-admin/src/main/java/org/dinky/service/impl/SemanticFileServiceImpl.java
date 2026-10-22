@@ -19,6 +19,8 @@
 
 package org.dinky.service.impl;
 
+import org.dinky.ai.semantic.SemanticAssetProvider;
+import org.dinky.ai.semantic.SemanticAssetRef;
 import org.dinky.data.dto.SemanticEntryOpDTO;
 import org.dinky.data.dto.SemanticFileSaveDTO;
 import org.dinky.data.dto.SemanticRenameDTO;
@@ -27,6 +29,8 @@ import org.dinky.data.exception.BusException;
 import org.dinky.data.vo.SemanticFileContentVO;
 import org.dinky.data.vo.SemanticFileNode;
 import org.dinky.data.vo.SemanticProjectVO;
+import org.dinky.data.vo.SemanticPublishedAssetVO;
+import org.dinky.data.vo.SemanticPublishedProjectVO;
 import org.dinky.resource.semantic.SemanticFileEntry;
 import org.dinky.resource.semantic.SemanticHdfsClient;
 import org.dinky.service.SemanticFileService;
@@ -36,14 +40,19 @@ import java.util.List;
 
 import org.springframework.stereotype.Service;
 
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 /** {@link SemanticFileService} 实现：薄封装 {@link SemanticHdfsClient}，只做 VO 转换 */
 @Slf4j
 @Service
+@RequiredArgsConstructor
 public class SemanticFileServiceImpl implements SemanticFileService {
 
     private final SemanticHdfsClient client = SemanticHdfsClient.getInstance();
+
+    /** P3b：已发布资产的只读来源（候选接口与 AI 注入共用同一实现，避免两套口径） */
+    private final SemanticAssetProvider semanticAssetProvider;
 
     @Override
     public List<SemanticProjectVO> listProjects() {
@@ -141,6 +150,62 @@ public class SemanticFileServiceImpl implements SemanticFileService {
                 trashRel,
                 SemanticHdfsClient.TRASH_KEEP_DAYS);
         return trashRel;
+    }
+
+    // ------------------------------------------------------------------ P3b：AI 候选（只读）
+
+    @Override
+    public List<SemanticPublishedProjectVO> listPublishedProjects() {
+        List<SemanticPublishedProjectVO> projects = new ArrayList<>();
+        for (String name : client.listProjects()) {
+            SemanticAssetProvider.Meta meta;
+            try {
+                meta = semanticAssetProvider.meta(name);
+            } catch (RuntimeException e) {
+                // 单项目读失败不应让整个候选列表 500（与 listProjects 的既有策略一致）
+                log.warn("read published meta failed, project={}", name, e);
+                continue;
+            }
+            if (meta == null) {
+                // 从未发布：不作为候选（AI 只能引用不可变快照）
+                continue;
+            }
+            SemanticPublishedProjectVO vo = new SemanticPublishedProjectVO();
+            vo.setName(name);
+            vo.setVersion(meta.getVersion());
+            vo.setIndexState(meta.getIndexState());
+            vo.setPublishedAt(meta.getPublishedAt());
+            try {
+                int tables = 0;
+                int metrics = 0;
+                for (SemanticAssetRef ref : semanticAssetProvider.enumerate(name)) {
+                    if (SemanticAssetRef.TYPE_METRIC.equals(ref.getType())) {
+                        metrics++;
+                    } else {
+                        tables++;
+                    }
+                }
+                vo.setTableCount(tables);
+                vo.setMetricCount(metrics);
+            } catch (RuntimeException e) {
+                log.warn("enumerate published assets failed, project={}", name, e);
+            }
+            projects.add(vo);
+        }
+        return projects;
+    }
+
+    @Override
+    public List<SemanticPublishedAssetVO> listPublishedAssets(String project) {
+        List<SemanticPublishedAssetVO> assets = new ArrayList<>();
+        for (SemanticAssetRef ref : semanticAssetProvider.enumerate(project)) {
+            SemanticPublishedAssetVO vo = new SemanticPublishedAssetVO();
+            vo.setName(ref.getName());
+            vo.setType(ref.getType());
+            vo.setOneLiner(ref.getOneLiner());
+            assets.add(vo);
+        }
+        return assets;
     }
 
     /** 名称必须是单段：非空、不含路径分隔符、不是 {@code .}/{@code ..}、不超长 */
