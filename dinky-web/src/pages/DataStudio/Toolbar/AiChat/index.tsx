@@ -369,24 +369,46 @@ const AiChat = (props: AiChatProps) => {
       .catch(() => setSemanticProjects([]));
   }, [semanticQuery]);
 
-  /** 二级：项目名确定后拉该项目资产；切换项目时重拉（列表小，不做缓存） */
+  /**
+   * 二级：拉取"已确定项目"的资产。
+   *
+   * <p><b>只在项目名已确定时才请求</b>（UAT 2026-10-22 反馈）：
+   * ① 输入了分隔符（{@code @semantic/sem_demo2/}）或已在输入资产名——此时 parts[0] 是完整项目名；
+   * ② 该名字确实在已发布项目清单里——不在清单内就是"还在打字"，候选面板按关键字过滤即可，
+   *    <b>不请求后端</b>。否则每敲一个字符都会拿 "s"/"se" 当项目名请求，后端 442 触发全局错误提示。
+   */
   const semanticProjectName = semanticQuery?.parts[0] ?? '';
+  const semanticProjectReady =
+    !!semanticQuery &&
+    !!semanticProjectName &&
+    (semanticQuery.trailing || semanticQuery.parts.length > 1) &&
+    semanticProjects.some((item: any) => item.name === semanticProjectName);
+  /** 资产请求序号：切项目/连续输入时丢弃过期响应，避免慢响应把新项目的候选清空 */
+  const semanticAssetReqRef = useRef(0);
   useEffect(() => {
-    if (!semanticProjectName) {
-      setSemanticAssets([]);
+    if (!semanticProjectReady) {
       return;
     }
+    const seq = ++semanticAssetReqRef.current;
+    setSemanticAssets([]);
     listPublishedSemanticAssets(semanticProjectName)
-      .then((rows) =>
+      .then((rows) => {
+        if (seq !== semanticAssetReqRef.current) {
+          return;
+        }
         setSemanticAssets(
           (rows ?? []).map((row: any) => ({
             type: 'semantic' as const,
             name: `${semanticProjectName}/${row.name}`
           }))
-        )
-      )
-      .catch(() => setSemanticAssets([]));
-  }, [semanticProjectName]);
+        );
+      })
+      .catch(() => {
+        if (seq === semanticAssetReqRef.current) {
+          setSemanticAssets([]);
+        }
+      });
+  }, [semanticProjectReady, semanticProjectName]);
 
   useEffect(() => {
     if (!columnQuery || !databaseId || !schemaName) {
