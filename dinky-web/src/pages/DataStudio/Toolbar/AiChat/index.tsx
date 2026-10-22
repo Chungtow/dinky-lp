@@ -135,6 +135,8 @@ const AiChat = (props: AiChatProps) => {
   const abortRef = useRef<AbortController>();
   // 面板级会话标识：首轮不带 sessionId（后端才携带 schema 上下文），后续带上以复用上下文
   const sessionIdRef = useRef<string>(`${Date.now()}`);
+  /** P3b：上一次发送时绑定的语义项目；变化说明需要重发上下文（见 handleSend 的 semanticChanged） */
+  const lastSemanticProjectRef = useRef<string | undefined>(undefined);
 
   const currentTab = tabs?.find((tab) => tab.id === activeTab);
   const tabParams = currentTab?.params ?? {};
@@ -1075,6 +1077,24 @@ const AiChat = (props: AiChatProps) => {
 
     const userContent = text || l('datastudio.aiChat.explainCurrentSql');
     const history = messages.map((item) => ({ role: item.role, content: item.content }));
+    /**
+     * P3b：本轮要绑定的语义项目。
+     * 优先语义面板当前项目（跟随语义树切换）；未打开过语义面板时回退到当前语义文件 tab 的项目。
+     */
+    const effectiveSemanticProject =
+      currentSemanticProject || (tabParams?.taskId ? undefined : tabParams?.project);
+    /**
+     * P3b：切换语义项目后必须让后端**重发上下文**。
+     *
+     * <p>后端只在「首轮」（{@code sessionId} 为空）注入 schema 与语义清单，后续轮次一律
+     * 沿用首轮内容（`(schema 已在首轮提供，请沿用)`）。因此在项目变化时本轮不带
+     * sessionId，等价于开新一轮上下文（UAT 2026-10-22：切项目后 AI 仍按旧项目清单一）。
+     */
+    const semanticChanged = lastSemanticProjectRef.current !== effectiveSemanticProject;
+    lastSemanticProjectRef.current = effectiveSemanticProject;
+    if (semanticChanged) {
+      sessionIdRef.current = `${Date.now()}`;
+    }
 
     setMessages((prev) => [
       ...prev,
@@ -1097,8 +1117,9 @@ const AiChat = (props: AiChatProps) => {
           action,
           message: text,
           history,
-          // 首轮不带 sessionId：后端据此判断需要下发 schema 上下文
-          sessionId: history.length > 0 ? sessionIdRef.current : undefined,
+          // 首轮不带 sessionId：后端据此判断需要下发 schema 上下文；
+          // 切换语义项目的那一轮同样不带（见上面 semanticChanged 说明）
+          sessionId: history.length > 0 && !semanticChanged ? sessionIdRef.current : undefined,
           databaseId: metaDataAvailable ? databaseId : undefined,
           schemaName,
           tableName,
@@ -1119,11 +1140,9 @@ const AiChat = (props: AiChatProps) => {
           mode,
           // 阶段 3：所选 LLM 实例；不传 / 传不存在的值 → 后端回落默认实例
           profileId,
-          // P3b：「项目级资产清单常驻」（D17）。
-          // 优先语义面板当前项目（跟随语义树切换）；未打开过语义面板时回退到当前语义文件 tab 的项目；
+          // P3b：「项目级资产清单常驻」（D17）：语义树当前项目优先，缺失回退语义文件 tab 的项目；
           // 都没有则不注入（普通作业 tab 行为与改造前一致）
-          semanticProject:
-            currentSemanticProject || (tabParams?.taskId ? undefined : tabParams?.project)
+          semanticProject: effectiveSemanticProject
         },
         ({
           content,
