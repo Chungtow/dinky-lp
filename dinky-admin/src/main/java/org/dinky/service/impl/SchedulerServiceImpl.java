@@ -20,12 +20,14 @@
 package org.dinky.service.impl;
 
 import org.dinky.config.Dialect;
+import org.dinky.context.TenantContextHolder;
 import org.dinky.data.enums.Status;
 import org.dinky.data.exception.BusException;
 import org.dinky.data.model.Catalogue;
 import org.dinky.data.model.SystemConfiguration;
 import org.dinky.data.model.Task;
 import org.dinky.data.model.ext.TaskExtConfig;
+import org.dinky.data.model.rbac.Tenant;
 import org.dinky.init.SystemInit;
 import org.dinky.mapper.TaskMapper;
 import org.dinky.scheduler.client.ProcessClient;
@@ -47,6 +49,7 @@ import org.dinky.scheduler.model.TaskGroup;
 import org.dinky.scheduler.model.TaskMainInfo;
 import org.dinky.scheduler.model.TaskRequest;
 import org.dinky.service.SchedulerService;
+import org.dinky.service.TenantService;
 import org.dinky.service.catalogue.CatalogueService;
 import org.dinky.utils.JsonUtils;
 
@@ -70,6 +73,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.RandomUtil;
+import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import lombok.RequiredArgsConstructor;
@@ -87,6 +91,8 @@ public class SchedulerServiceImpl implements SchedulerService {
     private final TaskClient taskClient;
     private final CatalogueService catalogueService;
     private final TaskMapper taskMapper;
+    /** 用于把 Dinky 租户编码作为 DS 工作流的命名前缀，实现多租户发布隔离 */
+    private final TenantService tenantService;
 
     /**
      * Pushes the specified DinkyTaskRequest to the task queue.
@@ -770,16 +776,47 @@ public class SchedulerServiceImpl implements SchedulerService {
         List<String> names = new ArrayList<>();
         Catalogue current = catalogue;
         int depth = 0;
-        while (depth < 3 && current != null && !current.getParentId().equals(0)) {
-            current = catalogueService.getById(current.getParentId());
-            if (current == null) {
-                break;
+        // dinky_catalogue 参与 MyBatis 租户过滤；推送可能发生在无租户上下文的线程（DS 回调、后台任务），
+        // 此时父目录查询返回 null 并提前 break，路径会被截断成空串。这里临时忽略租户过滤，结束后恢复原状态。
+        boolean origin = TenantContextHolder.isIgnoreTenant();
+        try {
+            TenantContextHolder.ignoreTenant();
+            while (depth < 3 && current != null && !current.getParentId().equals(0)) {
+                current = catalogueService.getById(current.getParentId());
+                if (current == null) {
+                    break;
+                }
+                names.add(current.getName());
+                depth++;
             }
-            names.add(current.getName());
-            depth++;
+        } finally {
+            if (!origin) {
+                TenantContextHolder.clearIgnoreTenant();
+            }
         }
         Collections.reverse(names);
-        return String.join("/", names);
+        String path = String.join("/", names);
+        // 前置租户编码：不同 Dinky 租户的同名目录/同名作业在 DS 上落到不同工作流，避免合流与静默覆盖。
+        // 前缀取 catalogue 自身 tenantId 反查，不依赖 TenantContextHolder（同上，回调线程无上下文）。
+        String prefix = resolveTenantPrefix(catalogue.getTenantId());
+        return StrUtil.isBlank(path) ? prefix : prefix + "/" + path;
+    }
+
+    /**
+     * 解析 DS 工作流的租户前缀。
+     *
+     * <p>优先取 {@code dinky_tenant.tenant_code}；租户记录缺失或编码为空时兜底 {@code tenant_<id>}，
+     * 保证历史作业在租户数据不完整时仍可发布，而不是抛异常中断调度链路。
+     */
+    private String resolveTenantPrefix(Integer tenantId) {
+        if (tenantId == null) {
+            return "tenant_unknown";
+        }
+        Tenant tenant = tenantService.getById(tenantId);
+        if (tenant != null && StrUtil.isNotBlank(tenant.getTenantCode())) {
+            return tenant.getTenantCode();
+        }
+        return "tenant_" + tenantId;
     }
 
     /**
