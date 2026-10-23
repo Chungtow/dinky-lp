@@ -266,6 +266,14 @@ export type AiChatRequestBody = {
    * 单资产精确引用走 {@code mentions} 里的 {@code type='semantic'}。
    */
   semanticProject?: string;
+  /**
+   * P4 一期：上下文指纹（`ctx_` + 8 位十六进制）。
+   *
+   * <p>由 `aiChatContext.buildFingerprint` 按「本轮全部绑定来源」同步计算，后端据此判断
+   * 是否需要按首轮重新注入 schema / 语义清单（切 tab、换语义项目时 sessionId 并未变化）。
+   * 不传 = 旧行为（只按 sessionId 是否为空判断首轮）。
+   */
+  contextFingerprint?: string;
 };
 
 /**

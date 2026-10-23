@@ -34,6 +34,9 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import CraftDiff from './components/CraftDiff';
 import SqlDiff from './components/SqlDiff';
+import ContextBar from './ContextBar';
+import type { ContextScope } from './ContextBar';
+import { buildFingerprint, effectiveSemanticProjectOf, resolveBinding } from './aiChatContext';
 import './index.less';
 import {
   AiChatConfig,
@@ -135,26 +138,81 @@ const AiChat = (props: AiChatProps) => {
   const abortRef = useRef<AbortController>();
   // 面板级会话标识：首轮不带 sessionId（后端才携带 schema 上下文），后续带上以复用上下文
   const sessionIdRef = useRef<string>(`${Date.now()}`);
-  /** P3b：上一次发送时绑定的语义项目；变化说明需要重发上下文（见 handleSend 的 semanticChanged） */
-  const lastSemanticProjectRef = useRef<string | undefined>(undefined);
+  /**
+   * P4：上一次发送时的**上下文指纹**。
+   *
+   * <p>取代 P3b 的 `lastSemanticProjectRef`：指纹覆盖「切 tab / 换语义项目 / 临时覆盖数据源」
+   * 全部来源，变化即说明本轮必须让后端按首轮重注入（见 `handleSend` 的 contextChanged）。
+   */
+  const lastFingerprintRef = useRef<string | undefined>(undefined);
 
   const currentTab = tabs?.find((tab) => tab.id === activeTab);
   const tabParams = currentTab?.params ?? {};
   const dialect: string = tabParams?.dialect ?? '';
-  const tabDatabaseId: number | undefined = tabParams?.databaseId ?? undefined;
   /**
-   * 阶段 2 前置（1.2 多数据源切换）：面板可覆盖作业自带的数据源，默认跟随当前作业。
+   * P4 一期：手动覆盖（仅本次会话有效），置空即回落到「跟随编辑区自动绑定」。
    *
-   * <p>置为 undefined 即回落到作业数据源——下拉的「清空」因此等价于「跟随当前作业」，
-   * 而不是「没有数据源」。
+   * <p>`datasourceId` 既是「面板覆盖作业自带数据源」，也是原「手动指定数据源」能力的载体
+   * （U43：作业未绑数据源时也能指定一个），因此保留其语义，优先级收敛进绑定模型：
+   * `手动覆盖 > 编辑区文件项目 > 语义树当前项目`。
    */
   const [datasourceId, setDatasourceId] = useState<number | undefined>();
-  const databaseId: number | undefined = datasourceId ?? tabDatabaseId;
+  /** P4：语义项目临时覆盖（「改用树项目」与手动指定都落在这里） */
+  const [semanticProjectOverride, setSemanticProjectOverride] = useState<string | undefined>();
   const [datasourceList, setDatasourceList] = useState<any[]>([]);
-  const currentSql: string = tabParams?.statement ?? '';
+  /**
+   * P4 一期：**唯一上下文解析出口**。
+   *
+   * <p>请求体、摘要行、上下文指纹三处必须同源，否则会出现「摘要显示表 A、实际下发表 B」。
+   * 解析本身是纯函数（`aiChatContext.ts`）：无请求、无副作用、无 React 依赖。
+   */
+  const binding = useMemo(
+    () =>
+      resolveBinding({
+        activeTab: currentTab,
+        currentSemanticProject,
+        datasourceList,
+        override: {
+          databaseId: datasourceId,
+          schemaName,
+          tableName,
+          semanticProject: semanticProjectOverride
+        }
+      }),
+    [
+      currentTab,
+      currentSemanticProject,
+      datasourceList,
+      datasourceId,
+      schemaName,
+      tableName,
+      semanticProjectOverride
+    ]
+  );
+  /** 实际生效的数据源：手动覆盖优先，否则取编辑区对象自带的（task / dataSource tab） */
+  const databaseId: number | undefined = binding.override?.databaseId ?? binding.editor?.databaseId;
+  /** 实际生效的 schema / 表：覆盖优先，否则由编辑区对象溯源（表 tab 自带） */
+  const effectiveSchemaName: string | undefined =
+    binding.override?.schemaName ?? binding.editor?.schemaName;
+  const effectiveTableName: string | undefined =
+    binding.override?.tableName ?? binding.editor?.tableName;
+  /**
+   * 编辑区正文：作业 / 语义文件取 `statement`，**资源文件取 `content`**。
+   *
+   * <p>此前一律读 `statement`，资源 tab 因此永远拿到空正文（U32：问「这个文件讲了什么」答不出）。
+   */
+  const currentSql: string =
+    currentTab?.tabType === 'resource' ? (tabParams?.content ?? '') : (tabParams?.statement ?? '');
   /** 语义文件 tab（dbt on HDFS）不是 SQL 作业：EXPLAIN / 执行对它无意义，AI 仍可读写全文 */
   const isSqlJobTab = currentTab?.tabType === 'task';
-  const metaDataAvailable = Boolean(databaseId) && isSql(dialect?.toLowerCase());
+  /**
+   * 是否可把「数据源 → 库表元数据」下发给后端。
+   *
+   * <p>P4：数据源-表 tab 本身没有 dialect，但**它自己就是元数据对象**
+   * （U31：打开表 tab 直接问字段）。若仍按 `isSql(dialect)` 判定，这条路径拿不到任何 schema。
+   */
+  const metaDataAvailable =
+    Boolean(databaseId) && (isSql(dialect?.toLowerCase()) || currentTab?.tabType === 'dataSource');
   /**
    * P0：FlinkSQL 上下文可用性（与 metaDataAvailable 正交）。
    *
@@ -205,14 +263,37 @@ const AiChat = (props: AiChatProps) => {
   }, [databaseId, metaDataAvailable]);
 
   const tableOptions = useMemo(() => {
-    const schema = schemas?.find((item) => item.name === schemaName);
+    // 用「实际生效」的 schema（覆盖优先、否则编辑区自带的表 tab）——
+    // 否则打开表 tab 时下拉是空的，等于要求用户再手选一遍（P4 要消灭的正是这一步）
+    const schema = schemas?.find((item) => item.name === effectiveSchemaName);
     return (schema?.tables ?? []).map((table: any) => ({ label: table.name, value: table.name }));
-  }, [schemas, schemaName]);
+  }, [schemas, effectiveSchemaName]);
 
   // ===== 阶段 1a：Context 三档（1.1）/ @ 引用（1.4）/ 选中片段（1.0.4）=====
   const [contextScope, setContextScope] = useState<'current' | 'all' | 'custom'>('all');
   const [customTables, setCustomTables] = useState<string[]>([]);
   const [mentions, setMentions] = useState<AiChatMentionItem[]>([]);
+
+  /** 清空全部手动覆盖，回到「自动跟随编辑区」（popover 里的「恢复自动跟随」） */
+  const resetContextOverride = () => {
+    setDatasourceId(undefined);
+    setSchemaName(undefined);
+    setTableName(undefined);
+    setCustomTables([]);
+    setSemanticProjectOverride(undefined);
+  };
+
+  /**
+   * P4：手动覆盖只在「当前编辑区对象」内有效，换 tab 即失效。
+   *
+   * <p>否则上一个 tab 的表名 / 数据源会被当成当前对象的定位信息下发（表现为「表找不到」
+   * 而非「没选」），而且与「自动跟随编辑区」的承诺直接矛盾。
+   */
+  useEffect(() => {
+    resetContextOverride();
+    // 只按 activeTab 触发；resetContextOverride 每次渲染都是新函数，纳入依赖会陷入无限循环
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
   /**
    * 阶段 2：对话模式。Craft 需管理员开启（{@code config.craftModeEnable}）才可选，
    * 未开启时恒为 ask——与后端「未开启即回落 ask」的双重校验形成闭环。
@@ -422,24 +503,25 @@ const AiChat = (props: AiChatProps) => {
   }, [semanticProjectReady, semanticProjectName]);
 
   useEffect(() => {
-    if (!columnQuery || !databaseId || !schemaName) {
+    // P4：按「实际生效」的 schema 取字段——表 tab 自动带上 schema 后，@表.字段 才能直接用
+    if (!columnQuery || !databaseId || !effectiveSchemaName) {
       setColumnOptions([]);
       return;
     }
-    const cacheKey = `${databaseId}|${schemaName}|${columnQuery.table}`;
+    const cacheKey = `${databaseId}|${effectiveSchemaName}|${columnQuery.table}`;
     const cached = columnCacheRef.current.get(cacheKey);
     if (cached) {
       setColumnOptions(cached);
       return;
     }
     let cancelled = false;
-    listTableColumns(databaseId, schemaName, columnQuery.table)
+    listTableColumns(databaseId, effectiveSchemaName, columnQuery.table)
       .then((cols: any[]) => {
         const list = (cols ?? []).map((col: any) => ({
           type: 'column' as const,
           name: columnQuery.table,
           columnName: col?.name,
-          schemaName,
+          schemaName: effectiveSchemaName,
           group: l('datastudio.aiChat.mention.groupColumn')
         }));
         columnCacheRef.current.set(cacheKey, list);
@@ -455,7 +537,7 @@ const AiChat = (props: AiChatProps) => {
     return () => {
       cancelled = true;
     };
-  }, [columnQuery, databaseId, schemaName]);
+  }, [columnQuery, databaseId, effectiveSchemaName]);
 
   // 阶段 4a：skill 候选——仅在管理员开启 skillEnable 时拉取；关闭时清空（避免残留旧候选）
   useEffect(() => {
@@ -560,13 +642,13 @@ const AiChat = (props: AiChatProps) => {
 
   const mentionCandidates = useMemo(() => {
     const list: (AiChatMentionItem & { group: string })[] = [];
-    // provider 1：当前 schema 下的表
-    const schema: any = schemas?.find((item: any) => item.name === schemaName);
+    // provider 1：当前 schema 下的表（P4：按实际生效的 schema，表 tab 打开即有候选）
+    const schema: any = schemas?.find((item: any) => item.name === effectiveSchemaName);
     (schema?.tables ?? []).forEach((table: any) => {
       list.push({
         type: 'table',
         name: table.name,
-        schemaName,
+        schemaName: effectiveSchemaName,
         group: l('datastudio.aiChat.mention.groupTable')
       });
     });
@@ -770,7 +852,7 @@ const AiChat = (props: AiChatProps) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     schemas,
-    schemaName,
+    effectiveSchemaName,
     tabs,
     activeTab,
     tabParams?.taskId,
@@ -1078,21 +1160,26 @@ const AiChat = (props: AiChatProps) => {
     const userContent = text || l('datastudio.aiChat.explainCurrentSql');
     const history = messages.map((item) => ({ role: item.role, content: item.content }));
     /**
-     * P3b：本轮要绑定的语义项目。
-     * 优先语义面板当前项目（跟随语义树切换）；未打开过语义面板时回退到当前语义文件 tab 的项目。
-     */
-    const effectiveSemanticProject =
-      currentSemanticProject || (tabParams?.taskId ? undefined : tabParams?.project);
-    /**
-     * P3b：切换语义项目后必须让后端**重发上下文**。
+     * P4：上下文指纹——本轮「绑定来源集合」的哈希。
      *
-     * <p>后端只在「首轮」（{@code sessionId} 为空）注入 schema 与语义清单，后续轮次一律
-     * 沿用首轮内容（`(schema 已在首轮提供，请沿用)`）。因此在项目变化时本轮不带
-     * sessionId，等价于开新一轮上下文（UAT 2026-10-22：切项目后 AI 仍按旧项目清单一）。
+     * <p>仅用于变化检测（不是安全边界），所以用同步的 FNV-1a，不给发送链路引入异步等待。
+     * 范围档位与自选表清单不在绑定模型里，但它们同样改变注入内容，因此作为附加来源纳入。
      */
-    const semanticChanged = lastSemanticProjectRef.current !== effectiveSemanticProject;
-    lastSemanticProjectRef.current = effectiveSemanticProject;
-    if (semanticChanged) {
+    const fingerprint = buildFingerprint(binding, [
+      `scope:${contextScope}`,
+      contextScope === 'custom' ? `custom:${[...customTables].sort().join(',')}` : ''
+    ]);
+    /**
+     * 指纹变化 = 语境变了，本轮必须让后端**重发上下文**。
+     *
+     * <p>后端只在「首轮」（{@code sessionId} 为空）或指纹与上次不同时注入 schema 与语义清单，
+     * 后续轮次一律沿用首轮内容（`(schema 已在首轮提供，请沿用)`）。
+     * 因此切 tab / 换语义项目 / 临时覆盖数据源时，本轮不带 sessionId，等价于开新一轮上下文
+     * （UAT 2026-10-22：切项目后 AI 仍按旧项目清单一）。
+     */
+    const contextChanged = lastFingerprintRef.current !== fingerprint;
+    lastFingerprintRef.current = fingerprint;
+    if (contextChanged) {
       sessionIdRef.current = `${Date.now()}`;
     }
 
@@ -1118,16 +1205,17 @@ const AiChat = (props: AiChatProps) => {
           message: text,
           history,
           // 首轮不带 sessionId：后端据此判断需要下发 schema 上下文；
-          // 切换语义项目的那一轮同样不带（见上面 semanticChanged 说明）
-          sessionId: history.length > 0 && !semanticChanged ? sessionIdRef.current : undefined,
+          // 上下文指纹变化的那一轮同样不带（见上面 contextChanged 说明）
+          sessionId: history.length > 0 && !contextChanged ? sessionIdRef.current : undefined,
           databaseId: metaDataAvailable ? databaseId : undefined,
-          schemaName,
-          tableName,
+          schemaName: effectiveSchemaName,
+          tableName: effectiveTableName,
           dialect,
           // 阶段 1.0「作业上下文绑定」：编辑区内容全动作下发（早期仅 EXPLAIN 携带，
-          // 导致正常提问时模型看不到用户正在写的代码），并带上作业 id 以支持排障提问
+          // 导致正常提问时模型看不到用户正在写的代码），并带上作业 id 以支持排障提问。
+          // P4：资源文件 tab 的正文取 params.content；作业/语义文件仍取 statement
           sql: currentSql,
-          taskId: tabParams?.taskId,
+          taskId: binding.editor?.taskId,
           // 阶段 1a（1.0.4）：选中片段优先；无选中时后端回退为上面的 sql 全文
           selectedSql: readSelectedSql() || undefined,
           // 阶段 1a（1.1）：上下文范围档位
@@ -1140,9 +1228,11 @@ const AiChat = (props: AiChatProps) => {
           mode,
           // 阶段 3：所选 LLM 实例；不传 / 传不存在的值 → 后端回落默认实例
           profileId,
-          // P3b：「项目级资产清单常驻」（D17）：语义树当前项目优先，缺失回退语义文件 tab 的项目；
-          // 都没有则不注入（普通作业 tab 行为与改造前一致）
-          semanticProject: effectiveSemanticProject
+          // P3b：「项目级资产清单常驻」（D17）。P4 起改由绑定模型统一决策：
+          // 手动覆盖 > 语义文件 tab 所属项目 > 语义树当前项目；都没有则不注入
+          semanticProject: effectiveSemanticProjectOf(binding),
+          // P4：上下文指纹——后端据此判断本轮是否按首轮重注入（切 tab 时 sessionId 不变）
+          contextFingerprint: fingerprint
         },
         ({
           content,
@@ -1273,10 +1363,14 @@ const AiChat = (props: AiChatProps) => {
           action,
           message: action === 'FIX_SQL' ? '请修复这段 SQL' : '请对这段 SQL 做综合优化改写',
           databaseId: metaDataAvailable ? databaseId : undefined,
-          schemaName,
+          // P4（U37）：修复/改写此前漏传表定位与语义项目，导致「优化 SQL」拿不到字段与口径；
+          // 现在与 handleSend 同源（都取绑定结果），不再各自拼一套
+          schemaName: effectiveSchemaName,
+          tableName: effectiveTableName,
+          semanticProject: effectiveSemanticProjectOf(binding),
           dialect,
           sql: currentSql,
-          taskId: tabParams?.taskId,
+          taskId: binding.editor?.taskId,
           selectedSql: selected,
           // 阶段 2b：把前端暂存的「最近一次执行报错」带上（编辑器执行报错不落后端库）；
           // 按 taskId 取不到时回退到全局最近一条，避免因 tab/taskId 不匹配而漏带
@@ -1592,94 +1686,48 @@ const AiChat = (props: AiChatProps) => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: 8 }}>
       <Space direction={'vertical'} size={4} style={{ width: '100%' }}>
-        {!metaDataAvailable && !flinkContextAvailable && (
-          <Alert type={'warning'} showIcon message={l('datastudio.aiChat.bindGuide')} />
-        )}
         {/* P0：FlinkSQL 有其专属上下文（无数据源也要给出「已加载」的正确预期，而不是「请绑定数据源」） */}
         {flinkContextAvailable && (
           <Alert type={'info'} showIcon message={l('datastudio.aiChat.flinkContextLoaded')} />
         )}
         {/*
-          阶段 2 前置（1.2 多数据源切换）：始终显示，不受 metaDataAvailable 约束——
-          本功能最大的价值恰恰是「作业未绑定数据源时也能指定一个」，放到分支内就自废武功。
-          清空（allowClear）回落到作业数据源，因为 databaseId = datasourceId ?? tabDatabaseId。
+          P4 一期：顶栏由「黄条 + 数据源/Schema/表 三个常驻 Select」改为**一行只读摘要 + popover**。
+          - 默认自动跟随编辑区（作业 / 表 / 资源文件 / 语义文件），不再要求手选；
+          - 黄条已移除：未绑定时摘要行直接说明「打开作业/表后再提问」，不阻断对话；
+          - 原控件全部搬进 popover 作为「临时覆盖」，因此「手动指定数据源」能力不退化（U42/U43）。
         */}
-        <Select
-          allowClear
-          showSearch
-          size={'small'}
-          style={{ minWidth: 170 }}
-          placeholder={l('datastudio.aiChat.datasource')}
-          // 阶段 4b 修复（缺陷 1）：value 与 option 的 id 必须同类型。
-          // 编辑器侧（RunToolbar/SelectDb.tsx 的 convertValue）把 databaseId 以**字符串**回写
-          // tab params，而 options 用的是数字 item.id → antd 严格比较失败后会**回退渲染原始值**，
-          // 表现为「代码编辑区选的是 hive-lpods，AI Chat 面板却显示 21」。这里统一按字符串比较，
-          // 回传时再转回数字，保持 setDatasourceId 的 number 语义不变。
-          value={databaseId === undefined || databaseId === null ? undefined : String(databaseId)}
-          onChange={(value) => setDatasourceId(value === undefined ? undefined : Number(value))}
-          optionFilterProp={'label'}
-          options={(datasourceList ?? []).map((item: any) => ({
-            label: item.name,
-            value: String(item.id)
-          }))}
+        <ContextBar
+          binding={binding}
+          datasourceList={datasourceList}
+          overrideDatasourceId={datasourceId}
+          onDatasourceChange={setDatasourceId}
+          metaDataAvailable={metaDataAvailable}
+          schemas={schemas}
+          overrideSchemaName={schemaName}
+          overrideTableName={tableName}
+          onSchemaChange={(value) => {
+            setSchemaName(value);
+            // 换 schema 后旧表名已失效，必须清空（否则下发的表在新 schema 里不存在）
+            setTableName(undefined);
+          }}
+          onTableChange={setTableName}
+          contextScope={contextScope}
+          onScopeChange={(value) => setContextScope(value as ContextScope)}
+          customTables={customTables}
+          onCustomTablesChange={setCustomTables}
+          tableOptions={tableOptions}
+          onUseTreeProject={() =>
+            setSemanticProjectOverride(binding.semanticTreeConflict?.treeProject)
+          }
+          onResetOverride={resetContextOverride}
+          overridden={
+            datasourceId !== undefined ||
+            schemaName !== undefined ||
+            tableName !== undefined ||
+            semanticProjectOverride !== undefined ||
+            customTables.length > 0
+          }
         />
-        {metaDataAvailable && (
-          <Space size={4} wrap>
-            <Select
-              allowClear
-              size={'small'}
-              style={{ minWidth: 130 }}
-              placeholder={l('datastudio.aiChat.schema')}
-              value={schemaName}
-              onChange={(value) => {
-                setSchemaName(value);
-                setTableName(undefined);
-              }}
-              options={(schemas ?? []).map((item: any) => ({
-                label: item.name,
-                value: item.name
-              }))}
-            />
-            {/* 阶段 1a（1.1）：custom 档位下表下拉变多选，用于勾选本次要喂给模型的表 */}
-            {contextScope === 'custom' ? (
-              <Select
-                mode={'multiple'}
-                allowClear
-                showSearch
-                size={'small'}
-                style={{ minWidth: 200, maxWidth: 320 }}
-                placeholder={l('datastudio.aiChat.customTables')}
-                value={customTables}
-                onChange={(value: string[]) => setCustomTables(value ?? [])}
-                options={tableOptions}
-                maxTagCount={3}
-              />
-            ) : (
-              <Select
-                allowClear
-                showSearch
-                size={'small'}
-                style={{ minWidth: 160 }}
-                placeholder={l('datastudio.aiChat.table')}
-                value={tableName}
-                onChange={(value) => setTableName(value)}
-                options={tableOptions}
-              />
-            )}
-            <Tooltip title={l('datastudio.aiChat.scopeTip')}>
-              <Segmented
-                size={'small'}
-                value={contextScope}
-                onChange={(value) => setContextScope(value as 'current' | 'all' | 'custom')}
-                options={[
-                  { label: l('datastudio.aiChat.scopeCurrent'), value: 'current' },
-                  { label: l('datastudio.aiChat.scopeAll'), value: 'all' },
-                  { label: l('datastudio.aiChat.scopeCustom'), value: 'custom' }
-                ]}
-              />
-            </Tooltip>
-          </Space>
-        )}
       </Space>
 
       <div

@@ -19,7 +19,14 @@
 
 import { PermissionConstants } from '@/types/Public/constants';
 import { l } from '@/utils/intl';
-import { DeleteOutlined, EditOutlined, FileAddOutlined, FolderAddOutlined, ReloadOutlined } from '@ant-design/icons';
+import {
+  CommentOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  FileAddOutlined,
+  FolderAddOutlined,
+  ReloadOutlined
+} from '@ant-design/icons';
 
 /** 语义树右键菜单项 key（与 handleMenuClick 的 switch 一一对应） */
 export enum SemanticRightMenuKey {
@@ -27,6 +34,7 @@ export enum SemanticRightMenuKey {
   CREATE_DIR = 'createDir',
   RENAME = 'rename',
   DELETE = 'delete',
+  FEEDBACK = 'feedback',
   REFRESH = 'refresh'
 }
 
@@ -75,6 +83,17 @@ export const getSemanticContextMenu = ({ isDir, readOnly }: SemanticMenuContext)
       label: l('datastudio.semantic.ctx.delete'),
       disabled: readOnly,
       path: PermissionConstants.DATASTUDIO_SEMANTIC_EDIT
+    },
+    { type: 'divider' as const },
+    {
+      // P4 一期：「这条口径不对」的出口。只对**文件**开放（目录没有口径可评），
+      // 只读条目（meta.json / target）也不让提——那不是语义资产。
+      // 权限沿用 view：能看语义项目的人都能提，否则反馈收不上来。
+      key: SemanticRightMenuKey.FEEDBACK,
+      icon: <CommentOutlined />,
+      label: l('datastudio.semantic.ctx.feedback'),
+      disabled: isDir || readOnly,
+      path: PermissionConstants.DATASTUDIO_SEMANTIC_VIEW
     },
     { type: 'divider' as const },
     {

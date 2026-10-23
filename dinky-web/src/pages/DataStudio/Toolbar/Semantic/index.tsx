@@ -36,7 +36,7 @@ import {
   Typography,
   message
 } from 'antd';
-import { ReloadOutlined } from '@ant-design/icons';
+import { CommentOutlined, ReloadOutlined } from '@ant-design/icons';
 import { ProCard } from '@ant-design/pro-components';
 import RightContextMenu from '@/components/RightContextMenu';
 import { InitContextMenuPosition } from '@/pages/DataStudio/function';
@@ -44,14 +44,21 @@ import { AuthorizedObject, useAccess } from '@/hooks/useAccess';
 import {
   createSemanticDir,
   deleteSemanticEntry,
+  getSemanticFeedbackSummary,
   listSemanticFiles,
   listSemanticProjects,
   readSemanticFile,
   renameSemanticEntry,
   saveSemanticFile
 } from './service';
-import { SemanticFileNode, SemanticProject } from './data.d';
+import { SemanticAssetType, SemanticFileNode, SemanticProject } from './data.d';
 import { SemanticRightMenuKey, getSemanticContextMenu } from './constants';
+import {
+  SemanticFeedbackBadge,
+  SemanticFeedbackDrawer,
+  SemanticFeedbackModal,
+  semanticAssetOf
+} from './FeedbackModal';
 import { l } from '@/utils/intl';
 
 const { Text } = Typography;
@@ -172,6 +179,13 @@ const Semantic = (props: {
   const [deleteTarget, setDeleteTarget] = useState<SemanticTreeNode | undefined>();
   const [deleteRecursive, setDeleteRecursive] = useState<boolean>(true);
 
+  // P4 一期：语义反馈（提交弹窗 + 待办抽屉 + 面板角标）
+  const [feedbackTarget, setFeedbackTarget] = useState<
+    { assetName: string; assetType: SemanticAssetType } | undefined
+  >();
+  const [todoOpen, setTodoOpen] = useState<boolean>(false);
+  const [todoCount, setTodoCount] = useState<number>(0);
+
   const loadProjects = useCallback(async () => {
     setLoading(true);
     setError(undefined);
@@ -231,6 +245,24 @@ const Semantic = (props: {
     saveCurrentSemanticProject(project);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project]);
+
+  /**
+   * P4：待办角标——只拉计数，不拉列表（接口轻，失败也不影响面板主流程）。
+   *
+   * <p>反馈是增项能力：HDFS / DB 抖动时把角标当 0，不要让语义树跟着报错。
+   */
+  const loadTodoCount = useCallback(async () => {
+    try {
+      const res = await getSemanticFeedbackSummary(project);
+      setTodoCount(res?.code === 0 ? (res.data?.open ?? 0) : 0);
+    } catch {
+      setTodoCount(0);
+    }
+  }, [project]);
+
+  useEffect(() => {
+    loadTodoCount();
+  }, [loadTodoCount]);
 
   const treeData = useMemo(() => buildTree(nodes), [nodes]);
 
@@ -505,6 +537,13 @@ const Semantic = (props: {
         setDeleteTarget(rightClicked);
         setDeleteRecursive(true);
         break;
+      case SemanticRightMenuKey.FEEDBACK: {
+        // P4：按文件路径推断资产名与类型（models/ → TABLE，metrics/ → METRIC），
+        // 目标不落库、只决定弹窗里展示的是哪个资产
+        const asset = semanticAssetOf(rightClicked.key);
+        setFeedbackTarget(asset);
+        break;
+      }
       case SemanticRightMenuKey.REFRESH:
         refresh();
         break;
@@ -551,6 +590,14 @@ const Semantic = (props: {
         />
         <Tooltip title={l('datastudio.semantic.refresh')}>
           <Button icon={<ReloadOutlined />} loading={loading} onClick={() => refresh()} />
+        </Tooltip>
+        {/* P4：反馈待办角标——有未处理反馈才显红点，避免常驻噪声 */}
+        <Tooltip
+          title={`${l('datastudio.semantic.feedback.todo')}${todoCount > 0 ? ` (${todoCount})` : ''}`}
+        >
+          <SemanticFeedbackBadge count={todoCount}>
+            <Button icon={<CommentOutlined />} onClick={() => setTodoOpen(true)} />
+          </SemanticFeedbackBadge>
         </Tooltip>
       </Space.Compact>
 
@@ -648,6 +695,24 @@ const Semantic = (props: {
           </Space>
         )}
       </Modal>
+
+      {/* P4 一期：提交反馈（右键「反馈问题」打开） */}
+      <SemanticFeedbackModal
+        open={Boolean(feedbackTarget)}
+        onClose={() => setFeedbackTarget(undefined)}
+        project={project}
+        assetName={feedbackTarget?.assetName}
+        assetType={feedbackTarget?.assetType}
+        onSubmitted={loadTodoCount}
+      />
+
+      {/* P4 一期：反馈待办（提交 / 处理后刷新角标） */}
+      <SemanticFeedbackDrawer
+        open={todoOpen}
+        onClose={() => setTodoOpen(false)}
+        project={project}
+        onCountChange={setTodoCount}
+      />
     </ProCard>
   );
 };

@@ -35,6 +35,7 @@ import org.dinky.ai.PromptStore;
 import org.dinky.ai.SqlVerifier;
 import org.dinky.ai.TableSelector;
 import org.dinky.ai.TokenUsage;
+import org.dinky.ai.context.ContextFingerprintCache;
 import org.dinky.ai.context.FlinkContextProvider;
 import org.dinky.ai.context.NameRegistryService;
 import org.dinky.ai.context.RequestSnapshot;
@@ -184,6 +185,9 @@ public class AiChatServiceImpl implements AiChatService {
     private final AiChatRateLimiter rateLimiter;
     private final AiChatRunRegistry runRegistry;
     private final AiChatLogService aiChatLogService;
+    /** P4 一期：会话上下文指纹（判断自动绑定后是否需要按首轮重注入） */
+    private final ContextFingerprintCache contextFingerprintCache;
+
     private final JobInstanceService jobInstanceService;
     private final HistoryService historyService;
     private final AiToolLoop toolLoop;
@@ -398,6 +402,11 @@ public class AiChatServiceImpl implements AiChatService {
             audit.setProfileId(profile.getId());
             audit.setDatabaseId(request.getDatabaseId());
             audit.setSchemaName(request.getSchemaName());
+            // P4 一期（M5 线上口径）：记录本轮的语义项目与上下文指纹。
+            // 记的是**请求携带值**（是否真正注入还取决于语义开关与 view 权限）；
+            // 指标口径为「带语义上下文的轮次占比」，用请求值近似足够，且能反查重注入是否生效。
+            audit.setSemanticProject(request.getSemanticProject());
+            audit.setContextFingerprint(request.getContextFingerprint());
             audit.setQuestion(request.getMessage());
 
             // 限流（每分钟）
@@ -1067,6 +1076,38 @@ public class AiChatServiceImpl implements AiChatService {
         return runRegistry.cancel(request.getRunId(), request.getUserId());
     }
 
+    /**
+     * P4 一期：判断「本轮上下文指纹是否与上一次不同」，并把本轮指纹记入缓存。
+     *
+     * <p>判定规则：
+     *
+     * <ul>
+     *   <li>本轮未带指纹（旧客户端 / 未升级前端）→ <b>不算变化</b>，完全保持原有「只看 sessionId」的行为；
+     *   <li>上次无记录（新会话 / 缓存过期 / 进程重启）→ <b>算变化</b>（按首轮重注入，多花 token 但不会答错）；
+     *   <li>两次相同 → 不算变化（沿用会话历史，省 token）。
+     * </ul>
+     *
+     * <p>副作用：写入缓存。{@code buildMessages} 每次请求只调用一次（{@code AiChatServiceImpl:444}），
+     * 因此不存在「同一次请求内二次判定」的误判。
+     */
+    private boolean isContextFingerprintChanged(AiChatRequest request) {
+        String fingerprint = request.getContextFingerprint();
+        if (StrUtil.isBlank(fingerprint)) {
+            return false;
+        }
+        String previous = contextFingerprintCache.get(request.getSessionId());
+        contextFingerprintCache.put(request.getSessionId(), fingerprint);
+        if (!fingerprint.equals(previous)) {
+            log.info(
+                    "AI Chat 上下文指纹变化，本轮按首轮重注入：sessionId={}, from={}, to={}",
+                    request.getSessionId(),
+                    previous,
+                    fingerprint);
+            return true;
+        }
+        return false;
+    }
+
     /** 组装发送给大模型的消息：system（首轮含 schema）+ 历史 + 本轮 user */
     private List<AiChatMessage> buildMessages(AiChatRequest request, String schemaContext, String flinkContext) {
         String action = StrUtil.blankToDefault(request.getAction(), ACTION_TEXT_TO_SQL)
@@ -1077,7 +1118,9 @@ public class AiChatServiceImpl implements AiChatService {
         boolean isFix = ACTION_FIX_SQL.equals(action);
         boolean isRewrite = ACTION_REWRITE_SQL.equals(action);
         // 首轮才携带 schema 上下文，后续轮次由会话历史承载上下文（省 token、降延迟）
-        boolean firstTurn = StrUtil.isBlank(request.getSessionId());
+        // P4 一期：自动绑定后「切编辑区 tab / 换语义项目」不会换 sessionId，
+        // 因此再叠加**上下文指纹**判定——指纹变了同样按首轮重注入，否则 AI 会沿用旧项目的上下文。
+        boolean firstTurn = StrUtil.isBlank(request.getSessionId()) || isContextFingerprintChanged(request);
 
         // 「选中片段优先」的目标 SQL：EXPLAIN / Fix / Rewrite 三处共用
         // —— 有选中则针对选中片段，无选中回退全文（阶段 2b 体验优化：解释也遵循选中优先）

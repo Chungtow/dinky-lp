@@ -17,9 +17,14 @@
  *
  */
 
-import { getData, postAll } from '@/services/api';
+import { getData, postAll, putDataJson } from '@/services/api';
 import { API_CONSTANTS } from '@/services/endpoints';
-import { SemanticCreateDirParams, SemanticDeleteParams, SemanticRenameParams } from './data.d';
+import {
+  SemanticCreateDirParams,
+  SemanticDeleteParams,
+  SemanticFeedbackSubmitParams,
+  SemanticRenameParams
+} from './data.d';
 
 /**
  * 语义项目接口。
@@ -62,4 +67,44 @@ export async function renameSemanticEntry(params: SemanticRenameParams) {
 /** 软删除（移入项目内 .trash，可由运维脚本按保留期清理） */
 export async function deleteSemanticEntry(params: SemanticDeleteParams) {
   return (await postAll(API_CONSTANTS.SEMANTIC_DELETE, params)) as any;
+}
+
+// ---------------------------------------------------------------------------
+// P4 一期：语义资产反馈（口径错了有地方说）
+// ---------------------------------------------------------------------------
+
+/**
+ * 提交一条语义资产反馈。
+ *
+ * <p>只传「针对哪个资产的什么意见」；{@code version} / {@code yaml_sha256} 由后端按
+ * 提交时的最新发布版本解析——客户端传这两项等于让「是否已随版本失效」的判断失效。
+ */
+export async function submitSemanticFeedback(params: SemanticFeedbackSubmitParams) {
+  return (await postAll(API_CONSTANTS.SEMANTIC_FEEDBACK, params)) as any;
+}
+
+/** 反馈列表（默认按时间倒序；status=OPEN 即待办） */
+export async function listSemanticFeedback(params: {
+  project?: string;
+  asset?: string;
+  status?: string;
+  limit?: number;
+}) {
+  return (await getData(API_CONSTANTS.SEMANTIC_FEEDBACK_LIST, params)) as any;
+}
+
+/** 处理反馈：RESOLVED（已处理）/ IGNORED（已忽略）；需 datastudio:semantic:feedback */
+export async function resolveSemanticFeedback(
+  id: number,
+  params: { status: 'RESOLVED' | 'IGNORED'; note?: string }
+) {
+  return (await putDataJson(
+    `${API_CONSTANTS.SEMANTIC_FEEDBACK_RESOLVE}/${id}/resolve`,
+    params
+  )) as any;
+}
+
+/** 反馈计数（待办角标：open；运营视图：类型分布 / 正负评价） */
+export async function getSemanticFeedbackSummary(project?: string) {
+  return (await getData(API_CONSTANTS.SEMANTIC_FEEDBACK_SUMMARY, { project })) as any;
 }

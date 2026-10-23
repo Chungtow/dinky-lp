@@ -121,6 +121,14 @@ public class AiChatLog implements Serializable {
     @ApiModelProperty(value = "Write Chars", dataType = "Integer", notes = "改写字符数变化")
     private Integer writeChars;
 
+    /** P4 一期（M5 线上口径）：本轮注入的语义项目（为空 = 未启用语义上下文） */
+    @ApiModelProperty(value = "Semantic Project", dataType = "String", notes = "本轮注入的语义项目")
+    private String semanticProject;
+
+    /** P4 一期：本轮上下文指纹（判断自动绑定后的重注入是否生效） */
+    @ApiModelProperty(value = "Context Fingerprint", dataType = "String", notes = "本轮上下文指纹")
+    private String contextFingerprint;
+
     @ApiModelProperty(value = "Create Time", dataType = "LocalDateTime")
     private LocalDateTime createTime;
 }
