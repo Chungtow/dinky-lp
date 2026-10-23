@@ -22,21 +22,28 @@ package org.dinky.controller;
 import org.dinky.data.annotations.Log;
 import org.dinky.data.constant.PermissionConstants;
 import org.dinky.data.dto.SemanticEntryOpDTO;
+import org.dinky.data.dto.SemanticFeedbackDTO;
+import org.dinky.data.dto.SemanticFeedbackResolveDTO;
 import org.dinky.data.dto.SemanticFileSaveDTO;
 import org.dinky.data.dto.SemanticRenameDTO;
 import org.dinky.data.enums.BusinessType;
+import org.dinky.data.model.SemanticFeedback;
 import org.dinky.data.result.Result;
+import org.dinky.data.vo.SemanticFeedbackSummaryVO;
 import org.dinky.data.vo.SemanticFileContentVO;
 import org.dinky.data.vo.SemanticFileNode;
 import org.dinky.data.vo.SemanticProjectVO;
 import org.dinky.data.vo.SemanticPublishedAssetVO;
 import org.dinky.data.vo.SemanticPublishedProjectVO;
+import org.dinky.service.SemanticFeedbackService;
 import org.dinky.service.SemanticFileService;
 
 import java.util.List;
 
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -73,6 +80,9 @@ import lombok.extern.slf4j.Slf4j;
 public class SemanticController {
 
     private final SemanticFileService semanticFileService;
+
+    /** P4 一期：语义资产反馈（口径错了有地方说、有人处理） */
+    private final SemanticFeedbackService semanticFeedbackService;
 
     @GetMapping("/projects")
     @ApiOperation("List Semantic Projects (HDFS)")
@@ -173,5 +183,72 @@ public class SemanticController {
     @SaCheckPermission(PermissionConstants.DATASTUDIO_SEMANTIC_EDIT)
     public Result<String> delete(@RequestBody SemanticEntryOpDTO dto) {
         return Result.succeed(semanticFileService.deleteEntry(dto));
+    }
+
+    // ------------------------------------------------------------------ P4 一期：语义资产反馈
+
+    /**
+     * 提交一条语义资产反馈（「这条口径不对」的出口）。
+     *
+     * <p>权限用 {@code semantic:view} 而不是新增的处理权限——<b>能看的人都能提</b>，
+     * 否则反馈收不上来，闭环没有输入。版本与 YAML 指纹由后端解析，见
+     * {@code SemanticFeedbackServiceImpl#submit}。
+     */
+    @PostMapping("/feedback")
+    @ApiOperation("Submit Feedback on a Semantic Asset")
+    @Log(title = "Submit Semantic Feedback", businessType = BusinessType.INSERT)
+    @SaCheckPermission(PermissionConstants.DATASTUDIO_SEMANTIC_VIEW)
+    public Result<Long> submitFeedback(@RequestBody SemanticFeedbackDTO dto) {
+        return Result.succeed(semanticFeedbackService.submit(dto));
+    }
+
+    /**
+     * 反馈列表（待办视图）。
+     *
+     * <p>三个过滤条件都可空：{@code status=OPEN} 即「待处理」。列表上限由服务层兜底
+     * （默认 100 / 最大 500），前端无需翻页。
+     */
+    @GetMapping("/feedback/list")
+    @ApiOperation("List Semantic Feedbacks (newest first)")
+    @ApiImplicitParams({
+        @ApiImplicitParam(name = "project", value = "Project Name", dataType = "String", paramType = "query"),
+        @ApiImplicitParam(name = "asset", value = "Asset Name", dataType = "String", paramType = "query"),
+        @ApiImplicitParam(
+                name = "status",
+                value = "OPEN | RESOLVED | IGNORED",
+                dataType = "String",
+                paramType = "query"),
+        @ApiImplicitParam(name = "limit", value = "Max Rows", dataType = "Integer", paramType = "query")
+    })
+    @SaCheckPermission(PermissionConstants.DATASTUDIO_SEMANTIC_VIEW)
+    public Result<List<SemanticFeedback>> listFeedback(
+            @RequestParam(required = false) String project,
+            @RequestParam(required = false) String asset,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) Integer limit) {
+        return Result.succeed(semanticFeedbackService.listFeedback(project, asset, status, limit));
+    }
+
+    /**
+     * 处理反馈：{@code OPEN → RESOLVED / IGNORED}。
+     *
+     * <p>需要新增的 {@code datastudio:semantic:feedback}（无权限者 403，前端亦隐藏处理按钮）。
+     */
+    @PutMapping("/feedback/{id}/resolve")
+    @ApiOperation("Resolve or Ignore a Semantic Feedback")
+    @Log(title = "Resolve Semantic Feedback", businessType = BusinessType.UPDATE)
+    @SaCheckPermission(PermissionConstants.DATASTUDIO_SEMANTIC_FEEDBACK)
+    public Result<Boolean> resolveFeedback(@PathVariable Long id, @RequestBody SemanticFeedbackResolveDTO dto) {
+        semanticFeedbackService.resolve(id, dto);
+        return Result.succeed(true);
+    }
+
+    /** 反馈计数（待办角标 + 运营视图）：可按项目过滤 */
+    @GetMapping("/feedback/summary")
+    @ApiOperation("Semantic Feedback Counters")
+    @ApiImplicitParam(name = "project", value = "Project Name", dataType = "String", paramType = "query")
+    @SaCheckPermission(PermissionConstants.DATASTUDIO_SEMANTIC_VIEW)
+    public Result<SemanticFeedbackSummaryVO> feedbackSummary(@RequestParam(required = false) String project) {
+        return Result.succeed(semanticFeedbackService.summary(project));
     }
 }

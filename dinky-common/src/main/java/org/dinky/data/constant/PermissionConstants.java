@@ -304,4 +304,13 @@ public class PermissionConstants {
     public static final String DATASTUDIO_SEMANTIC_VIEW = "datastudio:semantic:view";
 
     public static final String DATASTUDIO_SEMANTIC_EDIT = "datastudio:semantic:edit";
+
+    /**
+     * P4 一期：处理语义资产反馈（RESOLVED / IGNORED）。
+     *
+     * <p><b>只给「处理」用</b>——提交反馈沿用 {@link #DATASTUDIO_SEMANTIC_VIEW}，
+     * 让所有能看语义项目的人都能提意见（否则收不到反馈，闭环无从谈起）。
+     * 迁移 {@code V20261023.1.4.9} 已登记该权限点（menu id = 190）。
+     */
+    public static final String DATASTUDIO_SEMANTIC_FEEDBACK = "datastudio:semantic:feedback";
 }

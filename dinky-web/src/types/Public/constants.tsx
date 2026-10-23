@@ -201,6 +201,8 @@ export enum PermissionConstants {
   // dbt 语义项目在线编辑（P2）：3 段式，与后端 datastudio:semantic:view / edit 自洽
   DATASTUDIO_SEMANTIC_VIEW = '/datastudio/semantic/view',
   DATASTUDIO_SEMANTIC_EDIT = '/datastudio/semantic/edit',
+  // P4 一期：处理语义反馈（提交反馈沿用 VIEW——能看的人都能提，否则收不到反馈）
+  DATASTUDIO_SEMANTIC_FEEDBACK = '/datastudio/semantic/feedback',
   // 类加载器 Jars
   SETTINGS_CLASSLOADERJARS_VIEW = '/settings/classloaderjars/view',
 

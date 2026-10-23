@@ -109,7 +109,9 @@ const Resource = (props: {
         id
       }).catch(() => '');
       const tabId = `resource_${id}`;
-      const tabParams = { name, content: content ?? '' };
+      // P4 一期：把资源 id 与全路径一并放进 params——AI Chat 靠它们溯源
+      // 「这个文件是哪个、在哪个目录」；此前 params 只有 name/content。
+      const tabParams = { id, name, fullName: node.fullName, content: content ?? '' };
       const isOpened = (centerContent?.tabs ?? []).some((tab) => tab.id === tabId);
       if (isOpened) {
         updateCenterTab({

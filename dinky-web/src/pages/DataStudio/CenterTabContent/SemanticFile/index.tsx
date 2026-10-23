@@ -23,13 +23,17 @@ import { mapDispatchToProps } from '@/pages/DataStudio/DvaFunction';
 import { DataStudioContext } from '@/pages/DataStudio/DataStudioContext';
 import { semanticEditorKey } from '@/pages/DataStudio/editorKey';
 import { saveSemanticFile } from '@/pages/DataStudio/Toolbar/Semantic/service';
+import {
+  SemanticFeedbackModal,
+  semanticAssetOf
+} from '@/pages/DataStudio/Toolbar/Semantic/FeedbackModal';
 import CodeEdit from '@/components/CustomEditor/CodeEdit';
 import { HasAuthority } from '@/hooks/useAccess';
 import { PermissionConstants } from '@/types/Public/constants';
 import { l } from '@/utils/intl';
 import { SuccessMessage, WarningMessage } from '@/utils/messages';
 import { Space, Tag, Tooltip, Typography } from 'antd';
-import { SaveOutlined } from '@ant-design/icons';
+import { CommentOutlined, SaveOutlined } from '@ant-design/icons';
 import { editor } from 'monaco-editor';
 import React, { useContext, useEffect, useRef, useState } from 'react';
 
@@ -51,10 +55,7 @@ const languageOf = (path: string): string => {
  * <p>内容与「纯文本作业」同构：正文保存在 {@code tabParams.statement}，因此 AI Chat 无需改造
  * 协议即可把它当作「当前编辑内容」；保存时以 {@code mtime} 作乐观锁，冲突提示刷新后重试。
  */
-const SemanticFile = (props: {
-  tabData: CenterTab;
-  updateCenterTab: (payload: any) => void;
-}) => {
+const SemanticFile = (props: { tabData: CenterTab; updateCenterTab: (payload: any) => void }) => {
   const { tabData, updateCenterTab } = props;
   const { project, path, statement, mtime, readOnly } = tabData.params ?? {};
   const { editorRegistry } = useContext(DataStudioContext);
@@ -65,6 +66,14 @@ const SemanticFile = (props: {
   const editorKey = semanticEditorKey(project, path);
   /** 无 datastudio:semantic:edit 时不允许保存（前端先拦一次，避免把预期内的权限拒绝打成"服务器错误"） */
   const canEdit = HasAuthority(PermissionConstants.DATASTUDIO_SEMANTIC_EDIT);
+  /**
+   * P4 一期：「反馈此资产」——**看**语义项目的人都能提（沿用 view 权限），
+   * 不要求 edit：发现口径有误的往往正是只读使用方。
+   */
+  const canFeedback = HasAuthority(PermissionConstants.DATASTUDIO_SEMANTIC_VIEW);
+  const [feedbackOpen, setFeedbackOpen] = useState<boolean>(false);
+  /** 资产名 / 类型由文件路径推断（models/ → TABLE，metrics/ → METRIC） */
+  const feedbackAsset = semanticAssetOf(path);
 
   useEffect(() => {
     setCode(statement ?? '');
@@ -137,22 +146,40 @@ const SemanticFile = (props: {
           {dirty && <Tag color='processing'>{l('datastudio.semantic.unsaved')}</Tag>}
           {!dirty && !readOnly && <Tag color='success'>{l('datastudio.semantic.synced')}</Tag>}
         </Space>
-        <Tooltip
-          title={
-            !canEdit
-              ? l('datastudio.semantic.noEditPermission')
-              : readOnly
-                ? l('datastudio.semantic.readOnly')
-                : l('datastudio.semantic.save')
-          }>
-          <Text
-            type={canEdit && !readOnly ? 'success' : 'secondary'}
-            strong
-            style={{ cursor: canEdit && !readOnly ? 'pointer' : 'not-allowed' }}
-            onClick={onSave}>
-            <SaveOutlined /> {saving ? l('datastudio.semantic.saving') : l('datastudio.semantic.save')}
-          </Text>
-        </Tooltip>
+        <Space size={10}>
+          {/* P4：口径有误的出口——就在正在看的文件上提，不用另找入口 */}
+          {canFeedback && (
+            <Tooltip title={l('datastudio.semantic.feedback.entryTip')}>
+              <Text
+                type={'secondary'}
+                strong
+                style={{ cursor: 'pointer' }}
+                onClick={() => setFeedbackOpen(true)}
+              >
+                <CommentOutlined /> {l('datastudio.semantic.feedback.entry')}
+              </Text>
+            </Tooltip>
+          )}
+          <Tooltip
+            title={
+              !canEdit
+                ? l('datastudio.semantic.noEditPermission')
+                : readOnly
+                  ? l('datastudio.semantic.readOnly')
+                  : l('datastudio.semantic.save')
+            }
+          >
+            <Text
+              type={canEdit && !readOnly ? 'success' : 'secondary'}
+              strong
+              style={{ cursor: canEdit && !readOnly ? 'pointer' : 'not-allowed' }}
+              onClick={onSave}
+            >
+              <SaveOutlined />{' '}
+              {saving ? l('datastudio.semantic.saving') : l('datastudio.semantic.save')}
+            </Text>
+          </Tooltip>
+        </Space>
       </Space>
       <div style={{ flex: 1, minHeight: 0 }}>
         <CodeEdit
@@ -164,6 +191,15 @@ const SemanticFile = (props: {
           options={{ wordWrap: 'on', minimap: { enabled: false } }}
         />
       </div>
+
+      {/* P4 一期：针对当前文件（资产）提交反馈；版本与 YAML 指纹由后端记录 */}
+      <SemanticFeedbackModal
+        open={feedbackOpen}
+        onClose={() => setFeedbackOpen(false)}
+        project={project}
+        assetName={feedbackAsset.assetName}
+        assetType={feedbackAsset.assetType}
+      />
     </div>
   );
 };

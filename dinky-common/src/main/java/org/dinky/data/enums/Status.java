@@ -551,6 +551,12 @@ public enum Status {
 
     /** P3b：索引未就绪（index_state != ready）→ 降级直读 YAML，通常只作提示不抛错 */
     SEMANTIC_INDEX_PENDING_INFO(443, "semantic.index.pending.info"),
+
+    /** P4：语义资产反馈（提交 / 处理过程中的可读错误） */
+    SEMANTIC_FEEDBACK_ASSET_REQUIRED(444, "semantic.feedback.asset.required"),
+    SEMANTIC_FEEDBACK_RATING_ILLEGAL(445, "semantic.feedback.rating.illegal"),
+    SEMANTIC_FEEDBACK_STATUS_ILLEGAL(446, "semantic.feedback.status.illegal"),
+    SEMANTIC_FEEDBACK_NOT_FOUND(447, "semantic.feedback.not.found"),
     SYS_METRICS_SETTINGS_SYS_ENABLE(148, "sys.metrics.settings.sys.enable"),
     SYS_METRICS_SETTINGS_SYS_ENABLE_NOTE(149, "sys.metrics.settings.sys.enable.note"),
     SYS_METRICS_SETTINGS_SYS_GATHERTIMING(150, "sys.metrics.settings.sys.gatherTiming"),

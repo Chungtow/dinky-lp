@@ -158,6 +158,18 @@ public class AiChatRequest {
     private String semanticProject;
 
     /**
+     * 上下文指纹（P4 一期）：由前端按「当前绑定来源」计算，形如 {@code ctx_1a2b3c4d5e6f7a8b}。
+     *
+     * <p>用途：自动绑定后，切换 tab / 换语义项目都会让上下文变化，但 {@code sessionId} 不变。
+     * 后端据此判断「本轮是否需要按首轮重新注入 schema / 语义清单」——
+     * 指纹与上一次不同 → 视作首轮重注入（见 {@code AiChatServiceImpl}）。
+     *
+     * <p>为空 = 旧客户端，行为完全不变（只按 sessionId 是否为空判断首轮）。
+     */
+    @ApiModelProperty(value = "上下文指纹（可空，空则退化为只看 sessionId）", example = "ctx_1a2b3c4d5e6f7a8b")
+    private String contextFingerprint;
+
+    /**
      * 服务端填充的当前用户 id（限流 / 配额 / 审计用）。
      *
      * <p><b>不接受前端传入</b>：Controller 会用 Sa-Token 的登录 id 覆盖，防止伪造绕过限流。

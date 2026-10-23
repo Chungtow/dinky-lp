@@ -344,5 +344,11 @@ export enum API_CONSTANTS {
   SEMANTIC_DELETE = '/api/semantic/delete',
   // P3b：AI Chat 的 @semantic/ 候选（只读，读 _published 不可变快照）
   SEMANTIC_PUBLISHED_PROJECTS = '/api/semantic/published/projects',
-  SEMANTIC_PUBLISHED_ASSETS = '/api/semantic/published/assets'
+  SEMANTIC_PUBLISHED_ASSETS = '/api/semantic/published/assets',
+  // P4 一期：语义资产反馈（口径错了有地方说、有人处理）
+  SEMANTIC_FEEDBACK = '/api/semantic/feedback',
+  SEMANTIC_FEEDBACK_LIST = '/api/semantic/feedback/list',
+  /** 处理反馈：真实地址是 `{SEMANTIC_FEEDBACK_RESOLVE}/{id}/resolve`（id 在路径里，故此处只存前缀） */
+  SEMANTIC_FEEDBACK_RESOLVE = '/api/semantic/feedback',
+  SEMANTIC_FEEDBACK_SUMMARY = '/api/semantic/feedback/summary'
 }

@@ -70,3 +70,61 @@ export type SemanticDeleteParams = {
   recursive?: boolean;
   baseMtime?: number;
 };
+
+// ---------------------------------------------------------------------------
+// P4 一期：语义资产反馈
+// ---------------------------------------------------------------------------
+
+/** 反馈状态机：OPEN → RESOLVED / IGNORED */
+export type SemanticFeedbackStatus = 'OPEN' | 'RESOLVED' | 'IGNORED';
+
+/** 反馈问题类型（后端不校验枚举，这里列约定值） */
+export type SemanticFeedbackType = 'WRONG_DEFINITION' | 'WRONG_DIMENSION' | 'OUTDATED' | 'OTHER';
+
+/** 语义资产类型（决定发布索引里取表切片还是指标切片） */
+export type SemanticAssetType = 'TABLE' | 'METRIC';
+
+/** 一条反馈（列表 / 待办用） */
+export type SemanticFeedback = {
+  id: number;
+  projectName: string;
+  assetName: string;
+  assetType?: SemanticAssetType;
+  /** 提交时的发布版本（后端解析，未发布则为空） */
+  version?: string;
+  /** 提交时该资产 YAML 的 sha256（后端解析，索引未就绪时为空） */
+  yamlSha256?: string;
+  rating: number;
+  feedbackType?: SemanticFeedbackType;
+  content?: string;
+  sessionId?: string;
+  userId?: number;
+  status: SemanticFeedbackStatus;
+  resolverId?: number;
+  resolveNote?: string;
+  resolveTime?: string;
+  createTime?: string;
+};
+
+/** 提交反馈请求（版本 / 指纹刻意不传，由后端解析） */
+export type SemanticFeedbackSubmitParams = {
+  projectName: string;
+  assetName: string;
+  assetType?: SemanticAssetType;
+  rating: number;
+  feedbackType?: SemanticFeedbackType;
+  content?: string;
+  sessionId?: string;
+};
+
+/** 反馈计数（待办角标 + 运营视图） */
+export type SemanticFeedbackSummary = {
+  total: number;
+  open: number;
+  resolved: number;
+  ignored: number;
+  recent7d?: number;
+  positive?: number;
+  negative?: number;
+  byFeedbackType?: Record<string, number>;
+};
