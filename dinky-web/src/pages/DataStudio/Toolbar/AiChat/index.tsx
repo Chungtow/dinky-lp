@@ -27,6 +27,7 @@ import {
 } from '@/pages/DataStudio/Toolbar/DataSource/service';
 import { decideMentionBackspace } from './mentionBackspace';
 import type { MentionBackspaceArm } from './mentionBackspace';
+import { finalizePathMention, replaceMentionToken } from './mentionPath';
 import { Authorized } from '@/hooks/useAccess';
 import { PermissionConstants } from '@/types/Public/constants';
 import ToolProcess from './components/ToolProcess';
@@ -378,7 +379,40 @@ const AiChat = (props: AiChatProps) => {
   });
   /** 输入法组合态：中文输入过程中不触发 @ 浮层，避免误弹 */
   const composingRef = useRef<boolean>(false);
+  /**
+   * 输入框引用。
+   *
+   * <p>UAT 2026-10-23：{@code @} 候选的解析与替换必须基于**光标位置**——
+   * 选中中间层级后文本尾部带空格，若仍按「全文末尾」解析，光标回退补 {@code /} 时永远不弹候选。
+   */
+  const inputRef = useRef<any>(null);
+  /** 消息列表容器（自动滚动到底部用） */
+  const messageListRef = useRef<HTMLDivElement>(null);
+  /**
+   * 是否「贴在底部」。用户手动上翻看历史时置 false，滚回底部附近恢复 true——
+   * 流式回答每来一个 chunk 都会滚动，不能把正在看历史的用户强行拽回底部。
+   */
+  const stickToBottomRef = useRef<boolean>(true);
   const { editorRegistry } = useContext(DataStudioContext);
+
+  /** 消息列表滚动：距底 < 40px 视为「仍在底部」，恢复自动跟随 */
+  const handleMessageListScroll = (e: any) => {
+    const el = e.currentTarget as HTMLDivElement;
+    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  };
+
+  /**
+   * 自动跟随最新输出行。
+   *
+   * <p>流式场景每个 chunk 都会 {@code setMessages}，因此依赖 messages 即可持续跟随；
+   * 刻意不用 {@code scroll-behavior: smooth}——高频滚动下 smooth 会互相打断、反而滞后。
+   */
+  useEffect(() => {
+    const el = messageListRef.current;
+    if (el && stickToBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [messages]);
 
   /**
    * 当前 tab 的编辑器注册键：作业 tab 用 taskId；语义文件 tab 用 semantic:<project>:<path>。
@@ -697,6 +731,9 @@ const AiChat = (props: AiChatProps) => {
           .map((item: any) => ({
             type: 'source' as const,
             name: item.name,
+            // UAT 2026-10-23：数据源是**中间层级**——选中即补成 `ds/` 并自动列出库候选，
+            // 用户不用回退光标补斜杠（此前只能停在数据源，想下钻必须整串重打）
+            chainable: true,
             group: l('datastudio.aiChat.mention.groupSource')
           }))
           .slice(0, 20);
@@ -712,6 +749,8 @@ const AiChat = (props: AiChatProps) => {
           .map((schema: any) => ({
             type: 'source' as const,
             name: `${dsName}/${schema.name}`,
+            // 库同样是中间层级：选中 → `ds/db/` → 自动列出表候选
+            chainable: true,
             group: l('datastudio.aiChat.mention.groupSourceDb')
           }))
           .slice(0, 30);
@@ -826,6 +865,8 @@ const AiChat = (props: AiChatProps) => {
         .map((item: any) => ({
           type: 'semantic' as const,
           name: item.name,
+          // 项目是中间层级：选中即 `project/` → 自动列该项目下的资产
+          chainable: true,
           group: projectGroup(item)
         }))
         .slice(0, 30);
@@ -924,6 +965,31 @@ const AiChat = (props: AiChatProps) => {
       .slice(0, 20);
   }, [mentionCandidates, mentionQuery, recentMentions]);
 
+  /** 取输入框当前光标位（拿不到按末尾处理，等价于改造前行为） */
+  const caretOf = (): number => {
+    const el = inputRef.current?.resizableTextArea?.textArea as HTMLTextAreaElement | undefined;
+    return typeof el?.selectionStart === 'number' ? el.selectionStart : inputValue.length;
+  };
+
+  /**
+   * 把「光标所在的 @token」替换为 replacement，并把光标移到替换文本之后。
+   *
+   * <p>定位与替换规则抽在 `mentionPath.ts`（纯函数）：改造前用的是
+   * {@code inputValue.replace(/@[^\s@]*$/, ...)}，只认**全文末尾**，所以「选中数据源后光标回退、
+   * 在已有引用上继续补层级」永远替换不到（尾部还留着插入时的空格）。
+   */
+  const applyMentionText = (replacement: string) => {
+    const next = replaceMentionToken(inputValue, caretOf(), replacement);
+    setInputValue(next.value);
+    requestAnimationFrame(() => {
+      const el = inputRef.current?.resizableTextArea?.textArea as HTMLTextAreaElement | undefined;
+      if (el) {
+        el.focus();
+        el.selectionStart = el.selectionEnd = next.caret;
+      }
+    });
+  };
+
   /**
    * P1：mention → 输入框 token。
    *
@@ -984,7 +1050,12 @@ const AiChat = (props: AiChatProps) => {
     if (composingRef.current) {
       return;
     }
-    const match = /@([^\s@]*)$/.exec(value);
+    // UAT 2026-10-23：按**光标前**文本解析，而不是全文末尾——否则「选中数据源后把光标移回名字
+    // 末尾补一个 /」不会弹下一级候选（尾部还留着上一次插入的空格，整串不在末尾）
+    const caret =
+      typeof e.target.selectionStart === 'number' ? e.target.selectionStart : value.length;
+    const beforeCaret = value.slice(0, caret);
+    const match = /@([^\s@]*)$/.exec(beforeCaret);
     if (match) {
       setMentionOpen(true);
       setMentionQuery(match[1] ?? '');
@@ -995,12 +1066,25 @@ const AiChat = (props: AiChatProps) => {
     }
   };
 
-  /** 选中候选：把 {@code @query} 替换为 {@code @name}，并记录为已引用 */
-  const pickMention = (item: AiChatMentionItem) => {
+  /**
+   * 选中候选项。
+   *
+   * <p>三种落法（UAT 2026-10-23 分级改造）：
+   * <ol>
+   *   <li>{@code prefix}：一级前缀入口，只补前缀、保持浮层；</li>
+   *   <li><b>中间层级</b>（{@code chainable}：数据源 / 库 / 语义项目）：补成 {@code 路径/} 并保持浮层，
+   *       下一级候选由 {@code mentionQuery} 解析自动给出——「选中即自动进下一级」，
+   *       不需要把光标移回名字末尾补斜杠；</li>
+   *   <li>终端候选（表 / 资产 / skill / topic / env / 作业 / 片段）：{@code @token} + 空格 + chip + 关浮层。</li>
+   * </ol>
+   *
+   * @param forceFinal 强制按终端落地——用户按空格表示「就在当前这一层收尾」时使用
+   */
+  const pickMention = (item: AiChatMentionItem, forceFinal = false) => {
     // UAT 2026-10-22：选中"一级前缀入口"（`@` → `@source/` 等）时不生成 chip，
     // 而是把前缀补进输入框并**保持浮层打开**，让用户接着选下一级（与手打前缀完全等价）
     if (item.type === 'prefix') {
-      setInputValue(inputValue.replace(/@[^\s@]*$/, `@${item.name}`));
+      applyMentionText(`@${item.name}`);
       setMentionQuery(item.name);
       setMentionIndex(0);
       setMentionOpen(true);
@@ -1012,7 +1096,18 @@ const AiChat = (props: AiChatProps) => {
     const viaTablePrefix = /^table[-/]/.test(mentionQuery.trim().toLowerCase());
     const token =
       item.type === 'table' && viaTablePrefix ? `@table/${item.name}` : mentionToken(item);
-    setInputValue(inputValue.replace(/@[^\s@]*$/, `${token} `));
+
+    // 中间层级：补斜杠、保持浮层（不建 chip、不记最近使用——这一层还不是一次「引用」）
+    if (item.chainable && !forceFinal) {
+      applyMentionText(`${token}/`);
+      // 程序改 value 不会触发 onChange，这里手动同步 query（与上面 prefix 分支同理）
+      setMentionQuery(`${token.replace(/^@/, '')}/`);
+      setMentionIndex(0);
+      setMentionOpen(true);
+      return;
+    }
+
+    applyMentionText(`${token} `);
     setMentions((prev) =>
       prev.some(
         (m) => m.type === item.type && m.name === item.name && m.columnName === item.columnName
@@ -1067,6 +1162,25 @@ const AiChat = (props: AiChatProps) => {
       // 任何其它**非修饰键**都会打断「两下删除」的序列（避免隔了几步再按退格仍误删整个 @串）；
       // 单独按 Shift/Ctrl/Alt/Meta 不算（否则按住 Shift 再退格会莫名失效）
       atomicDeleteArmRef.current = null;
+    }
+    // UAT 2026-10-23：空格 = 「就在当前这一层收尾」（中间层级改造的配套出口）。
+    //   ① 已输入到 `路径/`（刚选完上级、还没选下级）→ 按当前路径收尾（去掉尾斜杠）；
+    //   ② 高亮项本身是中间层级（打了关键字想停在这一层）→ 直接用该项收尾；
+    // 其余情形空格照常输入。注意：这段必须在下面的「候选为空就 return」之前，
+    // 否则「下一级还没加载出候选」时用户就无法在上一层收尾。
+    if (e.key === ' ' && mentionOpen && !e.shiftKey && !composingRef.current) {
+      const finalized = finalizePathMention(mentionQuery);
+      if (finalized) {
+        e.preventDefault();
+        pickMention(finalized as AiChatMentionItem, true);
+        return;
+      }
+      const highlighted = filteredMentions[mentionIndex];
+      if (highlighted?.chainable) {
+        e.preventDefault();
+        pickMention(highlighted, true);
+        return;
+      }
     }
     if (!mentionOpen || filteredMentions.length === 0) {
       return;
@@ -1183,6 +1297,8 @@ const AiChat = (props: AiChatProps) => {
       sessionIdRef.current = `${Date.now()}`;
     }
 
+    // 主动发问时必定要看到回答：强制恢复「贴底跟随」，即使用户刚才在翻历史
+    stickToBottomRef.current = true;
     setMessages((prev) => [
       ...prev,
       { role: 'user', content: userContent },
@@ -1731,6 +1847,9 @@ const AiChat = (props: AiChatProps) => {
       </Space>
 
       <div
+        // 消息区：流式回答时自动跟随最新输出行（用户手动上翻时暂停跟随，见 handleMessageListScroll）
+        ref={messageListRef}
+        onScroll={handleMessageListScroll}
         style={{
           flex: 1,
           overflowY: 'auto',
@@ -1906,7 +2025,13 @@ const AiChat = (props: AiChatProps) => {
                   }}
                 >
                   <span style={{ fontSize: 12 }}>
-                    {item.type === 'column' ? `${item.name}.${item.columnName}` : item.name}
+                    {item.type === 'column'
+                      ? `${item.name}.${item.columnName}`
+                      : // 中间层级在列表里就带 `/`：让「选中后会进下一级」这件事可见，
+                        // 与一级前缀入口（source/、semantic/）的视觉语言保持一致
+                        item.chainable
+                        ? `${item.name}/`
+                        : item.name}
                   </span>
                   <span style={{ fontSize: 11, color: 'rgba(0,0,0,0.45)', flexShrink: 0 }}>
                     {recentMentions.includes(item.name)
@@ -1919,6 +2044,8 @@ const AiChat = (props: AiChatProps) => {
           </div>
         )}
         <Input.TextArea
+          // @ 候选的解析/替换依赖光标位置（支持「光标回退补 /」与中间层级续接）
+          ref={inputRef}
           value={inputValue}
           onChange={handleInputChange}
           onCompositionStart={() => {

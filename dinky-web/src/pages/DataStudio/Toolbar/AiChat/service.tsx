@@ -217,6 +217,14 @@ export type AiChatMentionItem = {
   columnName?: string;
   /** 片段正文（selection / job 携带），仅编辑器文本，不含业务数据行 */
   content?: string;
+  /**
+   * 仅候选面板使用：该候选是「可继续下钻的中间层级」（数据源 / 库 / 语义项目）。
+   *
+   * <p>为 {@code true} 时，选中不会生成 chip，而是把路径补成 {@code xx/} 并保持浮层打开，
+   * 由解析器自动给出下一级候选（UAT 2026-10-23：source → 库 → 表、semantic → 资产）。
+   * 该字段只在本地判定用，**不进请求体**（后端 {@code AiChatMention} 无此字段）。
+   */
+  chainable?: boolean;
 };
 
 /** 对话请求体：只携带元数据定位信息，绝不携带业务数据 */
@@ -239,6 +247,8 @@ export type AiChatRequestBody = {
   taskId?: number;
   /** 编辑区选中片段：非空时后端优先采用它，而非 sql 全文（阶段 1a：1.0.4） */
   selectedSql?: string;
+  /** 当前作业最近一次执行报错原文（FIX_SQL 用；后端 {@code AiChatRequest.executionError} 同名字段） */
+  executionError?: string;
   /** 上下文范围档位（阶段 1a：1.1） */
   contextScope?: 'current' | 'all' | 'custom';
   /** custom 档位下勾选的表名 */
