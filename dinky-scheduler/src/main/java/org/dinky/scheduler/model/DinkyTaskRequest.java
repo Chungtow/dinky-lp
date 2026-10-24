@@ -45,4 +45,13 @@ public class DinkyTaskRequest extends TaskRequest {
     @ApiModelProperty(value = "dinky任务id", required = true)
     @NotNull
     private String taskId;
+
+    /**
+     * DS 工作流描述（租户 / 目录 / 作业清单），由 dinky-admin 构造。
+     *
+     * <p>不参与 {@code BeanUtil.copyProperties(dinkyTaskRequest, taskRequest)} 的任务参数复制
+     * （DS 的 TaskRequest 无此字段），仅用于回写 process definition。
+     */
+    @ApiModelProperty(value = "工作流描述（租户/目录/作业清单）")
+    private String processDescription;
 }
