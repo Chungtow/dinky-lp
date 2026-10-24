@@ -31,6 +31,16 @@ public class TenantContextHolder {
         IGNORE_TENANT.set(true);
     }
 
+    /**
+     * 清除「忽略租户过滤」标记。
+     *
+     * <p>{@code IGNORE_TENANT} 是 {@link InheritableThreadLocal}，若不显式清除会污染同线程后续查询
+     * （例如目录遍历后紧接着的 task / catalogue 查询会意外绕过租户隔离）。
+     */
+    public static void clearIgnoreTenant() {
+        IGNORE_TENANT.remove();
+    }
+
     public static boolean isIgnoreTenant() {
         return Optional.ofNullable(IGNORE_TENANT.get()).orElse(false);
     }

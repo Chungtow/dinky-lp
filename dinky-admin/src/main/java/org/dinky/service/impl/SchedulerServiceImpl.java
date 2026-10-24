@@ -20,12 +20,14 @@
 package org.dinky.service.impl;
 
 import org.dinky.config.Dialect;
+import org.dinky.context.TenantContextHolder;
 import org.dinky.data.enums.Status;
 import org.dinky.data.exception.BusException;
 import org.dinky.data.model.Catalogue;
 import org.dinky.data.model.SystemConfiguration;
 import org.dinky.data.model.Task;
 import org.dinky.data.model.ext.TaskExtConfig;
+import org.dinky.data.model.rbac.Tenant;
 import org.dinky.init.SystemInit;
 import org.dinky.mapper.TaskMapper;
 import org.dinky.scheduler.client.ProcessClient;
@@ -47,6 +49,7 @@ import org.dinky.scheduler.model.TaskGroup;
 import org.dinky.scheduler.model.TaskMainInfo;
 import org.dinky.scheduler.model.TaskRequest;
 import org.dinky.service.SchedulerService;
+import org.dinky.service.TenantService;
 import org.dinky.service.catalogue.CatalogueService;
 import org.dinky.utils.JsonUtils;
 
@@ -70,6 +73,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.RandomUtil;
+import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import lombok.RequiredArgsConstructor;
@@ -87,6 +91,8 @@ public class SchedulerServiceImpl implements SchedulerService {
     private final TaskClient taskClient;
     private final CatalogueService catalogueService;
     private final TaskMapper taskMapper;
+    /** 用于把 Dinky 租户编码作为 DS 工作流的命名前缀，实现多租户发布隔离 */
+    private final TenantService tenantService;
 
     /**
      * Pushes the specified DinkyTaskRequest to the task queue.
@@ -138,6 +144,7 @@ public class SchedulerServiceImpl implements SchedulerService {
             Catalogue catalogue, DinkyTaskRequest dinkyTaskRequest, String taskType, String taskParamsJson) {
         dinkyTaskRequest.setTaskParams(taskParamsJson);
         dinkyTaskRequest.setTaskType(taskType);
+        dinkyTaskRequest.setProcessDescription(buildProcessDescription(catalogue));
 
         String processName = getDinkyNames(catalogue, 0);
         long projectCode = SystemInit.getProject().getCode();
@@ -179,6 +186,7 @@ public class SchedulerServiceImpl implements SchedulerService {
                     projectCode,
                     null,
                     processName,
+                    dinkyTaskRequest.getProcessDescription(),
                     taskCode,
                     taskRelationArray.toString(),
                     taskArray.toString(),
@@ -212,7 +220,13 @@ public class SchedulerServiceImpl implements SchedulerService {
         taskClient.createTaskDefinition(
                 projectCode, process.getCode(), dinkyTaskRequest.getUpstreamCodes(), taskDefinitionJsonObj);
         // update the location of process
-        updateProcessDefinition(process, taskCode, taskRequest, dinkyTaskRequest.getUpstreamCodes(), projectCode);
+        updateProcessDefinition(
+                process,
+                taskCode,
+                taskRequest,
+                dinkyTaskRequest.getUpstreamCodes(),
+                projectCode,
+                dinkyTaskRequest.getProcessDescription());
 
         log.info(Status.DS_ADD_TASK_DEFINITION_SUCCESS.getMessage());
         return true;
@@ -456,7 +470,12 @@ public class SchedulerServiceImpl implements SchedulerService {
     }
 
     private void updateProcessDefinition(
-            ProcessDefinition process, Long taskCode, TaskRequest task, List<String> upstreamCodes, long projectCode) {
+            ProcessDefinition process,
+            Long taskCode,
+            TaskRequest task,
+            List<String> upstreamCodes,
+            long projectCode,
+            String description) {
 
         DagData dagData = processClient.getProcessDefinitionInfo(projectCode, process.getCode());
         if (dagData == null) {
@@ -532,6 +551,7 @@ public class SchedulerServiceImpl implements SchedulerService {
                 projectCode,
                 process.getCode(),
                 process.getName(),
+                description,
                 taskCode,
                 processTaskRelationListJson,
                 taskArray.toString(),
@@ -605,7 +625,13 @@ public class SchedulerServiceImpl implements SchedulerService {
         Long updatedTaskDefinition = taskClient.updateTaskDefinition(
                 projectCode, taskCode, dinkyTaskRequest.getUpstreamCodes(), taskDefinitionJsonObj);
 
-        updateProcessDefinition(process, taskCode, taskRequest, dinkyTaskRequest.getUpstreamCodes(), projectCode);
+        updateProcessDefinition(
+                process,
+                taskCode,
+                taskRequest,
+                dinkyTaskRequest.getUpstreamCodes(),
+                projectCode,
+                resolveProcessDescription(dinkyTaskRequest));
         if (updatedTaskDefinition != null && updatedTaskDefinition > 0) {
             log.info(Status.MODIFY_SUCCESS.getMessage());
             return true;
@@ -667,7 +693,13 @@ public class SchedulerServiceImpl implements SchedulerService {
         String taskDefinitionJsonObj = JsonUtils.toJsonString(taskRequest);
         Long updatedTaskDefinition = taskClient.updateTaskDefinition(
                 projectCode, taskCode, dinkyTaskRequest.getUpstreamCodes(), taskDefinitionJsonObj);
-        updateProcessDefinition(process, taskCode, taskRequest, dinkyTaskRequest.getUpstreamCodes(), projectCode);
+        updateProcessDefinition(
+                process,
+                taskCode,
+                taskRequest,
+                dinkyTaskRequest.getUpstreamCodes(),
+                projectCode,
+                buildProcessDescription(catalogue));
         if (updatedTaskDefinition != null && updatedTaskDefinition > 0) {
             log.info(Status.MODIFY_SUCCESS.getMessage());
             return true;
@@ -765,21 +797,149 @@ public class SchedulerServiceImpl implements SchedulerService {
      * @param  i            the index to start retrieving the names from
      * @return              the dinky names retrieved from the catalogue
      */
+    /** DS 工作流名最大长度（DS 字段 varchar(255)，留余量） */
+    private static final int PROCESS_NAME_MAX_LENGTH = 200;
+
+    /** 目录遍历层数上限，仅用于防止脏数据 parent 成环导致死循环，不参与业务截断 */
+    private static final int CATALOGUE_MAX_DEPTH = 20;
+
     private String getDinkyNames(Catalogue catalogue, int i) {
+        // 前置租户编码：不同 Dinky 租户的同名目录/同名作业在 DS 上落到不同工作流，避免合流与静默覆盖。
+        // 前缀取 catalogue 自身 tenantId 反查，不依赖 TenantContextHolder（回调线程可能无租户上下文）。
+        String prefix = resolveTenantPrefix(catalogue.getTenantId());
+        // 前缀与分隔符占用的预算，剩余部分才是目录路径可用的字符数
+        int budget = PROCESS_NAME_MAX_LENGTH - prefix.length() - 1;
         // 收集从任务向上的父目录名（近→远），反转得到远→近的工作流名
         List<String> names = new ArrayList<>();
         Catalogue current = catalogue;
         int depth = 0;
-        while (depth < 3 && current != null && !current.getParentId().equals(0)) {
-            current = catalogueService.getById(current.getParentId());
-            if (current == null) {
-                break;
+        // dinky_catalogue 参与 MyBatis 租户过滤；推送可能发生在无租户上下文的线程（DS 回调、后台任务），
+        // 此时父目录查询返回 null 并提前 break，路径会被截断成空串。这里临时忽略租户过滤，结束后恢复原状态。
+        boolean origin = TenantContextHolder.isIgnoreTenant();
+        try {
+            TenantContextHolder.ignoreTenant();
+            while (depth < CATALOGUE_MAX_DEPTH
+                    && current != null
+                    && !current.getParentId().equals(0)) {
+                current = catalogueService.getById(current.getParentId());
+                if (current == null) {
+                    break;
+                }
+                names.add(current.getName());
+                depth++;
             }
-            names.add(current.getName());
-            depth++;
+        } finally {
+            if (!origin) {
+                TenantContextHolder.clearIgnoreTenant();
+            }
         }
         Collections.reverse(names);
-        return String.join("/", names);
+        // 按长度预算拼接：保留顶级目录，超长时从末端（最接近任务的层级）丢弃并告警
+        StringBuilder path = new StringBuilder();
+        for (String name : names) {
+            if (StrUtil.isBlank(name)) {
+                continue;
+            }
+            int extra = (path.length() == 0 ? 0 : 1) + name.length();
+            if (path.length() + extra > budget) {
+                log.warn(
+                        "DS 工作流名将超过 {} 字符，丢弃目录层级 [{}]（catalogueId={}）",
+                        PROCESS_NAME_MAX_LENGTH,
+                        name,
+                        catalogue.getId());
+                break;
+            }
+            if (path.length() > 0) {
+                path.append('/');
+            }
+            path.append(name);
+        }
+        String catalogPath = path.toString();
+        return StrUtil.isBlank(catalogPath) ? prefix : prefix + "/" + catalogPath;
+    }
+
+    /**
+     * 构造 DS 工作流描述：租户、目录路径与目录下作业清单。
+     *
+     * <p>DS 侧工作流名只体现目录，作业名在工作流内部，控制台列表上无法看出归属；
+     * 把三者写入 description（DS 字段类型为 text）后可直接辨识，且不影响任何按名称查找的逻辑。
+     */
+    private String buildProcessDescription(Catalogue catalogue) {
+        String prefix = resolveTenantPrefix(catalogue.getTenantId());
+        String fullName = getDinkyNames(catalogue, 0);
+        String dirPath = fullName.startsWith(prefix + "/") ? fullName.substring(prefix.length() + 1) : fullName;
+        List<String> taskNames = listTaskNamesOfSibling(catalogue);
+        return StrUtil.format(
+                "Dinky | 租户={} | 目录={} | 作业={}",
+                prefix,
+                dirPath,
+                taskNames.isEmpty() ? catalogue.getName() : String.join(", ", taskNames));
+    }
+
+    /**
+     * 取 DS 工作流描述：优先用调用链已构造的值；缺失时（如前端直接触发"更新任务"）按 Dinky 任务 id
+     * 反查其目录节点后即时生成，保证 description 始终反映当前目录下的作业清单。
+     */
+    private String resolveProcessDescription(DinkyTaskRequest dinkyTaskRequest) {
+        if (StrUtil.isNotBlank(dinkyTaskRequest.getProcessDescription())) {
+            return dinkyTaskRequest.getProcessDescription();
+        }
+        String taskId = dinkyTaskRequest.getTaskId();
+        if (StrUtil.isBlank(taskId)) {
+            return null;
+        }
+        Integer dinkyTaskId;
+        try {
+            dinkyTaskId = Integer.valueOf(taskId);
+        } catch (NumberFormatException e) {
+            log.warn("无法解析 Dinky 任务 id，跳过工作流描述构造: {}", taskId);
+            return null;
+        }
+        Catalogue catalogue = catalogueService.getOne(
+                new LambdaQueryWrapper<Catalogue>().eq(Catalogue::getTaskId, dinkyTaskId), false);
+        return catalogue == null ? null : buildProcessDescription(catalogue);
+    }
+
+    /** 查询与当前任务同目录（同一个 DS 工作流）下的全部作业名，按 id 升序 */
+    private List<String> listTaskNamesOfSibling(Catalogue catalogue) {
+        Integer dirId = catalogue.getParentId();
+        if (dirId == null || dirId == 0) {
+            return Collections.singletonList(catalogue.getName());
+        }
+        boolean origin = TenantContextHolder.isIgnoreTenant();
+        try {
+            TenantContextHolder.ignoreTenant();
+            return catalogueService
+                    .list(new LambdaQueryWrapper<Catalogue>()
+                            .eq(Catalogue::getParentId, dirId)
+                            .eq(Catalogue::getIsLeaf, true)
+                            .orderByAsc(Catalogue::getId))
+                    .stream()
+                    .map(Catalogue::getName)
+                    .filter(StrUtil::isNotBlank)
+                    .collect(Collectors.toList());
+        } finally {
+            if (!origin) {
+                TenantContextHolder.clearIgnoreTenant();
+            }
+        }
+    }
+
+    /**
+     * 解析 DS 工作流的租户前缀。
+     *
+     * <p>优先取 {@code dinky_tenant.tenant_code}；租户记录缺失或编码为空时兜底 {@code tenant_<id>}，
+     * 保证历史作业在租户数据不完整时仍可发布，而不是抛异常中断调度链路。
+     */
+    private String resolveTenantPrefix(Integer tenantId) {
+        if (tenantId == null) {
+            return "tenant_unknown";
+        }
+        Tenant tenant = tenantService.getById(tenantId);
+        if (tenant != null && StrUtil.isNotBlank(tenant.getTenantCode())) {
+            return tenant.getTenantCode();
+        }
+        return "tenant_" + tenantId;
     }
 
     /**

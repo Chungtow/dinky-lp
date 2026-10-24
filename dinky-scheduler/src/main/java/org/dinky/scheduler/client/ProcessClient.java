@@ -145,6 +145,7 @@ public class ProcessClient {
      *
      * @param projectCode        The ID of the project to create the process definition for.
      * @param processName        The name of the process definition to create.
+     * @param description        The description written to DS, typically tenant / directory / task list.
      * @param taskCode           The ID of the task to associate with the process definition.
      * @param taskDefinitionJson A JSON string representing the task definition to associate with the process definition.
      * @return A {@link ProcessDefinition} object representing the newly created process definition.
@@ -153,6 +154,7 @@ public class ProcessClient {
             Long projectCode,
             Long processCode,
             String processName,
+            String description,
             Long taskCode,
             String taskRelationJson,
             String taskDefinitionJson,
@@ -165,7 +167,7 @@ public class ProcessClient {
 
         Map<String, Object> params = new HashMap<>();
         params.put("name", processName);
-        params.put("description", "系统添加");
+        params.put("description", description);
         params.put(
                 "tenantCode",
                 SystemConfiguration.getInstances()
