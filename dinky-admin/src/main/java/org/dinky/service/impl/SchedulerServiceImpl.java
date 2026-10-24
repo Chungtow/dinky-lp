@@ -86,6 +86,10 @@ public class SchedulerServiceImpl implements SchedulerService {
 
     public static final String TASK_TYPE = "DINKY";
     public static final String SHELL_TASK_TYPE = "SHELL";
+
+    /** DS 服务端 checkDescriptionLength 上限 255，这里留 15 字符余量 */
+    private static final int PROCESS_DESCRIPTION_MAX_LENGTH = 240;
+
     private final ProcessClient processClient;
     private final ResourceClient resourceClient;
     private final TaskClient taskClient;
@@ -868,12 +872,29 @@ public class SchedulerServiceImpl implements SchedulerService {
         String prefix = resolveTenantPrefix(catalogue.getTenantId());
         String fullName = getDinkyNames(catalogue, 0);
         String dirPath = fullName.startsWith(prefix + "/") ? fullName.substring(prefix.length() + 1) : fullName;
+        String head = StrUtil.format("Dinky | 租户={} | 目录={} | 作业=", prefix, dirPath);
+        // 目录路径本身已顶到上限时直接放弃作业清单，避免尾部再出现第二个省略号
+        if (head.length() >= PROCESS_DESCRIPTION_MAX_LENGTH) {
+            return StrUtil.subPre(head, PROCESS_DESCRIPTION_MAX_LENGTH - 1) + "…";
+        }
         List<String> taskNames = listTaskNamesOfSibling(catalogue);
-        return StrUtil.format(
-                "Dinky | 租户={} | 目录={} | 作业={}",
-                prefix,
-                dirPath,
-                taskNames.isEmpty() ? catalogue.getName() : String.join(", ", taskNames));
+        if (taskNames.isEmpty()) {
+            taskNames = Collections.singletonList(catalogue.getName());
+        }
+        StringBuilder description = new StringBuilder(head);
+        for (String name : taskNames) {
+            if (StrUtil.isBlank(name)) {
+                continue;
+            }
+            String separator = description.length() > head.length() ? ", " : "";
+            // 预留省略号位置；description 只是辅助识别信息，绝不能因超长让 DS 校验失败阻断推送
+            if (description.length() + separator.length() + name.length() > PROCESS_DESCRIPTION_MAX_LENGTH - 1) {
+                description.append('…');
+                break;
+            }
+            description.append(separator).append(name);
+        }
+        return description.toString();
     }
 
     /**
