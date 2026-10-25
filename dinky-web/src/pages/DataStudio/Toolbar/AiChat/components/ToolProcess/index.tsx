@@ -38,6 +38,9 @@ const toolLabel = (name: string): string => {
       return l('datastudio.aiChat.tool.listTables');
     case 'describe_table':
       return l('datastudio.aiChat.tool.describeTable');
+    // 20261025：批量读取多张表结构（一次最多 12 张）
+    case 'describe_tables':
+      return l('datastudio.aiChat.tool.describeTables');
     case 'sample_rows':
       return l('datastudio.aiChat.tool.sampleRows');
     // 阶段 2c-1：执行类工具

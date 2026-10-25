@@ -125,6 +125,28 @@ export type AiChatConfirmFrame = {
   previousError?: string;
 };
 
+/**
+ * 本轮对话的结束信息（20261025：后端 {@code done} 帧）。
+ *
+ * <p><b>为什么需要它</b>：此前流只靠连接关闭表示结束，前端既无法区分「正常完成 / 失败 / 用户中断」，
+ * 也没有可展示的完结标志——用户看着光标停住、按钮变回发送，仍不确定"是不是答完了"。
+ * 业界通行做法是给流一个显式终止事件（OpenAI 的 {@code data: [DONE]}、Anthropic 的
+ * {@code message_stop}），这里用结构化 {@code done} 帧承载状态与用量。
+ */
+export type AiChatFinish = {
+  /** completed / failed / cancelled */
+  status: 'completed' | 'failed' | 'cancelled' | string;
+  /** 本轮总耗时（毫秒） */
+  durationMs?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  /** 本轮实际执行的工具调用数 */
+  toolCallCount?: number;
+  /** 失败或中断原因（仅在异常态下发） */
+  reason?: string;
+};
+
 /** 页面内的一条消息（reasoning 为模型的思考过程，仅部分模型提供） */
 export type AiChatMessage = {
   role: AiChatRole;
@@ -133,6 +155,8 @@ export type AiChatMessage = {
   verify?: AiChatVerify;
   /** 工具调用过程；只能按 toolCallId 追加或就地更新，不做重排 */
   tools?: AiChatToolStep[];
+  /** 本轮结束信息；仅最后一条 assistant 消息在收到 done 帧后写入，历史回放无此字段 */
+  finish?: AiChatFinish;
 };
 
 /**
@@ -485,6 +509,8 @@ export const aiChatStream = async (
     runId?: string;
     /** 阶段 2c-0：写语句执行前的二次确认请求 */
     confirmRequest?: AiChatConfirmFrame;
+    /** 20261025：本轮结束（status / 耗时 / 用量）——显式结束标志 */
+    done?: AiChatFinish;
   }) => void,
   onError?: (message: string) => void,
   signal?: AbortSignal
@@ -552,6 +578,10 @@ export const aiChatStream = async (
         }
         if (frame?.confirmRequest && typeof frame.confirmRequest === 'object') {
           onFrame({ confirmRequest: frame.confirmRequest as AiChatConfirmFrame });
+        }
+        // 20261025：显式结束帧——放在最后解析，保证同一批里的正文/校验帧先落地
+        if (frame?.done && typeof frame.done === 'object') {
+          onFrame({ done: frame.done as AiChatFinish });
         }
         // 其余帧（如 heartbeat）无需处理：此处刻意保持「未知帧静默丢弃」，
         // 避免把结构化数据误当成正文拼接出来。

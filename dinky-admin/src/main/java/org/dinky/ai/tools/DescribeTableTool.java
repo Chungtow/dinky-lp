@@ -90,43 +90,16 @@ public class DescribeTableTool implements AiTool {
                 || !SAFE_NAME.matcher(schemaName).matches()) {
             return AiToolResult.failure("表名或 schema 名不合法，已拒绝执行", System.currentTimeMillis() - start);
         }
-        StringBuilder sb = new StringBuilder();
         try (Driver driver = Driver.build(context.getDataBase().getDriverConfig())) {
-            List<Column> columns = driver.listColumns(schemaName, tableName);
-            if (CollUtil.isEmpty(columns)) {
+            String rendered = renderTable(driver, schemaName, tableName);
+            if (rendered == null) {
                 // 列为空基本等价于表不存在或无权限（多数 JDBC 驱动查不存在的表会直接抛异常，
                 // 走到这里说明驱动返回了空）——统一给脱敏提示，不区分具体原因
                 return AiToolResult.failure(
                         "未获取到表 " + schemaName + "." + tableName + " 的字段：表名可能不存在，或当前账号无权访问。" + "可用 list_tables 确认准确表名。",
                         System.currentTimeMillis() - start);
             }
-            sb.append("Table: ")
-                    .append(schemaName)
-                    .append(".")
-                    .append(tableName)
-                    .append("\n");
-            sb.append("  Columns:\n");
-            int limit = Math.min(columns.size(), MAX_COLUMNS);
-            for (int i = 0; i < limit; i++) {
-                Column column = columns.get(i);
-                sb.append("    - ").append(column.getName()).append(" ").append(StrUtil.nullToEmpty(column.getType()));
-                if (column.isKeyFlag()) {
-                    sb.append(" [PK]");
-                }
-                if (StrUtil.isNotBlank(column.getComment())) {
-                    sb.append(" -- ").append(column.getComment());
-                }
-                sb.append("\n");
-            }
-            if (columns.size() > limit) {
-                sb.append("    ... (共 ")
-                        .append(columns.size())
-                        .append(" 列，仅展示前 ")
-                        .append(limit)
-                        .append(" 列)\n");
-            }
-            appendRelations(sb, driver, schemaName, tableName);
-            return AiToolResult.success(sb.toString(), System.currentTimeMillis() - start);
+            return AiToolResult.success(rendered, System.currentTimeMillis() - start);
         } catch (Exception e) {
             log.warn("describe_table failed, table: {}.{}, message: {}", schemaName, tableName, e.getMessage());
             return AiToolResult.failure(
@@ -135,8 +108,47 @@ public class DescribeTableTool implements AiTool {
         }
     }
 
+    /**
+     * 渲染单表结构（{@code describe_table} 与 20261025 新增的 {@code describe_tables} 共用）。
+     *
+     * <p>抽出为本类静态方法，是为了让批量工具复用<b>同一份格式</b>——两套格式漂移会让模型
+     * 面对同一种对象拿到两种描述，进而影响工具选择与判断。
+     *
+     * @return 列清单为空时返回 {@code null}（由调用方决定"未获取到"的文案与粒度）
+     */
+    static String renderTable(Driver driver, String schemaName, String tableName) throws Exception {
+        List<Column> columns = driver.listColumns(schemaName, tableName);
+        if (CollUtil.isEmpty(columns)) {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("Table: ").append(schemaName).append(".").append(tableName).append("\n");
+        sb.append("  Columns:\n");
+        int limit = Math.min(columns.size(), MAX_COLUMNS);
+        for (int i = 0; i < limit; i++) {
+            Column column = columns.get(i);
+            sb.append("    - ").append(column.getName()).append(" ").append(StrUtil.nullToEmpty(column.getType()));
+            if (column.isKeyFlag()) {
+                sb.append(" [PK]");
+            }
+            if (StrUtil.isNotBlank(column.getComment())) {
+                sb.append(" -- ").append(column.getComment());
+            }
+            sb.append("\n");
+        }
+        if (columns.size() > limit) {
+            sb.append("    ... (共 ")
+                    .append(columns.size())
+                    .append(" 列，仅展示前 ")
+                    .append(limit)
+                    .append(" 列)\n");
+        }
+        appendRelations(sb, driver, schemaName, tableName);
+        return sb.toString();
+    }
+
     /** 外键关系属于加分项，部分数据源不支持失败时静默降级（与现有 schema 构建逻辑一致） */
-    private void appendRelations(StringBuilder sb, Driver driver, String schemaName, String tableName) {
+    private static void appendRelations(StringBuilder sb, Driver driver, String schemaName, String tableName) {
         try {
             TableRelations relations = driver.getTableRelations(schemaName, tableName);
             if (relations == null
@@ -172,7 +184,7 @@ public class DescribeTableTool implements AiTool {
         }
     }
 
-    private String join(List<String> values) {
+    private static String join(List<String> values) {
         return values == null ? "" : String.join(",", values);
     }
 }

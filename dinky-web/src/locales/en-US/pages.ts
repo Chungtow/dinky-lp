@@ -705,6 +705,11 @@ export default {
   'datastudio.aiChat.verify.retrying': 'Execution failed, auto repairing…',
   'datastudio.aiChat.verify.failed': 'Execution failed',
   'datastudio.aiChat.verify.rejected': 'Verification skipped',
+  'datastudio.aiChat.finish.completed': 'Answer complete',
+  'datastudio.aiChat.finish.failed': 'Answer interrupted',
+  'datastudio.aiChat.finish.cancelled': 'Generation stopped',
+  'datastudio.aiChat.finish.generating': 'Generating…',
+  'datastudio.aiChat.finish.meta': '{duration} · {tokens} tokens',
   'datastudio.aiChat.modelTip': 'Current model, configurable in System Config - AI Settings',
   // Stage 3: multiple LLM profiles
   'datastudio.aiChat.profileTip':
@@ -822,6 +827,7 @@ export default {
   // Phase 1b: read-only tool process (neutral phrases; prefix/suffix composed by status)
   'datastudio.aiChat.tool.listTables': 'List tables of the datasource',
   'datastudio.aiChat.tool.describeTable': 'Read table structure',
+  'datastudio.aiChat.tool.describeTables': 'Read multiple table structures',
   'datastudio.aiChat.tool.sampleRows': 'Fetch sample rows',
   'datastudio.aiChat.tool.execSql': 'Execute SQL',
   'datastudio.aiChat.tool.affectedRows': 'Rows affected',
