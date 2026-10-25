@@ -42,6 +42,7 @@ import './index.less';
 import {
   AiChatConfig,
   AiChatConfirmFrame,
+  AiChatFinish,
   AiChatMentionItem,
   AiChatMessage,
   AiChatToolStep,
@@ -64,6 +65,7 @@ import { getExecError, getLatestExecError } from '@/services/BusinessCrud';
 import { l } from '@/utils/intl';
 import {
   CopyOutlined,
+  LoadingOutlined,
   PlayCircleOutlined,
   RobotOutlined,
   RollbackOutlined,
@@ -1211,6 +1213,23 @@ const AiChat = (props: AiChatProps) => {
     });
   };
 
+  /**
+   * 记录本轮结束信息（20261025：后端 done 帧）。
+   *
+   * <p>只写最后一条 assistant 消息：状态行紧贴该条回答，切换上下文后历史消息不带 finish，
+   * 也就不会错误地显示"刚刚结束"。
+   */
+  const applyFinish = (finish: AiChatFinish) => {
+    setMessages((prev) => {
+      const next = [...prev];
+      const last = next[next.length - 1];
+      if (last && last.role === 'assistant') {
+        next[next.length - 1] = { ...last, finish };
+      }
+      return next;
+    });
+  };
+
   /** 更新最后一条 assistant 消息的 SQL 校验状态（阶段 0：正确性闭环） */
   const updateLastVerify = (patch: AiChatVerify) => {
     setMessages((prev) => {
@@ -1359,11 +1378,16 @@ const AiChat = (props: AiChatProps) => {
           toolCall,
           toolResult,
           runId,
-          confirmRequest
+          confirmRequest,
+          done
         }) => {
           // 阶段 2c-0：记录运行 id；收到写语句确认请求即弹框
           if (runId) {
             runIdRef.current = runId;
+          }
+          // 20261025：显式结束标志——写入 finish，渲染层据此显示「回答已结束 / 已中断 / 已停止」
+          if (done) {
+            applyFinish(done);
           }
           if (confirmRequest) {
             setWriteConfirm(confirmRequest);
@@ -1418,6 +1442,10 @@ const AiChat = (props: AiChatProps) => {
     } catch (e: any) {
       if (e?.name !== 'AbortError') {
         message.error(e?.message ?? String(e));
+      } else {
+        // 20261025：用户主动停止时连接已被我们断开，收不到后端的 done 帧——本地补一条「已停止生成」，
+        // 否则这条回答会看起来"没有终态"，与异常中断无从区分。
+        applyFinish({ status: 'cancelled' });
       }
     } finally {
       setLoading(false);
@@ -1731,6 +1759,44 @@ const AiChat = (props: AiChatProps) => {
     );
   };
 
+  /**
+   * 渲染「本轮已结束」状态行（20261025）。
+   *
+   * <p>业界常见两种做法：① 只让操作栏出现（ChatGPT / Claude）；② 给一行文字状态（豆包 / 通义）。
+   * 这里取 ②——本产品的用户更需要"明确知道答完了"，而不是从按钮形态反推。三种终态分别用
+   * success / warning / error 三色 Tag 区分，并附带耗时与 token，便于判断"是不是被截断了"。
+   */
+  const renderFinish = (finish: AiChatFinish) => {
+    const status = finish.status ?? 'completed';
+    const cancelled = status === 'cancelled';
+    const failed = status === 'failed';
+    const color = failed ? 'error' : cancelled ? 'warning' : 'success';
+    const text = failed
+      ? l('datastudio.aiChat.finish.failed')
+      : cancelled
+      ? l('datastudio.aiChat.finish.cancelled')
+      : l('datastudio.aiChat.finish.completed');
+    const seconds = typeof finish.durationMs === 'number' ? (finish.durationMs / 1000).toFixed(1) : null;
+    const tokens =
+      typeof finish.totalTokens === 'number' && finish.totalTokens > 0
+        ? finish.totalTokens >= 1000
+          ? `${(finish.totalTokens / 1000).toFixed(1)}k`
+          : `${finish.totalTokens}`
+        : null;
+    const meta = seconds ? l('datastudio.aiChat.finish.meta', undefined, { duration: `${seconds}s`, tokens: tokens ?? '-' }) : null;
+    return (
+      <div style={{ marginTop: 6, fontSize: 12, color: 'rgba(0,0,0,0.45)' }}>
+        <Tag color={color} style={{ marginInlineEnd: 6 }}>
+          {text}
+        </Tag>
+        {meta ? <span>{meta}</span> : null}
+        {failed && finish.reason ? (
+          <div style={{ marginTop: 4, color: 'rgba(0,0,0,0.55)', whiteSpace: 'pre-wrap' }}>{finish.reason}</div>
+        ) : null}
+      </div>
+    );
+  };
+
   const renderContent = (content: string) => {
     const nodes: React.ReactNode[] = [];
     let lastIndex = 0;
@@ -1921,6 +1987,14 @@ const AiChat = (props: AiChatProps) => {
                   <span style={{ whiteSpace: 'pre-wrap' }}>{item.content}</span>
                 )}
                 {item.role === 'assistant' && item.verify ? renderVerify(item.verify) : null}
+                {/* 20261025：结束标志——已完成/已中断/已停止；生成中显示「生成中…」以便两者形成对照 */}
+                {item.role === 'assistant' && item.finish ? renderFinish(item.finish) : null}
+                {item.role === 'assistant' && !item.finish && loading && index === messages.length - 1 ? (
+                  <div style={{ marginTop: 6, fontSize: 12, color: 'rgba(0,0,0,0.45)' }}>
+                    <LoadingOutlined style={{ marginInlineEnd: 4 }} />
+                    {l('datastudio.aiChat.finish.generating')}
+                  </div>
+                ) : null}
               </div>
             </div>
           ))

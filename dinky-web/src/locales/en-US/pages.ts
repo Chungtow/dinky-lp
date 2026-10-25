@@ -705,6 +705,11 @@ export default {
   'datastudio.aiChat.verify.retrying': 'Execution failed, auto repairing…',
   'datastudio.aiChat.verify.failed': 'Execution failed',
   'datastudio.aiChat.verify.rejected': 'Verification skipped',
+  'datastudio.aiChat.finish.completed': 'Answer complete',
+  'datastudio.aiChat.finish.failed': 'Answer interrupted',
+  'datastudio.aiChat.finish.cancelled': 'Generation stopped',
+  'datastudio.aiChat.finish.generating': 'Generating…',
+  'datastudio.aiChat.finish.meta': '{duration} · {tokens} tokens',
   'datastudio.aiChat.modelTip': 'Current model, configurable in System Config - AI Settings',
   // Stage 3: multiple LLM profiles
   'datastudio.aiChat.profileTip':

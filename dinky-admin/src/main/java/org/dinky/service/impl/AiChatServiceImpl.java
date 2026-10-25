@@ -483,6 +483,7 @@ public class AiChatServiceImpl implements AiChatService {
                 if (runRegistry.isCancelled(run)) {
                     audit.setExecStatus("cancelled");
                     sendFrame(emitter, "status", "cancelled");
+                    sendDoneFrame(emitter, "cancelled", start, totalUsage, toolRun, "用户中断了本次生成");
                     emitter.complete();
                     return;
                 }
@@ -636,10 +637,20 @@ public class AiChatServiceImpl implements AiChatService {
             if (aborted && StrUtil.isBlank(audit.getExecError())) {
                 audit.setExecError(StrUtil.sub(toolRun.getFailureReason(), 0, 2000));
             }
+            // 20261025：显式结束帧（前端据此渲染「回答已结束 · 用时 · tokens」并撤掉「生成中」）
+            String doneStatus = Boolean.TRUE.equals(audit.getSuccess()) ? "completed" : "failed";
+            sendDoneFrame(
+                    emitter,
+                    doneStatus,
+                    start,
+                    totalUsage,
+                    toolRun,
+                    "failed".equals(doneStatus) ? audit.getExecError() : null);
             emitter.complete();
         } catch (Exception e) {
             log.error("AI chat failed", e);
             sendFrame(emitter, "error", e.getMessage());
+            sendDoneFrame(emitter, "failed", start, totalUsage, null, e.getMessage());
             audit.setSuccess(false);
             audit.setExecStatus("failed");
             audit.setExecError(StrUtil.sub(e.getMessage(), 0, 2000));
@@ -962,6 +973,39 @@ public class AiChatServiceImpl implements AiChatService {
         } catch (Exception e) {
             log.warn("Send SSE message failed: {}", e.getMessage());
         }
+    }
+
+    /**
+     * 下发「本轮对话结束」帧（20261025）。
+     *
+     * <p><b>为什么需要显式结束帧</b>：此前流只靠 {@code emitter.complete()} 关闭连接，前端只能从
+     * "流断了"推断结束——既无法区分「正常完成 / 服务端失败 / 用户中断」，也没有可展示的完结标志。
+     * 业界通行做法是给流一个<b>终止事件</b>（OpenAI 兼容的 {@code data: [DONE]}、Anthropic 的
+     * {@code message_stop}）；这里用结构化 {@code done} 帧承载状态、耗时与 token，
+     * 前端据此渲染「回答已结束 / 已中断 / 已停止」状态行。
+     *
+     * <p><b>尽力而为</b>：连接已被对端关闭时发送会抛异常，绝不能因此影响审计与收尾。
+     *
+     * @param status completed / failed / cancelled
+     * @param reason 失败或中断的可读原因（可选，前端仅在异常态展示）
+     */
+    private void sendDoneFrame(
+            SseEmitter emitter, String status, long start, TokenUsage usage, AiToolRunResult toolRun, String reason) {
+        JSONObject payload = new JSONObject()
+                .set("status", StrUtil.blankToDefault(status, "completed"))
+                .set("durationMs", Math.max(System.currentTimeMillis() - start, 0));
+        if (usage != null) {
+            payload.set("promptTokens", usage.getPromptTokens())
+                    .set("completionTokens", usage.getCompletionTokens())
+                    .set("totalTokens", usage.total());
+        }
+        if (toolRun != null) {
+            payload.set("toolCallCount", toolRun.getToolCallCount());
+        }
+        if (StrUtil.isNotBlank(reason)) {
+            payload.set("reason", StrUtil.sub(reason, 0, 300));
+        }
+        sendJsonFrame(emitter, "done", payload);
     }
 
     /**

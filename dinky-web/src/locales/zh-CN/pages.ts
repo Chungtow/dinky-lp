@@ -636,6 +636,11 @@ export default {
   'datastudio.aiChat.verify.retrying': '执行失败，正在自动修复…',
   'datastudio.aiChat.verify.failed': '执行失败',
   'datastudio.aiChat.verify.rejected': '已跳过执行校验',
+  'datastudio.aiChat.finish.completed': '回答已结束',
+  'datastudio.aiChat.finish.failed': '回答中断',
+  'datastudio.aiChat.finish.cancelled': '已停止生成',
+  'datastudio.aiChat.finish.generating': '生成中…',
+  'datastudio.aiChat.finish.meta': '用时 {duration} · {tokens} tokens',
   'datastudio.aiChat.modelTip': '当前使用的模型，可在 系统配置 → AI 设置 中修改',
   // 阶段 3：多 LLM 实例
   'datastudio.aiChat.profileTip':
