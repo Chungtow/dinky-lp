@@ -557,6 +557,22 @@ public enum Status {
     SEMANTIC_FEEDBACK_RATING_ILLEGAL(445, "semantic.feedback.rating.illegal"),
     SEMANTIC_FEEDBACK_STATUS_ILLEGAL(446, "semantic.feedback.status.illegal"),
     SEMANTIC_FEEDBACK_NOT_FOUND(447, "semantic.feedback.not.found"),
+
+    /**
+     * 20261025：工具循环守卫参数化。
+     *
+     * <p>此前四项均为代码常量（6 / 40 / 8000 / 10），大规模调研场景下频繁触顶，
+     * 且触顶时曾因"截断执行但不裁剪回灌消息"导致协议不一致、静默无输出。改为可配置后，
+     * 既可按模型与场景调档，也让"触顶"表现为可读提示而非失败。
+     */
+    SYS_LLM_SETTINGS_TOOLCALLMAXPERROUND(448, "sys.llm.settings.toolCallMaxPerRound"),
+    SYS_LLM_SETTINGS_TOOLCALLMAXPERROUND_NOTE(449, "sys.llm.settings.toolCallMaxPerRound.note"),
+    SYS_LLM_SETTINGS_TOOLCALLMAXTOTAL(450, "sys.llm.settings.toolCallMaxTotal"),
+    SYS_LLM_SETTINGS_TOOLCALLMAXTOTAL_NOTE(451, "sys.llm.settings.toolCallMaxTotal.note"),
+    SYS_LLM_SETTINGS_TOOLRESULTMAXCHARS(452, "sys.llm.settings.toolResultMaxChars"),
+    SYS_LLM_SETTINGS_TOOLRESULTMAXCHARS_NOTE(453, "sys.llm.settings.toolResultMaxChars.note"),
+    SYS_LLM_SETTINGS_HISTORYMAXMESSAGES(454, "sys.llm.settings.historyMaxMessages"),
+    SYS_LLM_SETTINGS_HISTORYMAXMESSAGES_NOTE(455, "sys.llm.settings.historyMaxMessages.note"),
     SYS_METRICS_SETTINGS_SYS_ENABLE(148, "sys.metrics.settings.sys.enable"),
     SYS_METRICS_SETTINGS_SYS_ENABLE_NOTE(149, "sys.metrics.settings.sys.enable.note"),
     SYS_METRICS_SETTINGS_SYS_GATHERTIMING(150, "sys.metrics.settings.sys.gatherTiming"),

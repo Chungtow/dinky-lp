@@ -21,12 +21,16 @@ package org.dinky.ai;
 
 import org.dinky.ai.tools.ExecSqlTool;
 import org.dinky.data.dto.AiChatMessage;
+import org.dinky.data.exception.BusException;
 import org.dinky.data.model.SystemConfiguration;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
@@ -55,25 +59,27 @@ import lombok.extern.slf4j.Slf4j;
 public class AiToolLoop {
 
     /**
-     * 单轮最多执行的工具数（模型可能一次返回多个 tool_calls）。
+     * 「本轮/累计工具调用上限」已改为可配置项（20261025）。
      *
-     * <p><b>为什么从 3 提到 6</b>（UAT B4 实测）：建 skill 时模型会在<b>同一轮</b>返回
-     * {@code list_skills + read_skill×3 + create_skill}（读范例 + 创建），原生 3 个的上限会把
-     * {@code create_skill} 直接截掉，模型只能下一轮重来——白耗一轮，正是"第一轮建不完、必须说
-     * 第二遍"的直接成因之一。放宽到 6 后，「探索 + 建主体」可在一轮内完成，轮数留给真正需要
-     * 串行的「写多个附件文件」。仍设硬上限：单轮调用过多会显著拖长一次 SSE 的等待，且失败回灌
-     * 的噪音更大。
+     * <p>原为两个硬编码常量（单轮 6 / 累计 40），大规模调研场景下一次问十来张表就会触顶；
+     * 更严重的是旧实现<b>只执行前 N 个却把全量 tool_calls 写回 assistant 消息</b>，造成
+     * 「N 个调用、M 条 tool 响应」违反协议 → 服务端 400 → 异常被吞 → 静默空回复。
+     * 现读取 {@code sys.llm.settings.toolCallMaxPerRound} / {@code ...toolCallMaxTotal}，
+     * 且未执行的调用一律补占位响应（见 {@link #SKIPPED_TOOL_NOTICE}）。
      */
-    private static final int MAX_CALLS_PER_ROUND = 6;
+
     /**
-     * 一次对话累计工具调用上限。
+     * 未执行调用的占位响应文案。
      *
-     * <p><b>为什么从 15 提到 40</b>：建一个带 {@code references/} 的 skill 典型调用量为
-     * {@code list_skills 1 + read_skill 1~3 + create_skill 1 + write_skill_file 2~5}；若还要按
-     * 用户要求回填表名 / 修订附件，15 很容易触顶，表现为"文件建到一半就停、要用户再说一遍"。
-     * 40 对单条消息足够宽裕，同时仍能挡住模型陷入无限试错。
+     * <p><b>协议要求</b>：assistant 消息中的每个 {@code tool_calls.id} 都必须在随后出现一条
+     * 对应的 {@code role=tool} 消息，否则 OpenAI 兼容服务端直接 400。因此"因上限未执行"不能
+     * 静默丢弃，必须回一条可读的 tool 响应——顺便让模型知道下一步该怎么做。
      */
-    private static final int MAX_CALLS_TOTAL = 40;
+    private static final String SKIPPED_TOOL_NOTICE =
+            "（本轮未执行：已达到工具调用上限，本轮未获取到该对象的任何信息。" + "如需继续，请重新请求本工具，或改用 describe_tables 一次获取多张表结构）";
+
+    /** 单轮失败的重试次数（瞬时 5xx / 网络抖动可自愈；400 这类确定性错误重试也无意义，由内容为空判定） */
+    private static final int LLM_ROUND_MAX_ATTEMPTS = 2;
     /** 审计明细里参数与错误的字符上限 */
     private static final int LOG_TEXT_CHARS = 200;
 
@@ -115,6 +121,8 @@ public class AiToolLoop {
         AiToolRunResult result = new AiToolRunResult();
         SystemConfiguration config = SystemConfiguration.getInstances();
         int maxRounds = Math.max(config.getLlmToolCallMaxRounds(), 1);
+        int maxPerRound = Math.max(config.getLlmToolCallMaxPerRound(), 1);
+        int maxTotal = Math.max(config.getLlmToolCallMaxTotal(), 1);
         // 工具轮的 thinking 默认关闭：探针实测它吃掉约 75% 生成预算（调研报告 §7.9）
         Boolean thinkingEnabled = Boolean.valueOf(config.isLlmToolThinkingEnabled());
         // 阶段 3：该实例声明「不支持 function calling」时禁用工具循环、退化为纯问答——
@@ -139,22 +147,31 @@ public class AiToolLoop {
                 result.appendAnswer(CANCELLED_NOTICE);
                 return result;
             }
+            // 20261025：累计预算已耗尽时不再发起工具轮（省一次请求），直接转入收尾生成
+            if (result.getToolCallCount() >= maxTotal) {
+                break;
+            }
             StringBuilder content = new StringBuilder();
             AiChatRound chatRound =
                     callLlm(messages, specs, profile, content, onDelta, onReasoning, thinkingEnabled, result);
-            if (chatRound == null) {
-                return result;
-            }
             if (!chatRound.hasToolCalls()) {
                 result.appendAnswer(content.toString());
                 return result;
             }
             // 🔴 探针约束 1：回灌的 assistant 消息必须携带 reasoning_content
+            // 20261025：这里必须回灌【全量】tool_calls（模型的原始请求），未执行的靠占位响应对齐，
+            // 否则会出现「N 个调用、M 条响应」→ 服务端 400（2026-10-24 事故根因）。
+            List<AiToolCall> allCalls = chatRound.getToolCalls();
             messages.add(AiChatMessage.assistantToolCalls(
-                    chatRound.getContent(), chatRound.getReasoningContent(), chatRound.getToolCalls()));
+                    chatRound.getContent(), chatRound.getReasoningContent(), allCalls));
             result.appendAnswer(content.toString());
 
-            if (executeToolCalls(chatRound.getToolCalls(), config, context, messages, result, listener)) {
+            // 本轮真正执行几个：单轮上限 ∩ 累计预算剩余
+            int executableCount =
+                    planExecutableCount(allCalls.size(), maxPerRound, maxTotal, result.getToolCallCount());
+            executeToolCalls(allCalls, executableCount, config, context, messages, result, listener);
+            // 累计预算耗尽 → 收尾（此时本轮未执行的调用已补占位响应，协议仍然完整）
+            if (result.getToolCallCount() >= maxTotal) {
                 break;
             }
             if (listener != null) {
@@ -173,23 +190,25 @@ public class AiToolLoop {
      * <p>探针已证实模型会一次返回多个 tool_calls，这里<b>串行</b>执行：1b 的工具都是毫秒级的元数据
      * 查询，并行收益不大，串行换来确定性顺序与可读日志。
      *
-     * @return true 表示已达累计调用上限，外层应停止循环
+     * @param executableCount 本轮真正执行的个数（前缀）；其余一律补占位 tool 响应
      */
-    private boolean executeToolCalls(
+    private void executeToolCalls(
             List<AiToolCall> calls,
+            int executableCount,
             SystemConfiguration config,
             AiToolContext context,
             List<AiChatMessage> messages,
             AiToolRunResult result,
             Listener listener) {
-        boolean truncated = calls.size() > MAX_CALLS_PER_ROUND;
-        List<AiToolCall> executable = truncated ? calls.subList(0, MAX_CALLS_PER_ROUND) : calls;
-        if (truncated) {
-            messages.add(AiChatMessage.of("user", "本轮请求的工具过多，只执行了前 " + MAX_CALLS_PER_ROUND + " 个，请基于已有信息继续。"));
-        }
-        for (AiToolCall call : executable) {
-            if (result.getToolCallCount() >= MAX_CALLS_TOTAL) {
-                return true;
+        int limit = Math.max(0, Math.min(executableCount, calls.size()));
+        for (int i = 0; i < calls.size(); i++) {
+            AiToolCall call = calls.get(i);
+            if (i >= limit) {
+                // 🔴 协议不变量：每个 tool_calls.id 都必须有对应的 tool 消息，
+                // 因此"没执行"也必须回一条占位（否则下一轮必 400）。
+                messages.add(AiChatMessage.toolResult(call.getId(), call.getName(), SKIPPED_TOOL_NOTICE));
+                log.warn("Tool call skipped by limit, tool: {}, id: {}", call.getName(), call.getId());
+                continue;
             }
             if (listener != null) {
                 listener.onToolCall(call);
@@ -224,7 +243,6 @@ public class AiToolLoop {
                             ? StrUtil.nullToEmpty(toolResult.getContent())
                             : buildToolFailureText(toolResult, context)));
         }
-        return false;
     }
 
     /** 最后一次「不带工具」的生成：保证循环结束时一定有一段正文 */
@@ -249,31 +267,149 @@ public class AiToolLoop {
             Consumer<String> onReasoning,
             Boolean thinkingEnabled,
             AiToolRunResult result) {
-        try {
-            AiChatRound chatRound = llmClient.streamChatWithTools(
-                    messages,
-                    specs,
-                    profile,
-                    delta -> {
-                        content.append(delta);
-                        if (onDelta != null) {
-                            onDelta.accept(delta);
-                        }
-                    },
-                    onReasoning,
-                    thinkingEnabled);
-            if (chatRound != null && chatRound.getUsage() != null) {
-                TokenUsage usage = result.getUsage();
-                usage.setPromptTokens(
-                        usage.getPromptTokens() + chatRound.getUsage().getPromptTokens());
-                usage.setCompletionTokens(
-                        usage.getCompletionTokens() + chatRound.getUsage().getCompletionTokens());
+        // 20261025：发请求前校验协议不变量（assistant.tool_calls 与 tool 消息一一对应），
+        // 任何上游路径留下的 dangling tool_calls 都会在这里被补齐/清理，而不是变成必然的 HTTP 400。
+        assertToolProtocol(messages);
+        Exception last = null;
+        for (int attempt = 1; attempt <= LLM_ROUND_MAX_ATTEMPTS; attempt++) {
+            try {
+                AiChatRound chatRound = llmClient.streamChatWithTools(
+                        messages,
+                        specs,
+                        profile,
+                        delta -> {
+                            content.append(delta);
+                            if (onDelta != null) {
+                                onDelta.accept(delta);
+                            }
+                        },
+                        onReasoning,
+                        thinkingEnabled);
+                if (chatRound != null && chatRound.getUsage() != null) {
+                    TokenUsage usage = result.getUsage();
+                    usage.setPromptTokens(
+                            usage.getPromptTokens() + chatRound.getUsage().getPromptTokens());
+                    usage.setCompletionTokens(
+                            usage.getCompletionTokens() + chatRound.getUsage().getCompletionTokens());
+                }
+                return chatRound;
+            } catch (Exception e) {
+                last = e;
+                log.warn(
+                        "Tool loop LLM round failed (attempt {}/{}): {}",
+                        attempt,
+                        LLM_ROUND_MAX_ATTEMPTS,
+                        e.getMessage());
+                // 已经向 SSE 推过正文时不再重试：重试会把同一段正文重复推给用户
+                if (content.length() > 0) {
+                    break;
+                }
             }
-            return chatRound;
-        } catch (Exception e) {
-            // 单次 LLM 失败不中断对话：已有内容照常返回，由上层决定是否报错
-            log.warn("Tool loop LLM round failed: {}", e.getMessage());
-            return null;
+        }
+        // 20261025：不再把失败吞成 null（那会让整个循环静默返回空正文）。
+        // 标记到结果里供审计，并抛给 doChat —— 由它统一下发 error 帧。
+        String reason = last == null ? "未知原因" : StrUtil.nullToEmpty(last.getMessage());
+        result.setAborted(true);
+        result.setFailureReason(reason);
+        throw new BusException("工具轮请求失败：" + reason);
+    }
+
+    /**
+     * 本轮真正执行的工具调用个数。
+     *
+     * <p>取三层上限的较小值：模型本轮请求数、单轮上限、累计预算剩余。返回 0 表示本轮一个都不执行
+     * （仍需为每个调用补占位响应，见 {@link #SKIPPED_TOOL_NOTICE}）。
+     */
+    private int planExecutableCount(int requested, int maxPerRound, int maxTotal, int executedSoFar) {
+        int remaining = maxTotal - executedSoFar;
+        if (remaining <= 0) {
+            return 0;
+        }
+        return Math.max(0, Math.min(requested, Math.min(maxPerRound, remaining)));
+    }
+
+    /**
+     * 协议不变量自检：{@code assistant.tool_calls} 的 id 全集必须与紧随其后的 tool 消息一一对应。
+     *
+     * <p>两类修复：
+     *
+     * <ul>
+     *   <li><b>缺失</b>：补一条占位 tool 消息（内容说明未执行），插在该工具块末尾；
+     *   <li><b>孤儿</b>：找不到宿主 assistant 的 tool 消息直接移除（部分服务端会因此报错）。
+     * </ul>
+     *
+     * <p>正常路径不该命中；命中即说明新增了会产生 dangling tool_calls 的代码路径，需一并整改。
+     */
+    private void assertToolProtocol(List<AiChatMessage> messages) {
+        if (messages == null || messages.isEmpty()) {
+            return;
+        }
+        for (int i = 0; i < messages.size(); i++) {
+            AiChatMessage message = messages.get(i);
+            if (message == null || !message.hasToolCalls()) {
+                continue;
+            }
+            Set<String> answered = new LinkedHashSet<>();
+            int cursor = i + 1;
+            while (cursor < messages.size()
+                    && messages.get(cursor) != null
+                    && "tool".equals(messages.get(cursor).getRole())) {
+                String repliedId = messages.get(cursor).getToolCallId();
+                if (StrUtil.isNotBlank(repliedId)) {
+                    answered.add(repliedId);
+                }
+                cursor++;
+            }
+            List<AiChatMessage> patch = new ArrayList<>();
+            for (AiToolCall call : message.getToolCalls()) {
+                if (call == null || StrUtil.isBlank(call.getId()) || answered.contains(call.getId())) {
+                    continue;
+                }
+                patch.add(AiChatMessage.toolResult(call.getId(), call.getName(), SKIPPED_TOOL_NOTICE));
+            }
+            if (!patch.isEmpty()) {
+                log.warn(
+                        "Tool protocol repaired: {} dangling tool_calls at message #{}, patched with placeholder",
+                        patch.size(),
+                        i);
+                try {
+                    messages.addAll(cursor, patch);
+                    i = cursor + patch.size() - 1;
+                } catch (Exception e) {
+                    // 只读列表（如评测脚本传入的固定长度集合）：自检降级为"仅告警"，不阻断请求
+                    log.warn("Tool protocol patch skipped (messages not mutable): {}", e.getMessage());
+                }
+            }
+        }
+        // 孤儿 tool 消息：向上回溯最近的 assistant，若其 tool_calls 不含该 id 则移除
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            AiChatMessage message = messages.get(i);
+            if (message == null || !"tool".equals(message.getRole())) {
+                continue;
+            }
+            int owner = i - 1;
+            while (owner >= 0
+                    && messages.get(owner) != null
+                    && "tool".equals(messages.get(owner).getRole())) {
+                owner--;
+            }
+            boolean valid = false;
+            if (owner >= 0 && messages.get(owner) != null && messages.get(owner).hasToolCalls()) {
+                for (AiToolCall call : messages.get(owner).getToolCalls()) {
+                    if (call != null && StrUtil.equals(call.getId(), message.getToolCallId())) {
+                        valid = true;
+                        break;
+                    }
+                }
+            }
+            if (!valid) {
+                log.warn("Tool protocol repaired: drop orphan tool message #{} (id={})", i, message.getToolCallId());
+                try {
+                    messages.remove(i);
+                } catch (Exception e) {
+                    log.warn("Tool protocol drop skipped (messages not mutable): {}", e.getMessage());
+                }
+            }
         }
     }
 

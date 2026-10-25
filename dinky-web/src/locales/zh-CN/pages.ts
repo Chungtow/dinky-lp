@@ -749,6 +749,7 @@ export default {
   // 阶段 1b：只读工具的过程展示（词条为中性短语，前/后缀按状态由前端拼接）
   'datastudio.aiChat.tool.listTables': '查询数据源下的表清单',
   'datastudio.aiChat.tool.describeTable': '读取表结构',
+  'datastudio.aiChat.tool.describeTables': '批量读取表结构',
   'datastudio.aiChat.tool.sampleRows': '取样例数据',
   'datastudio.aiChat.tool.execSql': '执行 SQL',
   'datastudio.aiChat.tool.affectedRows': '影响行数',

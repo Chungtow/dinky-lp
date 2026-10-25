@@ -822,6 +822,7 @@ export default {
   // Phase 1b: read-only tool process (neutral phrases; prefix/suffix composed by status)
   'datastudio.aiChat.tool.listTables': 'List tables of the datasource',
   'datastudio.aiChat.tool.describeTable': 'Read table structure',
+  'datastudio.aiChat.tool.describeTables': 'Read multiple table structures',
   'datastudio.aiChat.tool.sampleRows': 'Fetch sample rows',
   'datastudio.aiChat.tool.execSql': 'Execute SQL',
   'datastudio.aiChat.tool.affectedRows': 'Rows affected',

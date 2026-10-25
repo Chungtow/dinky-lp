@@ -152,9 +152,19 @@ public class AiChatServiceImpl implements AiChatService {
 
     /** 注入上下文的作业报错原文字符上限 */
     private static final int MAX_JOB_ERROR_CHARS = 1500;
-    /** 最多携带的历史对话轮次（一问一答算一轮，此处按消息条数算） */
+    /**
+     * 历史消息条数的<b>兜底默认值</b>（20261025 起实际取值来自
+     * {@code sys.llm.settings.historyMaxMessages}，默认与之一致，保持既有行为不变）。
+     */
+    @SuppressWarnings("unused")
     private static final int MAX_HISTORY_MESSAGES = 10;
-    /** 单个工具返回给模型的字符上限（超长清单既费 token 又挤占上下文） */
+    /**
+     * 单个工具结果的<b>兜底默认值</b>（20261025 起实际取值来自
+     * {@code sys.llm.settings.toolResultMaxChars}，默认 24000）。
+     *
+     * <p>原 8000 会把宽表 {@code describe_table} 的列清单截成半截，模型据此易误判字段。
+     */
+    @SuppressWarnings("unused")
     private static final int MAX_TOOL_RESULT_CHARS = 8000;
     /** 审计列 tool_calls 的字符上限 */
     private static final int MAX_TOOL_AUDIT_CHARS = 2000;
@@ -599,7 +609,33 @@ public class AiChatServiceImpl implements AiChatService {
                         : toolRun.getToolCallLogs().toString();
                 audit.setToolCalls(StrUtil.sub(logs, 0, MAX_TOOL_AUDIT_CHARS));
             }
-            audit.setSuccess(!"failed".equals(execStatus));
+            // 20261025：空回答兜底——工具轮异常或模型只吐思考不吐正文时，必须给出可读提示，
+            // 而不是静默 complete()（前端表现为"思考完就没有输出"，用户无从判断发生了什么）。
+            boolean writePathHandled = toolRun != null && toolRun.isWriteAttempted();
+            if (StrUtil.isBlank(answer.toString())
+                    && StrUtil.isBlank(finalSql)
+                    && !writePathHandled
+                    && !"failed".equals(execStatus)) {
+                String reason = toolRun != null && StrUtil.isNotBlank(toolRun.getFailureReason())
+                        ? "（" + toolRun.getFailureReason() + "）"
+                        : "";
+                String tip = "本次未生成回答" + reason + "。可能存在模型服务异常或上下文过长，" + "可减少一次提问涉及的表数量（或用 describe_tables 批量获取）后重试。";
+                log.warn(
+                        "AI chat produced empty answer, runId: {}, toolAborted: {}",
+                        runId,
+                        toolRun != null && toolRun.isAborted());
+                sendFrame(emitter, "error", tip);
+                execStatus = "failed";
+                execError = tip;
+                audit.setExecStatus(execStatus);
+                audit.setExecError(StrUtil.sub(execError, 0, 2000));
+            }
+            // 20261025：工具轮异常中止时审计记失败（原来只按 execStatus 判定，崩了也记 success=1）
+            boolean aborted = toolRun != null && toolRun.isAborted();
+            audit.setSuccess(!"failed".equals(execStatus) && !aborted);
+            if (aborted && StrUtil.isBlank(audit.getExecError())) {
+                audit.setExecError(StrUtil.sub(toolRun.getFailureReason(), 0, 2000));
+            }
             emitter.complete();
         } catch (Exception e) {
             log.error("AI chat failed", e);
@@ -658,7 +694,7 @@ public class AiChatServiceImpl implements AiChatService {
                 request.getUserId(),
                 null,
                 Math.max(config.getLlmToolTimeoutSeconds(), 1),
-                MAX_TOOL_RESULT_CHARS);
+                Math.max(config.getLlmToolResultMaxChars(), 1000));
         // 阶段 2c-1：把「运行上下文 + 发确认帧通道」注入工具上下文——exec_sql 这类写类工具
         // 据此在执行前下发 confirmRequest 并挂起等待用户拍板（未注入时工具会直接拒绝写操作）
         context.setRunId(runId);
@@ -1169,8 +1205,10 @@ public class AiChatServiceImpl implements AiChatService {
 
         if (CollUtil.isNotEmpty(request.getHistory())) {
             List<AiChatMessage> history = request.getHistory();
-            List<AiChatMessage> recent = history.size() > MAX_HISTORY_MESSAGES
-                    ? history.subList(history.size() - MAX_HISTORY_MESSAGES, history.size())
+            // 20261025：历史条数改为可配置（默认仍为 10，保持既有行为；深挖型多轮可按需调大）
+            int historyMax = Math.max(SystemConfiguration.getInstances().getLlmHistoryMaxMessages(), 1);
+            List<AiChatMessage> recent = history.size() > historyMax
+                    ? history.subList(history.size() - historyMax, history.size())
                     : history;
             messages.addAll(recent);
         }

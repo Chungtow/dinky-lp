@@ -504,6 +504,51 @@ public class SystemConfiguration {
             .note(Status.SYS_LLM_SETTINGS_TOOLTHINKINGENABLED_NOTE);
 
     /**
+     * 单轮最多<b>执行</b>几个工具调用（默认 16）。
+     *
+     * <p>20261025：原为代码常量 6。模型一次返回的 tool_calls 常超过该值（大规模调研时一轮问十几张表），
+     * 原实现只执行前 6 个、却把<b>全量</b> tool_calls 写回 assistant 消息，导致下一轮请求
+     * 「N 个调用、6 条响应」违反协议（HTTP 400）。现改为可配置，且未执行的调用会补占位响应。
+     */
+    private final Configuration<Integer> llmToolCallMaxPerRound = key(Status.SYS_LLM_SETTINGS_TOOLCALLMAXPERROUND)
+            .intType()
+            .defaultValue(16)
+            .note(Status.SYS_LLM_SETTINGS_TOOLCALLMAXPERROUND_NOTE);
+
+    /**
+     * 一次对话累计最多<b>执行</b>几个工具调用（默认 120，原常量 40）。
+     *
+     * <p>触顶后不再执行新调用，但会为该轮所有未执行调用补占位响应并收尾生成最终答案，
+     * 保证协议完整（历史实现直接在循环中途 break，留下 dangling tool_calls → 必然 400）。
+     */
+    private final Configuration<Integer> llmToolCallMaxTotal = key(Status.SYS_LLM_SETTINGS_TOOLCALLMAXTOTAL)
+            .intType()
+            .defaultValue(120)
+            .note(Status.SYS_LLM_SETTINGS_TOOLCALLMAXTOTAL_NOTE);
+
+    /**
+     * 单个工具结果回灌给模型的字符上限（默认 24000，原常量 8000）。
+     *
+     * <p>宽表 {@code describe_table} 的列清单很容易超过 8000 字符，被截断后模型看到的是半截清单
+     * （虽会附"已截断"提示，但仍可能据此误判字段）。改为可配置后按模型窗口调档。
+     */
+    private final Configuration<Integer> llmToolResultMaxChars = key(Status.SYS_LLM_SETTINGS_TOOLRESULTMAXCHARS)
+            .intType()
+            .defaultValue(24000)
+            .note(Status.SYS_LLM_SETTINGS_TOOLRESULTMAXCHARS_NOTE);
+
+    /**
+     * 带入模型的历史消息条数（默认 10，与原常量一致——保持现状不退化，运维可按需调大）。
+     *
+     * <p>深挖型多轮对话中 10 条会丢掉早先结论；但调大会同时推高 prompt token 与超时风险，
+     * 故默认不变、只开旋钮。
+     */
+    private final Configuration<Integer> llmHistoryMaxMessages = key(Status.SYS_LLM_SETTINGS_HISTORYMAXMESSAGES)
+            .intType()
+            .defaultValue(10)
+            .note(Status.SYS_LLM_SETTINGS_HISTORYMAXMESSAGES_NOTE);
+
+    /**
      * Craft 模式开关（阶段 2：Ask / Craft 双模式）。
      *
      * <p><b>默认关闭</b>：Craft 允许 AI 整块改写编辑器内容，属于「放权」能力，
@@ -1051,6 +1096,34 @@ public class SystemConfiguration {
         return Asserts.isNull(llmToolAutoRepairMaxAttempts.getValue())
                 ? llmToolAutoRepairMaxAttempts.getDefaultValue()
                 : llmToolAutoRepairMaxAttempts.getValue();
+    }
+
+    /** @return 单轮最多执行的工具调用数（默认 16） */
+    public int getLlmToolCallMaxPerRound() {
+        return Asserts.isNull(llmToolCallMaxPerRound.getValue())
+                ? llmToolCallMaxPerRound.getDefaultValue()
+                : llmToolCallMaxPerRound.getValue();
+    }
+
+    /** @return 一次对话累计最多执行的工具调用数（默认 120） */
+    public int getLlmToolCallMaxTotal() {
+        return Asserts.isNull(llmToolCallMaxTotal.getValue())
+                ? llmToolCallMaxTotal.getDefaultValue()
+                : llmToolCallMaxTotal.getValue();
+    }
+
+    /** @return 单个工具结果的回灌字符上限（默认 24000） */
+    public int getLlmToolResultMaxChars() {
+        return Asserts.isNull(llmToolResultMaxChars.getValue())
+                ? llmToolResultMaxChars.getDefaultValue()
+                : llmToolResultMaxChars.getValue();
+    }
+
+    /** @return 带入模型的历史消息条数（默认 10） */
+    public int getLlmHistoryMaxMessages() {
+        return Asserts.isNull(llmHistoryMaxMessages.getValue())
+                ? llmHistoryMaxMessages.getDefaultValue()
+                : llmHistoryMaxMessages.getValue();
     }
 
     /** @return 工具轮是否保留 thinking（默认关闭，详见字段注释） */

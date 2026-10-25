@@ -56,6 +56,17 @@ public class AiToolRunResult {
     /** 阶段 2c-2：最近一次由工具尝试执行的语句原文（供审计落 `sql_text`） */
     private String lastExecutedSql;
 
+    /**
+     * 20261025：工具轮异常中止的原因（脱敏后）。
+     *
+     * <p>不再把单轮失败吞成 null——那会让整个循环静默返回空正文。此前审计只能看到
+     * {@code success=1 / exec_status=none}，掩盖了"崩了但没答"的事实。
+     */
+    private String failureReason;
+
+    /** 20261025：本次工具轮是否异常中止（审计 {@code success} 由此判负） */
+    private boolean aborted;
+
     public void appendAnswer(String text) {
         if (text != null) {
             answer = answer + text;
