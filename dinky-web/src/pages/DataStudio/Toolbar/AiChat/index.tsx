@@ -958,8 +958,24 @@ const AiChat = (props: AiChatProps) => {
                 ? 'env'
                 : /^semantic[-/]/.test(q)
                   ? 'semantic'
-                  : '';
+                  : /^kb[-/]/.test(q)
+                    ? 'kb'
+                    : '';
     if (assetPrefix) {
+      // 知识库 @kb 接入 v1.0：候选 name 是库**编码**（c_xxx / 外部原标识），不在 name 里带 "kb/"，
+      // 若走下面 assetKey 分支会因 "kb/" 拼不进编码而恒空（与 @table/ 当年的坑同源）。
+      // 这里同时按编码与库名（存在 content）匹配，用户既能打编码片段、也能打中文库名。
+      if (assetPrefix === 'kb') {
+        const kbKey = q.slice('kb/'.length);
+        return mentionCandidates
+          .filter(
+            (c) =>
+              !kbKey ||
+              `${c.name ?? ''}`.toLowerCase().includes(kbKey) ||
+              `${c.content ?? ''}`.toLowerCase().includes(kbKey)
+          )
+          .slice(0, 20);
+      }
       if (assetPrefix === 'source' || assetPrefix === 'semantic') {
         // P1/P3b：路径式前缀的候选已在 mentionCandidates 里按「层级 + 该层关键字」算好，
         // 而名字是路径（ds/db/tbl 或 project/asset）——再拿整串 query 过滤一次只会把候选全过滤掉。
