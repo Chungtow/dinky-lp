@@ -71,7 +71,7 @@ DELETE FROM dinky_kb_collection WHERE code IN ('c_kbdemo1', 'c_kbdemo2', 'testco
 
 INSERT INTO dinky_kb_collection (code, name, description, owner_id, tenant_id, visibility, enabled, create_time,
                                  update_time)
-VALUES ('c_kbdemo1', '空库（UAT 用）', '故意留空：验证"库里没有相关内容"时是否如实回答', 1, NULL, 'public', 1, NOW(),
-        NOW()),
+VALUES ('c_kbdemo1', '空库（UAT 用）', '故意留空且私有：验证"库里没有相关内容"时如实回答，同时验证非属主看不到它', 1, NULL,
+        'private', 1, NOW(), NOW()),
        ('testcol2', '流程与规范示例（A 侧已有）', 'kb-service 现存语料，用于验证检索命中、出处与 expand 三档', 1, NULL,
         'public', 1, NOW(), NOW());
