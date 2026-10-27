@@ -188,6 +188,13 @@ export type AiChatConfig = {
   profiles?: AiChatProfileItem[];
   /** 是否开启 Skills 能力（阶段 4a）：决定输入框 @ 候选里是否提供 skill */
   skillEnable?: boolean;
+  /**
+   * 知识库检索能力开关（知识库 @kb 接入 v1.0）。
+   *
+   * <p>只影响「{@code @} 候选里是否提供 {@code @kb/}」；越权拦截始终在服务端，
+   * 前端拿到 kbEnable=true 也不代表能搜任意库。
+   */
+  kbEnable?: boolean;
 };
 
 /**
@@ -219,6 +226,14 @@ export type AiChatMentionItem = {
      * 与后端 {@code MentionType.SEMANTIC} 及 {@code AiChatMention.name} 的存法一致（D19）。
      */
     | 'semantic'
+    /**
+     * 知识库范围引用（{@code @kb/<code>}，知识库 @kb 接入 v1.0）。
+     *
+     * <p><b>它是范围句柄，不是内容句柄</b>：只声明"在哪个库里检索"，正文由 {@code kb_search}
+     * 工具召回。{@code name} 存库<b>编码</b>（{@code c_} + 8 hex），不存显示名
+     * （显示名可改且可能重名）。
+     */
+    | 'kb'
     /**
      * 仅候选面板使用的"一级前缀入口"（`@` → `@source/` 等）：
      * 选中后只把前缀补进输入框并保持浮层打开，不生成 chip、也不进入请求体。
@@ -421,6 +436,31 @@ export const listSkills = async (): Promise<AiChatMentionItem[]> => {
     name: s.name,
     content: s.description
   }));
+};
+
+/**
+ * 知识库 @kb 接入 v1.0：{@code @kb/} 候选——当前用户**可见**的知识库。
+ *
+ * <p>{@code name} 必须是库**编码**（{@code c_xxxxxxxx}）而不是显示名：编码系统生成、永不变，
+ * 可直接写进 kb-service 的 {@code filter.collection}；显示名可改且可能重名。
+ * 显示名放在 {@code content} 里供候选浮层做副标题，避免"只能看到一串 c_xxxx"。
+ *
+ * <p>后端 {@code /api/kb/collections} 已按可见性过滤（private/tenant/public + enabled），
+ * 前端<b>不做也不应做</b>二次过滤——越权拦截在服务端，前端过滤只是观感。
+ */
+export const listKbCollections = async (): Promise<AiChatMentionItem[]> => {
+  try {
+    const res: any = await getData(API_CONSTANTS.KB_COLLECTIONS);
+    const rows = res?.data ?? res ?? [];
+    return (rows as any[]).map((c) => ({
+      type: 'kb' as const,
+      name: c.code,
+      content: c.name
+    }));
+  } catch (e) {
+    // 批次 A 的开关默认关闭 / 后端未升级时，候选缺失不应影响其他 @ 功能
+    return [];
+  }
 };
 
 /**

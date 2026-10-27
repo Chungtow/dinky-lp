@@ -766,6 +766,8 @@ export default {
   'datastudio.aiChat.mention.kindMetric': 'metric',
   'datastudio.aiChat.mention.kindTable': 'table',
   'datastudio.aiChat.mention.groupTopic': 'Topic (used by jobs)',
+  // KB (@kb) integration v1.0: candidate group label
+  'datastudio.aiChat.mention.groupKb': 'Knowledge base (search scope)',
   'datastudio.aiChat.mention.sourceUsage':
     'Cross-source usage: @source/<datasource>/<db>/<table>[.<column>]; @topic/<topic>; @env/<env name>',
   'pages.skill.listTitle': 'Skills',

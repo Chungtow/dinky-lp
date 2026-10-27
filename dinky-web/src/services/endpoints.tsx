@@ -196,6 +196,12 @@ export enum API_CONSTANTS {
   /** P1-A：{@code @topic/} 候选（名册版，零连接 Kafka） */
   AI_CHAT_MENTION_TOPICS = '/api/aiChat/mentionTopics',
 
+  /** --------------------------------------------  知识库（@kb 接入 v1.0）  ------------------------------------------------------- */
+  /** 当前用户可见的知识库列表（{@code @kb/} 候选来源；只返回 code / name / description） */
+  KB_COLLECTIONS = '/api/kb/collections',
+  /** kb-service 连通性（只回布尔，不含地址与密钥） */
+  KB_HEALTH = '/api/kb/health',
+
   /** --------------------------------------------  skill（阶段 4a）  ------------------------------------------------------- */
   SKILL_LIST = '/api/skill/list',
   SKILL_DETAIL = '/api/skill/detail',

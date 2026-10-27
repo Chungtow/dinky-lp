@@ -55,6 +55,7 @@ import {
   listMentionTopics,
   listPublishedSemanticAssets,
   listPublishedSemanticProjects,
+  listKbCollections,
   listSkills,
   listTableColumns,
   reportCraftWrite
@@ -352,6 +353,9 @@ const AiChat = (props: AiChatProps) => {
   const atomicDeleteArmRef = useRef<MentionBackspaceArm | null>(null);
   /** 阶段 4a：团队 Skill 候选（仅管理员开启 skillEnable 时拉取）——输入 {@code @skill/} 时展示 */
   const [skillOptions, setSkillOptions] = useState<AiChatMentionItem[]>([]);
+
+  /** 知识库 @kb 接入 v1.0：{@code @kb/} 候选（当前用户可见的库，name 存库编码） */
+  const [kbOptions, setKbOptions] = useState<AiChatMentionItem[]>([]);
   // P1：跨源引用（@source/ / @env/）的候选与懒加载缓存。
   // @source/ 是四级渐进披露（数据源 → 库 → 表），只在用户逐层往下敲时才拉下一层，
   // 避免"刚敲 @source/ 就把全部数据源的全部库表都拉下来"。
@@ -595,6 +599,19 @@ const AiChat = (props: AiChatProps) => {
       .catch(() => setSkillOptions([]));
   }, [config?.skillEnable]);
 
+  // 知识库 @kb 接入 v1.0：候选同样只在开关开启时拉取。
+  // 拉取失败（未配置 kb-service / 无权限 / 后端未升级）一律降级为空候选，
+  // 绝不能让知识库的可用性影响其它 @ 引用。
+  useEffect(() => {
+    if (!config?.kbEnable) {
+      setKbOptions([]);
+      return;
+    }
+    listKbCollections()
+      .then((items) => setKbOptions(items))
+      .catch(() => setKbOptions([]));
+  }, [config?.kbEnable]);
+
   // P1：{@code @source/} 第一层候选——数据源清单（首次用到时才拉，且只拉一次）
   useEffect(() => {
     if (!sourceQuery || dataSources.length > 0) {
@@ -785,6 +802,12 @@ const AiChat = (props: AiChatProps) => {
     if (/^topic[-/]/.test(mentionQuery.trim().toLowerCase())) {
       return topicOptions;
     }
+    // provider 10（知识库 @kb 接入 v1.0）：@kb/ 候选——**单级**（库编码），无层级下钻。
+    // 与 @source/ @semantic/ 不同：知识库是"检索范围"而不是"可引用对象"，选中即插入库编码，
+    // 正文交给 kb_search 工具在对话中按需召回（此即「范围句柄」与「内容句柄」的区别）。
+    if (/^kb[-/]/.test(mentionQuery.trim().toLowerCase())) {
+      return kbOptions.map((item) => ({ ...item, group: l('datastudio.aiChat.mention.groupKb') }));
+    }
     // provider 5（阶段 4a 的 skill / 阶段 4b 扩展的 doc）：输入 @skill/ / @doc/ 时只给对应资产候选
     // 阶段 4b 补：@table/<表名> 与旧语法 @表名 等价，但显式前缀在「表名与 skill 名相同」时
     // 可消除歧义。此处只影响候选过滤：输入 @table/ 时只给表候选。
@@ -886,6 +909,9 @@ const AiChat = (props: AiChatProps) => {
         prefixItem('skill/', l('datastudio.aiChat.mention.groupSkill')),
         prefixItem('semantic/', l('datastudio.aiChat.mention.groupSemantic')),
         prefixItem('topic/', l('datastudio.aiChat.mention.groupTopic')),
+        // 知识库 @kb 接入 v1.0：@kb/ 入口（开关关闭时 kbOptions 为空，选中也是空列表，
+        // 故这里不做开关判断——多一个条件就多一处漏判风险）
+        prefixItem('kb/', l('datastudio.aiChat.mention.groupKb')),
         prefixItem('env/', l('datastudio.aiChat.mention.groupEnv')),
         ...list
       ].slice(0, 30);
@@ -902,6 +928,7 @@ const AiChat = (props: AiChatProps) => {
     mentionOpen,
     mentionQuery,
     skillOptions,
+    kbOptions,
     sourceQuery,
     dataSources,
     envOptions,
@@ -1016,6 +1043,9 @@ const AiChat = (props: AiChatProps) => {
       case 'semantic':
         // P3b：name 已是路径（project 或 project/asset），直接拼前缀即可
         return `@semantic/${m.name}`;
+      case 'kb':
+        // 知识库 @kb 接入 v1.0：name 是库编码（c_ + 8 hex），文本固定为 @kb/<code>
+        return `@kb/${m.name}`;
       default:
         return `@${m.name}`;
     }

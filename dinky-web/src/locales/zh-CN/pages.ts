@@ -686,6 +686,8 @@ export default {
   'datastudio.aiChat.mention.groupSourceTable': '表（跨源引用）',
   'datastudio.aiChat.mention.groupEnv': 'FlinkSQL 环境',
   'datastudio.aiChat.mention.groupTopic': 'topic（已被作业使用）',
+  // 知识库 @kb 接入 v1.0：@kb/ 候选分组与说明
+  'datastudio.aiChat.mention.groupKb': '知识库（检索范围）',
   'datastudio.aiChat.mention.sourceUsage':
     '跨源引用用法：@source/数据源/库/表[.字段]；@topic/topic名；@env/环境名',
   // P3b：@semantic/ 语义资产

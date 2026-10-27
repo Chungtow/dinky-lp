@@ -20,6 +20,7 @@
 package org.dinky.ai;
 
 import org.dinky.ai.context.RequestSnapshot;
+import org.dinky.ai.kb.KbCollectionBrief;
 import org.dinky.ai.skill.SkillBrief;
 import org.dinky.data.model.DataBase;
 
@@ -69,6 +70,17 @@ public class AiToolContext {
      * <p>默认为<b>空列表</b>而非 {@code null}：工具侧可直接遍历，无需判空。
      */
     private List<SkillBrief> visibleSkills = Collections.emptyList();
+
+    /**
+     * 知识库 {@code @kb} 接入 v1.0：当前用户<b>可见的知识库快照</b>（请求线程预解析后注入）。
+     *
+     * <p>与 {@link #visibleSkills} 完全同理，多一层安全含义：kb-service <b>不认人</b>——
+     * {@code filter.collection} 里放什么就搜什么。因此"这个库能不能搜"必须在请求线程定好，
+     * 工具内只做集合判定；否则模型编造一个编码就能越权检索别的内容。
+     *
+     * <p>默认为<b>空列表</b>而非 {@code null}：工具侧可直接遍历，无需判空。
+     */
+    private List<KbCollectionBrief> visibleCollections = Collections.emptyList();
 
     /**
      * P1：请求线程预解析的上下文快照（本租户启用中的数据源索引 + 命名名册）。

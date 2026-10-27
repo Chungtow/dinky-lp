@@ -573,6 +573,20 @@ public enum Status {
     SYS_LLM_SETTINGS_TOOLRESULTMAXCHARS_NOTE(453, "sys.llm.settings.toolResultMaxChars.note"),
     SYS_LLM_SETTINGS_HISTORYMAXMESSAGES(454, "sys.llm.settings.historyMaxMessages"),
     SYS_LLM_SETTINGS_HISTORYMAXMESSAGES_NOTE(455, "sys.llm.settings.historyMaxMessages.note"),
+    /**
+     * 知识库（{@code @kb}）检索能力（2026-10-27，知识库 @kb 接入 v1.0）。
+     *
+     * <p>四项放同一分组（{@code sys.llm.settings.*}）：它们都是「AI 工具能否检索知识库」的配置，
+     * 与 {@code llmSkillEnable} 同组，配置页无需新增分组即可渲染。
+     */
+    SYS_LLM_SETTINGS_KBENABLE(456, "sys.llm.settings.kbEnable"),
+    SYS_LLM_SETTINGS_KBENABLE_NOTE(457, "sys.llm.settings.kbEnable.note"),
+    SYS_LLM_SETTINGS_KBMAXCHARS(458, "sys.llm.settings.kbMaxChars"),
+    SYS_LLM_SETTINGS_KBMAXCHARS_NOTE(459, "sys.llm.settings.kbMaxChars.note"),
+    SYS_LLM_SETTINGS_KBBASEURL(460, "sys.llm.settings.kbBaseUrl"),
+    SYS_LLM_SETTINGS_KBBASEURL_NOTE(461, "sys.llm.settings.kbBaseUrl.note"),
+    SYS_LLM_SETTINGS_KBAPIKEY(462, "sys.llm.settings.kbApiKey"),
+    SYS_LLM_SETTINGS_KBAPIKEY_NOTE(463, "sys.llm.settings.kbApiKey.note"),
     SYS_METRICS_SETTINGS_SYS_ENABLE(148, "sys.metrics.settings.sys.enable"),
     SYS_METRICS_SETTINGS_SYS_ENABLE_NOTE(149, "sys.metrics.settings.sys.enable.note"),
     SYS_METRICS_SETTINGS_SYS_GATHERTIMING(150, "sys.metrics.settings.sys.gatherTiming"),

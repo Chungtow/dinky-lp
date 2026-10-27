@@ -84,5 +84,22 @@ public final class MentionType {
      */
     public static final String SEMANTIC = "semantic";
 
+    /**
+     * 知识库范围引用（{@code @kb/<code>}，知识库 @kb 接入 v1.0）。
+     *
+     * <p><b>⚠️ 与 {@link #SEMANTIC} / {@link #SKILL} 的本质区别</b>：那两者是<b>内容句柄</b>
+     * （解析后直接把正文注入上下文）；kb 是<b>范围句柄</b>——它只声明"本次在哪个知识库里检索"，
+     * 产物仅一行范围声明，<b>正文必须由 {@code kb_search} 工具召回</b>。
+     *
+     * <p>若把 kb 当内容句柄实现（read 后注入全文），会退化成"预注入"：每次对话都产生 embedding
+     * 费用、把大量无关片段塞进上下文，且与「按需消费」的设计前提相反
+     * （调研 §4.7.0）。注入实现见 {@code KbMentionInjector}。
+     *
+     * <p>名字里存的是库<b>编码</b>（{@code c_} + 8 位 hex），不是显示名：编码系统生成、永不变，
+     * 可直接写进 kb-service 的 {@code filter.collection}；显示名可改且可能重名，故不参与句柄
+     * （前端插入时只插编码，显示名仅用于候选浮层展示）。
+     */
+    public static final String KB = "kb";
+
     private MentionType() {}
 }

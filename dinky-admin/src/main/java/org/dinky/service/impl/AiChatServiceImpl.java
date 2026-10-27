@@ -39,7 +39,10 @@ import org.dinky.ai.context.ContextFingerprintCache;
 import org.dinky.ai.context.FlinkContextProvider;
 import org.dinky.ai.context.NameRegistryService;
 import org.dinky.ai.context.RequestSnapshot;
+import org.dinky.ai.kb.KbCollectionBrief;
 import org.dinky.ai.mention.EnvRefRenderer;
+import org.dinky.ai.mention.MentionInjectContext;
+import org.dinky.ai.mention.MentionInjector;
 import org.dinky.ai.mention.MentionType;
 import org.dinky.ai.mention.SourceRefRenderer;
 import org.dinky.ai.mention.TopicRefRenderer;
@@ -75,6 +78,7 @@ import org.dinky.service.AiChatService;
 import org.dinky.service.DataBaseService;
 import org.dinky.service.HistoryService;
 import org.dinky.service.JobInstanceService;
+import org.dinky.service.KbCollectionService;
 import org.dinky.service.SkillService;
 import org.dinky.sse.SseEmitterUTF8;
 
@@ -216,6 +220,17 @@ public class AiChatServiceImpl implements AiChatService {
     /** P3b：语义资产只读入口（{@code @semantic/} 引用 + 项目清单常驻） */
     private final SemanticAssetProvider semanticAssetProvider;
 
+    /**
+     * 知识库 {@code @kb} 接入 v1.0：{@code @} 引用注入器注册表（Spring 自动收集）。
+     *
+     * <p><b>只做前置分派</b>：注册表里有的类型走注入器，其余仍走下面那条按类型硬编码的
+     * {@code if/else}。这样新增 {@code @kb} 不必改动任何既有分支（零回归风险，见实施计划 D-K1）。
+     */
+    private final List<MentionInjector> mentionInjectors;
+
+    /** 知识库 {@code @kb} 接入 v1.0：库元数据与可见集（{@code @kb} 越权判定的数据源） */
+    private final KbCollectionService kbCollectionService;
+
     /** 阶段 4b：assetType → 渲染器（初始化时构建一次；见 {@link #initSkillRenderers()}） */
     private Map<String, SkillRenderer> skillRenderers = Collections.emptyMap();
 
@@ -275,11 +290,20 @@ public class AiChatServiceImpl implements AiChatService {
         // P1：跨数据源引用（@source/ @topic/）与工具所需的快照（数据源索引 + 命名名册）必须在请求线程解析——
         // 工具循环与渲染都可能落到异步线程，那里租户上下文已丢失（见 RequestSnapshot 头注释）。
         final RequestSnapshot requestSnapshot = buildRequestSnapshot();
+        // 阶段 4b 修复：可见 skill / doc 快照也必须在这里（请求线程）算好——工具循环跑在异步线程，
+        // 那里 Sa-Token 与租户上下文都已丢失，loadVisibleSkillBriefs() 会取不到登录用户而抛异常、
+        // 降级为空集合（表现为 list_skills 恒为空，AI 据此断言"当前账号没有 skill"）。
+        final List<SkillBrief> visibleSkills = loadVisibleSkillBriefs();
+        // 知识库 @kb 接入 v1.0：可见库快照同样必须在这里（请求线程）算好——理由与 visibleSkills 完全相同，
+        // 且多一层安全含义：kb-service 不认人，filter.collection 里放什么就搜什么，
+        // 因此"能搜哪些库"只能在请求线程定，工具线程只做集合判定。
+        // 注意它必须早于 buildSchemaContext：@kb 的范围声明就注入在 schema 上下文里。
+        final List<KbCollectionBrief> visibleCollections = loadVisibleKbCollections();
         // schema 也在请求线程构建：元数据接口内部按 id 反查数据源，同样依赖租户上下文
         String built = null;
         try {
             if (request != null) {
-                built = buildSchemaContext(request, requestSnapshot);
+                built = buildSchemaContext(request, requestSnapshot, visibleCollections);
             }
         } catch (Exception e) {
             log.warn("Build schema context before stream failed", e);
@@ -296,13 +320,38 @@ public class AiChatServiceImpl implements AiChatService {
             log.warn("Build flink context before stream failed", e);
         }
         final String flinkContext = builtFlinkContext;
-        // 阶段 4b 修复：可见 skill / doc 快照也必须在这里（请求线程）算好——工具循环跑在异步线程，
-        // 那里 Sa-Token 与租户上下文都已丢失，loadVisibleSkillBriefs() 会取不到登录用户而抛异常、
-        // 降级为空集合（表现为 list_skills 恒为空，AI 据此断言"当前账号没有 skill"）。
-        final List<SkillBrief> visibleSkills = loadVisibleSkillBriefs();
-        chatExecutor.execute(
-                () -> doChat(request, emitter, dataBase, schemaContext, flinkContext, visibleSkills, requestSnapshot));
+        chatExecutor.execute(() -> doChat(
+                request,
+                emitter,
+                dataBase,
+                schemaContext,
+                flinkContext,
+                visibleSkills,
+                visibleCollections,
+                requestSnapshot));
         return emitter;
+    }
+
+    /**
+     * 知识库 {@code @kb} 接入 v1.0：请求线程预解析「当前用户可见的知识库快照」。
+     *
+     * <p>开关关闭时返回空列表（{@code @kb} 不注入、{@code kb_search} 也不注册），
+     * 行为与接入前完全一致——这就是 U-14「开关等价回滚」的落点。
+     */
+    private List<KbCollectionBrief> loadVisibleKbCollections() {
+        try {
+            SystemConfiguration config = SystemConfiguration.getInstances();
+            if (!config.isLlmKbEnable()) {
+                return Collections.emptyList();
+            }
+            List<KbCollectionBrief> briefs = kbCollectionService.listVisibleBriefs();
+            log.info("Load visible kb collections for tool context: count={}", briefs.size());
+            return briefs;
+        } catch (Exception e) {
+            // 失败降级为空集：宁可让 @kb 用不了，也不能让越权范围蒙混过关
+            log.warn("Load visible kb collections failed: {}", e.getMessage());
+            return Collections.emptyList();
+        }
     }
 
     /**
@@ -353,6 +402,8 @@ public class AiChatServiceImpl implements AiChatService {
                 .defaultProfileId(LlmProfile.DEFAULT_ID)
                 .profiles(profiles)
                 .skillEnable(config.isLlmSkillEnable())
+                // 知识库 @kb 接入 v1.0：前端据此决定 @ 候选里是否提供 @kb/
+                .kbEnable(config.isLlmKbEnable())
                 .build();
     }
 
@@ -376,6 +427,7 @@ public class AiChatServiceImpl implements AiChatService {
             String prebuiltSchemaContext,
             String prebuiltFlinkContext,
             List<SkillBrief> visibleSkills,
+            List<KbCollectionBrief> visibleCollections,
             RequestSnapshot requestSnapshot) {
         long start = System.currentTimeMillis();
         TokenUsage totalUsage = new TokenUsage();
@@ -459,7 +511,7 @@ public class AiChatServiceImpl implements AiChatService {
 
             String schemaContext = StrUtil.isNotEmpty(prebuiltSchemaContext)
                     ? prebuiltSchemaContext
-                    : buildSchemaContext(request, requestSnapshot);
+                    : buildSchemaContext(request, requestSnapshot, visibleCollections);
             List<AiChatMessage> messages = buildMessages(request, schemaContext, prebuiltFlinkContext);
 
             StringBuilder answer = new StringBuilder();
@@ -477,6 +529,7 @@ public class AiChatServiceImpl implements AiChatService {
                         run,
                         () -> runRegistry.isCancelled(run),
                         visibleSkills,
+                        visibleCollections,
                         requestSnapshot);
                 mergeUsage(totalUsage, toolRun.getUsage());
                 // 阶段 2c-0：用户已请求中断——停止后续校验 / 修复，直接收尾
@@ -698,6 +751,7 @@ public class AiChatServiceImpl implements AiChatService {
             AiChatRunRegistry.RunContext run,
             BooleanSupplier cancelled,
             List<SkillBrief> visibleSkills,
+            List<KbCollectionBrief> visibleCollections,
             RequestSnapshot requestSnapshot) {
         AiToolContext context = AiToolContext.create(
                 dataBase,
@@ -715,6 +769,9 @@ public class AiChatServiceImpl implements AiChatService {
         // 注意：这里必须使用【请求线程】预解析并传入的快照，不能在此（异步线程）重新查询——
         // 否则 Sa-Token / 租户上下文均已丢失，会静默降级为空集合（4b UAT 的 B1 即此表现）。
         context.setVisibleSkills(visibleSkills);
+        // 知识库 @kb 接入 v1.0：可见库快照（同样是请求线程算好的那份）。
+        // kb_search 只能用这份做集合判定——kb-service 不认人，越权编码一旦进了 filter 就会真的越权检索。
+        context.setVisibleCollections(visibleCollections);
         // P1：跨数据源引用与命名检查所需的快照（数据源索引 + 命名名册）——
         // 同 visibleSkills，必须用请求线程解析好的那份，绝不能在此（异步线程）重新查。
         context.setRequestSnapshot(requestSnapshot);
@@ -1387,7 +1444,9 @@ public class AiChatServiceImpl implements AiChatService {
      * （语义句柄超过 3 段由 {@code SemanticAssetProvider#resolve} 显式拒绝）。
      */
     private static final Pattern PATH_MENTION_PATTERN = Pattern.compile(
-            "@(source|topic|env|semantic)[-/]([\\p{L}\\p{N}_\\-.$]{1,64}(?:/[\\p{L}\\p{N}_\\-.$]{1,64}){0,3})",
+            // 知识库 @kb 接入 v1.0：追加 kb（@kb/<code>）。它与 source/topic/env/semantic 同为路径式句柄，
+            // 且必须在这里登记，否则用户"手打 @kb/c_xxxxxxxx"时后端收不到（前端只在点选候选时登记 mentions）。
+            "@(source|topic|env|semantic|kb)[-/]([\\p{L}\\p{N}_\\-.$]{1,64}(?:/[\\p{L}\\p{N}_\\-.$]{1,64}){0,3})",
             Pattern.CASE_INSENSITIVE);
 
     /**
@@ -1456,6 +1515,9 @@ public class AiChatServiceImpl implements AiChatService {
                 return MentionType.TOPIC;
             case "semantic":
                 return MentionType.SEMANTIC;
+            case "kb":
+                // 知识库 @kb 接入 v1.0：范围句柄（只声明检索范围，正文由 kb_search 召回）
+                return MentionType.KB;
             default:
                 return MentionType.ENV;
         }
@@ -1529,8 +1591,33 @@ public class AiChatServiceImpl implements AiChatService {
         }
     }
 
+    /**
+     * 按 {@code mention.type} 找注入器（知识库 {@code @kb} 接入 v1.0，B0）。
+     *
+     * <p>注册表规模是个位数，线性查找即可，不做 Map 缓存——避免"单例里维护可变状态"这种
+     * 在并发对话下容易出错的写法。类型匹配<b>大小写不敏感</b>：前端历史上发出过 `TABLE` / `table`
+     * 两种写法，既有分支也用 {@code equalsIgnoreCase}。
+     *
+     * @return 对应注入器；未注册的类型返回 {@code null}（调用方继续走原有硬编码分支）
+     */
+    private MentionInjector findMentionInjector(String type) {
+        if (StrUtil.isBlank(type) || CollUtil.isEmpty(mentionInjectors)) {
+            return null;
+        }
+        for (MentionInjector injector : mentionInjectors) {
+            if (injector != null && type.equalsIgnoreCase(injector.type())) {
+                return injector;
+            }
+        }
+        return null;
+    }
+
     private String buildMentionContext(
-            AiChatRequest request, Integer databaseId, String schemaName, RequestSnapshot snapshot) {
+            AiChatRequest request,
+            Integer databaseId,
+            String schemaName,
+            RequestSnapshot snapshot,
+            List<KbCollectionBrief> visibleCollections) {
         List<AiChatMention> mentions = resolveMentions(request);
         if (CollUtil.isEmpty(mentions)) {
             return "";
@@ -1542,6 +1629,21 @@ public class AiChatServiceImpl implements AiChatService {
         sb.append("## 用户显式指定的上下文（@ 引用，优先级最高）\n");
         for (AiChatMention mention : mentions) {
             if (mention == null) {
+                continue;
+            }
+            // 知识库 @kb 接入 v1.0（B0）：注册表里注册过的类型优先走注入器（目前只有 @kb）。
+            // 既有 8 类没有对应实现，仍然走下面的硬编码分支——分支代码一行未动，
+            // B0 的"产物逐字节不变"（U-19）由此保证，新增类型也不必再改本方法。
+            MentionInjector injector = findMentionInjector(mention.getType());
+            if (injector != null) {
+                sb.append(injector.inject(MentionInjectContext.builder()
+                        .mention(mention)
+                        .request(request)
+                        .databaseId(databaseId)
+                        .schemaName(schemaName)
+                        .snapshot(snapshot)
+                        .visibleCollections(visibleCollections)
+                        .build()));
                 continue;
             }
             if (MentionType.TABLE.equalsIgnoreCase(mention.getType())) {
@@ -1875,7 +1977,8 @@ public class AiChatServiceImpl implements AiChatService {
      *   <li>未选中表：输出当前 schema 下的表清单（限量）及其列</li>
      * </ul>
      */
-    private String buildSchemaContext(AiChatRequest request, RequestSnapshot snapshot) {
+    private String buildSchemaContext(
+            AiChatRequest request, RequestSnapshot snapshot, List<KbCollectionBrief> visibleCollections) {
         Integer databaseId = request.getDatabaseId();
         String schemaName = StrUtil.nullToEmpty(request.getSchemaName());
         StringBuilder sb = new StringBuilder();
@@ -1885,7 +1988,7 @@ public class AiChatServiceImpl implements AiChatService {
         // 这类问题根本不需要数据源）会完全看不到引用内容与清单——该缺陷自 4a 起即存在，只是当时
         // 多在已绑定数据源的取数场景下使用，未暴露。
         // 阶段 1a（1.4）：@ 显式引用优先级最高，先于表清单注入
-        sb.append(buildMentionContext(request, databaseId, schemaName, snapshot));
+        sb.append(buildMentionContext(request, databaseId, schemaName, snapshot, visibleCollections));
 
         // P3b：项目级语义清单常驻（请求体 semanticProject + 开关 + view 权限三条件，D17）。
         // 位置：@ 引用之后、skill 清单之前 —— 语义口径优先于技能清单，但低于用户显式引用。
