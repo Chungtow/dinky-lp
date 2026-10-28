@@ -19,6 +19,7 @@
 
 import { ToolbarRoute } from '@/pages/DataStudio/Toolbar/data.d';
 import {
+  BookOutlined,
   CodeOutlined,
   ConsoleSqlOutlined,
   DatabaseOutlined,
@@ -47,6 +48,7 @@ const AiChat = lazy(() => import('@/pages/DataStudio/Toolbar/AiChat'));
 const FlinkSqlClient = lazy(() => import('@/pages/DataStudio/Toolbar/FlinkSqlClient'));
 const Resource = lazy(() => import('@/pages/DataStudio/Toolbar/Resource'));
 const Semantic = lazy(() => import('@/pages/DataStudio/Toolbar/Semantic'));
+const Kb = lazy(() => import('@/pages/DataStudio/Toolbar/Kb'));
 export const ToolbarRoutes: ToolbarRoute[] = [
   {
     key: 'quick-start',
@@ -125,6 +127,15 @@ export const ToolbarRoutes: ToolbarRoute[] = [
     icon: <FileTextOutlined />,
     position: 'leftTop',
     content: () => lazyComponent(<Semantic />)
+  },
+  {
+    // 批次 B：知识库（@kb）只读浏览。内容在 kb-service，目录与权限在 Dinky；
+    // 不做目录树、不做编辑——要改内容回原 tab 改完再推送（批次 C 提供推送入口）
+    key: 'kb',
+    title: () => l('menu.datastudio.kb'),
+    icon: <BookOutlined />,
+    position: 'leftTop',
+    content: () => lazyComponent(<Kb />)
   }
 ];
 

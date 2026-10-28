@@ -1653,5 +1653,30 @@ export default {
   'datastudio.semantic.feedback.resolveFailed': '处理失败',
   'datastudio.semantic.feedback.version': '版本',
   'datastudio.semantic.feedback.from': '提交于',
-  'datastudio.toolbar.rightClick.openCompact': '打开紧凑模式'
+  'datastudio.toolbar.rightClick.openCompact': '打开紧凑模式',
+
+  // 批次 B：左侧栏「知识库」tab（只读浏览）
+  'datastudio.kb.collections': '知识库',
+  'datastudio.kb.refresh': '刷新库列表',
+  'datastudio.kb.noCollection': '还没有可访问的知识库，请联系管理员',
+  'datastudio.kb.emptyDocs': '该知识库暂无文档',
+  'datastudio.kb.loadFailed': '加载知识库失败',
+  'datastudio.kb.readFailed': '打开文档失败',
+  'datastudio.kb.searchPlaceholder': '按文件名搜索（服务端过滤）',
+  'datastudio.kb.totalPrefix': '共',
+  'datastudio.kb.docsUnit': '篇',
+  'datastudio.kb.chunksUnit': '切片',
+  'datastudio.kb.statusProcessing': '处理中',
+  'datastudio.kb.statusFailed': '解析失败',
+  'datastudio.kb.notOpenableTag': '不支持预览',
+  'datastudio.kb.notOpenable':
+    '首期仅支持 Markdown / 代码类文本，PDF / DOCX 请在 MinIO Console 查看',
+  'datastudio.kb.readOnlyTag': '只读',
+  'datastudio.kb.copyDocIdTip': '复制 doc_id（排障时与 kb-service 的 meta.json 对齐用）',
+  'datastudio.kb.docIdCopied': 'doc_id 已复制',
+  'datastudio.kb.copyFailed': '复制失败，请手动选择',
+  'datastudio.kb.justNow': '刚刚',
+  'datastudio.kb.minutesAgo': '分钟前',
+  'datastudio.kb.hoursAgo': '小时前',
+  'datastudio.kb.daysAgo': '天前'
 };

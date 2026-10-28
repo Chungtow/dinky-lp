@@ -32,8 +32,16 @@ export default React.memo((props: ToolbarProp) => {
   const canUseAiChat = HasAuthority(PermissionConstants.DATASTUDIO_AI_CHAT);
   // P2：无 datastudio:semantic:view 时不展示 dbt 语义项目面板（与 AI Chat 同一套可见性约定）
   const canUseSemantic = HasAuthority(PermissionConstants.DATASTUDIO_SEMANTIC_VIEW);
+  // 批次 B：无 registration:kb:view 时不展示「知识库」面板。
+  // ⚠️ 判定用的是 **F 类**权限点的 path（/registration/kb/view，迁移 .1.4.13 新增）——
+  //    `HasAuthority` 只收集 type='F' 的菜单（useAccess.tsx:80-93），拿 C 类页面菜单的 path
+  //    （/registration/kb）判会**恒为 false**，非超管永远看不到 tab。
+  const canUseKb = HasAuthority(PermissionConstants.KB_VIEW);
   const routes = toolbarSelect.allTabs.filter(
-    (key) => (key !== 'aiChat' || canUseAiChat) && (key !== 'semantic' || canUseSemantic)
+    (key) =>
+      (key !== 'aiChat' || canUseAiChat) &&
+      (key !== 'semantic' || canUseSemantic) &&
+      (key !== 'kb' || canUseKb)
   );
   const currentRoutes = routes
     .map((value) => ToolbarRoutes.find((item) => item.key === value)!!)

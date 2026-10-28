@@ -63,7 +63,14 @@ import { API_CONSTANTS } from '@/services/endpoints';
  *  zh: 中间tab 类型
  *  en: Center tab type
  */
-export type CenterTabType = 'web' | 'task' | 'dataSource' | 'resource' | 'semanticFile';
+export type CenterTabType =
+  | 'web'
+  | 'task'
+  | 'dataSource'
+  | 'resource'
+  | 'semanticFile'
+  /** 批次 B：知识库文档只读查看（正文来自 /api/kb/documents/{id}/content） */
+  | 'kbFile';
 
 /**
  * @description:

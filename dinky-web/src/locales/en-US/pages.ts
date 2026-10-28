@@ -1754,5 +1754,31 @@ export default {
   'datastudio.semantic.feedback.resolveFailed': 'Failed to resolve',
   'datastudio.semantic.feedback.version': 'Version',
   'datastudio.semantic.feedback.from': 'Submitted at',
-  'datastudio.toolbar.rightClick.openCompact': 'turn on compact mode'
+  'datastudio.toolbar.rightClick.openCompact': 'turn on compact mode',
+
+  // Batch B: left-side "Knowledge Base" tab (read only)
+  'datastudio.kb.collections': 'Knowledge Base',
+  'datastudio.kb.refresh': 'Refresh collections',
+  'datastudio.kb.noCollection':
+    'No accessible knowledge base yet, please contact the administrator',
+  'datastudio.kb.emptyDocs': 'No documents in this knowledge base',
+  'datastudio.kb.loadFailed': 'Failed to load knowledge base',
+  'datastudio.kb.readFailed': 'Failed to open the document',
+  'datastudio.kb.searchPlaceholder': 'Search by filename (server side)',
+  'datastudio.kb.totalPrefix': 'Total',
+  'datastudio.kb.docsUnit': 'docs',
+  'datastudio.kb.chunksUnit': 'chunks',
+  'datastudio.kb.statusProcessing': 'Processing',
+  'datastudio.kb.statusFailed': 'Failed',
+  'datastudio.kb.notOpenableTag': 'No preview',
+  'datastudio.kb.notOpenable':
+    'Only Markdown / code text is supported for now, view PDF / DOCX in MinIO Console',
+  'datastudio.kb.readOnlyTag': 'Read only',
+  'datastudio.kb.copyDocIdTip': 'Copy doc_id (used to match meta.json in kb-service)',
+  'datastudio.kb.docIdCopied': 'doc_id copied',
+  'datastudio.kb.copyFailed': 'Copy failed, please select manually',
+  'datastudio.kb.justNow': 'just now',
+  'datastudio.kb.minutesAgo': 'min ago',
+  'datastudio.kb.hoursAgo': 'hour(s) ago',
+  'datastudio.kb.daysAgo': 'day(s) ago'
 };

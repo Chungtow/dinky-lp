@@ -201,6 +201,10 @@ export enum API_CONSTANTS {
   KB_COLLECTIONS = '/api/kb/collections',
   /** kb-service 连通性（只回布尔，不含地址与密钥） */
   KB_HEALTH = '/api/kb/health',
+  /** 可见库 + 计数（左侧栏「知识库」tab 上半栏；计数来自 kb-service 实时聚合） */
+  KB_COLLECTION_STATS = '/api/kb/collections/stats',
+  /** 库内文档列表（真实地址 `{id}` / `{id}/content` 拼在其后） */
+  KB_DOCUMENTS = '/api/kb/documents',
 
   /** --------------------------------------------  skill（阶段 4a）  ------------------------------------------------------- */
   SKILL_LIST = '/api/skill/list',

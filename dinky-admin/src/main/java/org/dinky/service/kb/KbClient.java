@@ -21,6 +21,7 @@ package org.dinky.service.kb;
 
 import org.dinky.data.model.SystemConfiguration;
 
+import org.apache.http.Header;
 import org.apache.http.HttpHeaders;
 import org.apache.http.client.config.RequestConfig;
 import org.apache.http.client.methods.CloseableHttpResponse;
@@ -135,6 +136,82 @@ public class KbClient {
         return get("/v1/collections", SEARCH_TIMEOUT_SECONDS, true);
     }
 
+    /**
+     * 库内文档列表（{@code GET /v1/documents}，批次 B）。
+     *
+     * <p><b>{@code sort} 必须显式传</b>：kb-service 的默认值是 {@code doc_id}（为向后兼容），
+     * 不传就是"按哈希乱序"，用户会认为"最近推的没进去"（实施计划 D-K6）。
+     *
+     * @param collection 库编码（必填：不做"全库扫描"，前端每次只能看一个库）
+     * @param q 文件名/文档 id 前缀过滤，可空
+     * @param sort {@code updated_desc}（默认）/ {@code updated_asc} / {@code doc_id}
+     */
+    public JSONObject documents(String collection, String q, String sort, int limit, int offset) {
+        StringBuilder path = new StringBuilder("/v1/documents?collection=")
+                .append(urlEncode(collection))
+                .append("&sort=")
+                .append(urlEncode(StrUtil.blankToDefault(sort, "updated_desc")))
+                .append("&limit=")
+                .append(Math.max(1, Math.min(limit, 100)))
+                .append("&offset=")
+                .append(Math.max(0, offset));
+        if (StrUtil.isNotBlank(q)) {
+            path.append("&q=").append(urlEncode(q));
+        }
+        return get(path.toString(), SEARCH_TIMEOUT_SECONDS, true);
+    }
+
+    /**
+     * 单文档元信息（{@code GET /v1/documents/{id}}）。
+     *
+     * <p>代理层的可见性判定要用它的 {@code collection[]}——<b>只凭 docId 无法判断归属</b>，
+     * 而"传了别人的 docId 就能读原文"是这批最直接的越权面。
+     */
+    public JSONObject documentDetail(String docId) {
+        return get("/v1/documents/" + urlEncode(docId), SEARCH_TIMEOUT_SECONDS, true);
+    }
+
+    /**
+     * 文档原文（{@code GET /v1/documents/{id}/content}，批次 B 只读查看器用）。
+     *
+     * <p>响应是<b>纯文本</b>+ {@code Content-Disposition} 里的文件名，不是 JSON；
+     * {@code 404} 表示原文已被 {@code keep_raw=0} 清理（{@code raw_purged}），
+     * 调用方要给可读提示而不是 500。
+     */
+    public KbDocumentContent documentContent(String docId) {
+        KbRawResponse raw = send(new HttpGet(urlOf("/v1/documents/" + urlEncode(docId) + "/content")),
+                SEARCH_TIMEOUT_SECONDS,
+                true);
+        if (!raw.isSuccess()) {
+            throw errorOf(raw);
+        }
+        KbDocumentContent content = new KbDocumentContent();
+        content.docId = docId;
+        content.filename = raw.filename;
+        content.contentType = raw.contentType;
+        content.text = raw.body;
+        return content;
+    }
+
+    /**
+     * 查询串编码：文件名里常有空格、中文与 {@code #}，不编码会被 kb-service 截断。
+     *
+     * <p>注意用 {@code encode(String, String)} 而不是 {@code encode(String, Charset)}——
+     * 后者是 Java 10+ 的 API，本仓库编译目标是 <b>JDK 8</b>。
+     */
+    private String urlEncode(String value) {
+        try {
+            return java.net.URLEncoder.encode(
+                    StrUtil.nullToEmpty(value), StandardCharsets.UTF_8.name());
+        } catch (java.io.UnsupportedEncodingException e) {
+            // UTF-8 一定存在，此分支不可达；退化为原值以免整条链路失败
+            return StrUtil.nullToEmpty(value);
+        }
+    }
+
+    /** {@code Content-Disposition}：低版本 httpclient 的 {@code HttpHeaders} 里没有该常量，用字面量 */
+    private static final String HEADER_CONTENT_DISPOSITION = "Content-Disposition";
+
     private JSONObject post(String path, JSONObject body, int timeoutSeconds) {
         HttpPost post = new HttpPost(urlOf(path));
         post.setEntity(new StringEntity(body == null ? "{}" : body.toString(), StandardCharsets.UTF_8));
@@ -152,6 +229,43 @@ public class KbClient {
     }
 
     private JSONObject execute(HttpRequestBase request, int timeoutSeconds, boolean needAuth) {
+        KbRawResponse raw = send(request, timeoutSeconds, needAuth);
+        if (raw.isSuccess()) {
+            return StrUtil.isBlank(raw.body) ? new JSONObject() : JSONUtil.parseObj(raw.body);
+        }
+        throw errorOf(raw);
+    }
+
+    /**
+     * 把 HTTP 状态映射成三类异常。
+     *
+     * <p>⚠️ 错误消息里<b>绝不能</b>带请求头（会泄漏 API_KEY）；只取 kb-service 错误体里的
+     * {@code detail.error.message}，拿不到就截断原文。
+     */
+    private RuntimeException errorOf(KbRawResponse raw) {
+        String message = extractErrorMessage(raw.body);
+        if (raw.status == 401 || raw.status == 403) {
+            return new KbUnavailableException("知识库鉴权失败（API Key 不匹配或已失效）：" + message);
+        }
+        if (raw.status == 400) {
+            return new KbBadRequestException(message);
+        }
+        if (raw.status == 404) {
+            return new KbNotFoundException(message);
+        }
+        if (raw.status == 503) {
+            return new KbUnavailableException("知识库暂不可用（embedding 服务异常）：" + message);
+        }
+        return new KbUnavailableException("知识库返回 " + raw.status + "：" + message);
+    }
+
+    /**
+     * 发请求并取回<b>原始</b>响应（不解析 JSON）。
+     *
+     * <p>为什么要拆出裸响应：{@code GET /v1/documents/{id}/content} 返回的是**纯文本**，
+     * 用 {@code JSONUtil.parseObj} 会把 Markdown 原文当成非法 JSON 报错。
+     */
+    private KbRawResponse send(HttpRequestBase request, int timeoutSeconds, boolean needAuth) {
         SystemConfiguration config = SystemConfiguration.getInstances();
         String baseUrl = config.getKbBaseUrl();
         if (StrUtil.isBlank(baseUrl)) {
@@ -172,25 +286,16 @@ public class KbClient {
                 }
             }
             try (CloseableHttpResponse response = httpClient.execute(request)) {
-                int status = response.getStatusLine().getStatusCode();
-                String body = response.getEntity() == null
+                KbRawResponse raw = new KbRawResponse();
+                raw.status = response.getStatusLine().getStatusCode();
+                raw.body = response.getEntity() == null
                         ? ""
                         : EntityUtils.toString(response.getEntity(), StandardCharsets.UTF_8);
-                if (status >= 200 && status < 300) {
-                    return StrUtil.isBlank(body) ? new JSONObject() : JSONUtil.parseObj(body);
-                }
-                // ⚠️ 错误消息里绝不能带请求头（会泄漏 API_KEY）
-                String message = extractErrorMessage(body);
-                if (status == 401 || status == 403) {
-                    throw new KbUnavailableException("知识库鉴权失败（API Key 不匹配或已失效）：" + message);
-                }
-                if (status == 400) {
-                    throw new KbBadRequestException(message);
-                }
-                if (status == 503) {
-                    throw new KbUnavailableException("知识库暂不可用（embedding 服务异常）：" + message);
-                }
-                throw new KbUnavailableException("知识库返回 " + status + "：" + message);
+                Header contentType = response.getFirstHeader(HttpHeaders.CONTENT_TYPE);
+                raw.contentType = contentType == null ? null : contentType.getValue();
+                Header disposition = response.getFirstHeader(HEADER_CONTENT_DISPOSITION);
+                raw.filename = filenameOf(disposition == null ? null : disposition.getValue());
+                return raw;
             }
         } catch (KbUnavailableException | KbBadRequestException e) {
             throw e;
@@ -204,6 +309,48 @@ public class KbClient {
                 request.reset();
             }
         }
+    }
+
+    /**
+     * 从 {@code Content-Disposition} 取文件名。
+     *
+     * <p>kb-service 下发的形如 {@code inline; filename*=UTF-8''%E5%AE%9E%E6%88%98.md}——
+     * 只有 {@code filename*} 段是 UTF-8 百分号编码，{@code filename=} 段是 ASCII 退化值（中文会变问号），
+     * 所以优先取 {@code filename*}。
+     */
+    private String filenameOf(String disposition) {
+        if (StrUtil.isBlank(disposition)) {
+            return null;
+        }
+        int star = disposition.indexOf("filename*=");
+        if (star >= 0) {
+            String value = disposition.substring(star + "filename*=".length()).trim();
+            int semicolon = value.indexOf(';');
+            if (semicolon >= 0) {
+                value = value.substring(0, semicolon);
+            }
+            value = StrUtil.unWrap(value.trim(), '"');
+            // 形如 UTF-8''%E5%AE%9E...：丢掉 charset 与语言段
+            int sep = value.indexOf("''");
+            if (sep >= 0) {
+                value = value.substring(sep + 2);
+            }
+            try {
+                return java.net.URLDecoder.decode(value, StandardCharsets.UTF_8.name());
+            } catch (java.io.UnsupportedEncodingException e) {
+                return value;
+            }
+        }
+        int plain = disposition.indexOf("filename=");
+        if (plain >= 0) {
+            String value = disposition.substring(plain + "filename=".length()).trim();
+            int semicolon = value.indexOf(';');
+            if (semicolon >= 0) {
+                value = value.substring(0, semicolon);
+            }
+            return StrUtil.unWrap(value.trim(), '"');
+        }
+        return null;
     }
 
     private String urlOf(String path) {
@@ -246,6 +393,54 @@ public class KbClient {
     public static class KbBadRequestException extends RuntimeException {
         public KbBadRequestException(String message) {
             super(message);
+        }
+    }
+
+    /**
+     * 资源不存在（404）：文档没入库，或原文已被 {@code keep_raw=0} 清理（{@code raw_purged}）。
+     *
+     * <p>与 {@link KbUnavailableException} 分开，是因为<B>它不是"服务坏了"</B>——给用户看
+     * "该文档原文未保留，无法在编辑区打开"比"知识库不可用"准确得多。
+     */
+    public static class KbNotFoundException extends RuntimeException {
+        public KbNotFoundException(String message) {
+            super(message);
+        }
+    }
+
+    /** 未经解析的原始响应：状态、正文、content-type 与 {@code Content-Disposition} 里的文件名 */
+    private static class KbRawResponse {
+        private int status;
+        private String body;
+        private String contentType;
+        private String filename;
+
+        private boolean isSuccess() {
+            return status >= 200 && status < 300;
+        }
+    }
+
+    /** 文档原文（纯文本），带上 kb-service 声明的文件名与 content-type */
+    public static class KbDocumentContent {
+        private String docId;
+        private String filename;
+        private String contentType;
+        private String text;
+
+        public String getDocId() {
+            return docId;
+        }
+
+        public String getFilename() {
+            return filename;
+        }
+
+        public String getContentType() {
+            return contentType;
+        }
+
+        public String getText() {
+            return text;
         }
     }
 }

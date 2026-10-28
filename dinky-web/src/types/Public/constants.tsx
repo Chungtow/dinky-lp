@@ -199,6 +199,8 @@ export enum PermissionConstants {
   DATASTUDIO_AI_CHAT = '/aiChat/panel/use',
   DATASTUDIO_AI_CHAT_WRITE = '/aiChat/panel/write',
   // dbt 语义项目在线编辑（P2）：3 段式，与后端 datastudio:semantic:view / edit 自洽
+  /** 知识库（@kb）浏览：左侧栏「知识库」tab 的可见性判定（F 类权限点，见迁移 .1.4.13） */
+  KB_VIEW = '/registration/kb/view',
   DATASTUDIO_SEMANTIC_VIEW = '/datastudio/semantic/view',
   DATASTUDIO_SEMANTIC_EDIT = '/datastudio/semantic/edit',
   // P4 一期：处理语义反馈（提交反馈沿用 VIEW——能看的人都能提，否则收不到反馈）

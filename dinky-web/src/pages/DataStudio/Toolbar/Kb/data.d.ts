@@ -1,0 +1,92 @@
+/*
+ *
+ *  Licensed to the Apache Software Foundation (ASF) under one or more
+ *  contributor license agreements.  See the NOTICE file distributed with
+ *  this work for additional information regarding copyright ownership.
+ *  The ASF licenses this file to You under the Apache License, Version 2.0
+ *  (the "License"); you may not use this file except in compliance with
+ *  the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ *
+ */
+
+/**
+ * 知识库 tab 的数据契约（批次 B）。
+ *
+ * <p>字段名保持与后端 VO 一致（camelCase），不做二次命名转换：`openable` / `lastTs` 这类
+ * 判定与时间戳一旦在前端换名字，就会出现"两处口径"，升级时必有一处忘改。
+ */
+
+/** 一个可见的知识库 + 内容侧计数 */
+export type KbCollectionStat = {
+  /** 库编码（永不展示裸 code，见先行记录 §10.5；仅排障时显示） */
+  code: string;
+  /** 显示名 */
+  name: string;
+  /** 一句话说明 */
+  description?: string;
+  /** 文档数（kb-service 实时聚合；0 也可能是内容侧不可用） */
+  docs: number;
+  /** 切片数 */
+  chunks: number;
+  /** 最近入库时间（epoch 秒；0 = 空库） */
+  lastTs: number;
+};
+
+/** 库内一篇文档 */
+export type KbDocument = {
+  /** sha256(正文)，全局唯一；打开原文用 */
+  docId: string;
+  filename: string;
+  size?: number;
+  contentType?: string;
+  /** queued / parsing / embedding / ready / failed */
+  status: string;
+  chunks?: number;
+  /** epoch 秒 */
+  updatedAt?: number;
+  /** 所属库编码（可能多归属） */
+  collections?: string[];
+  /** 解析失败原因（status=failed 时有值） */
+  error?: string;
+  /** 是否可在编辑区只读打开（服务端判定：仅 Markdown / 代码类文本） */
+  openable: boolean;
+};
+
+/** 文档列表分页结果 */
+export type KbDocumentPage = {
+  collection: string;
+  /** 命中总数（跨页），不是本页条数 */
+  total: number;
+  items: KbDocument[];
+  limit: number;
+  offset: number;
+};
+
+/** 文档原文（只读） */
+export type KbDocumentContent = {
+  docId: string;
+  filename: string;
+  contentType?: string;
+  content: string;
+  /** 正文字符数 */
+  size: number;
+  collections?: string[];
+};
+
+/** 列表查询参数 */
+export type KbDocumentQuery = {
+  collection: string;
+  q?: string;
+  /** 必须显式传 updated_desc，否则 kb-service 按 doc_id 哈希序返回（D-K6） */
+  sort?: string;
+  limit?: number;
+  offset?: number;
+};
