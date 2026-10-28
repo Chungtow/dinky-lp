@@ -207,11 +207,16 @@ public class KbClient {
      * <ul>
      *   <li>首次推送 → <b>HTTP 202</b>、{@code dedup=false}、{@code status=queued}，
      *       之后需轮询 {@code GET /v1/documents/{id}} 等 {@code ready}/{@code failed}；</li>
-     *   <li>同内容再推 → <b>HTTP 200</b>、{@code dedup=true}、{@code status=ready}，
-     *       响应里的 {@code collection[]} 是<b>合并后</b>的最终归属（只加不减）；</li>
+     *   <li>同内容再推（且库里那条已经 {@code ready}）→ <b>HTTP 200</b>、{@code dedup=true}、
+     *       {@code status=ready}，响应里的 {@code collection[]} 是<b>合并后</b>的最终归属（只加不减）；</li>
      *   <li>内容改过再推 → 新 {@code doc_id}，旧文档仍留在库里（A 侧没有"更新"动作，
      *       实测 {@code supersede_result} 恒为 {@code none}）。</li>
      * </ul>
+     *
+     * <p>⚠️ <b>{@code dedup=false} 不等于"这是新文档"</b>（2026-10-28 实测）：库里同一条还在
+     * {@code queued}/{@code parsing} 时再推，A 侧回 {@code dedup=false}，但 {@code doc_id}
+     * 与上次<b>完全相同</b>——没有重复入库，只是那条还没就绪、dedup 判定还没生效。
+     * 所以界面上"dedup=false"的正确解读是"已入队，去轮询状态"，而不是"新建了一篇"。
      *
      * <p><b>为什么手写 multipart</b>：仓库没有 httpmime 依赖，而这里要传的只有一个纯文本
      * 部件，为它引一个依赖不值得。格式按 RFC 7578：每部分前导边界行、结尾 {@code --boundary--}。

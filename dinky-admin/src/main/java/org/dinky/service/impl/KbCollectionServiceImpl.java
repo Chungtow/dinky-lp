@@ -309,10 +309,11 @@ public class KbCollectionServiceImpl extends SuperServiceImpl<KbCollectionMapper
         List<Integer> roleIds = listRoleIdsOf(actorId);
         List<Integer> myTenantIds = listTenantIdsOf(actorId);
         ids.addAll(selectGrantedIds(
-                KbCollectionGrant.SUBJECT_USER, Collections.singletonList(actorId), KbCollectionGrant.PERMISSION_WRITE));
+                KbCollectionGrant.SUBJECT_USER,
+                Collections.singletonList(actorId),
+                KbCollectionGrant.PERMISSION_WRITE));
         if (!roleIds.isEmpty()) {
-            ids.addAll(selectGrantedIds(
-                    KbCollectionGrant.SUBJECT_ROLE, roleIds, KbCollectionGrant.PERMISSION_WRITE));
+            ids.addAll(selectGrantedIds(KbCollectionGrant.SUBJECT_ROLE, roleIds, KbCollectionGrant.PERMISSION_WRITE));
         }
         if (!myTenantIds.isEmpty()) {
             ids.addAll(selectGrantedIds(

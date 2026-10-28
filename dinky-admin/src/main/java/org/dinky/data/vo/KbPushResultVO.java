@@ -35,7 +35,9 @@ import lombok.Setter;
  *   <li>{@code dedup=false}：新文档，{@code status=queued}，解析与 embedding 在后台跑，
  *       要轮询详情等 {@code ready}/{@code failed}；</li>
  *   <li>{@code dedup=true}：同内容已存在，<b>没有重复入库</b>，{@code collections} 是合并后的
- *       最终归属——用户最需要的恰恰是这一句，只提示"已存在"会让人以为归属变了；</li>
+ *       最终归属——用户最需要的恰恰是这一句，只提示"已存在"会让人以为归属变了；
+ *       ⚠️ 该标志只在库里那条已经 {@code ready} 时为 true：还在排队/解析时再推，
+ *       会得到 {@code dedup=false} 但 {@code docId} 与上次相同（2026-10-28 实测）；</li>
  *   <li>内容改过：会得到<b>新</b> {@code docId}，旧版本仍在库里（{@code supersede_result=none}），
  *       所以这里从不承诺"覆盖"。</li>
  * </ol>

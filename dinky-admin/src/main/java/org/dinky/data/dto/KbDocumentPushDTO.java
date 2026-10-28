@@ -46,24 +46,16 @@ public class KbDocumentPushDTO implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
-    @ApiModelProperty(
-            value = "Filename",
-            notes = "必须带后缀：后缀决定解析方式（.md 切标题，.sql/.yaml 等按纯文本切分）",
-            required = true)
+    @ApiModelProperty(value = "Filename", notes = "必须带后缀：后缀决定解析方式（.md 切标题，.sql/.yaml 等按纯文本切分）", required = true)
     private String filename;
 
     @ApiModelProperty(value = "Content", notes = "正文（UTF-8 文本）", required = true)
     private String content;
 
-    @ApiModelProperty(
-            value = "Collections",
-            notes = "目标库编码；<b>至少一个</b>，且每个都必须有写权限",
-            required = true)
+    @ApiModelProperty(value = "Collections", notes = "目标库编码；<b>至少一个</b>，且每个都必须有写权限", required = true)
     private List<String> collections;
 
-    @ApiModelProperty(
-            value = "Source",
-            notes = "来源：semantic / skill / resource / editor；服务端据此映射 path，前端不可自定义 path")
+    @ApiModelProperty(value = "Source", notes = "来源：semantic / skill / resource / editor；服务端据此映射 path，前端不可自定义 path")
     private String source;
 
     @ApiModelProperty(value = "ExternalId", notes = "Dinky 侧业务主键（如 skill id），便于回溯")

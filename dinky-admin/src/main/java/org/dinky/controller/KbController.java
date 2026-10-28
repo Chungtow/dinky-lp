@@ -25,12 +25,12 @@ import org.dinky.data.constant.PermissionConstants;
 import org.dinky.data.dto.KbDocumentPushDTO;
 import org.dinky.data.enums.BusinessType;
 import org.dinky.data.exception.BusException;
+import org.dinky.data.model.Skill;
 import org.dinky.data.result.Result;
 import org.dinky.data.vo.KbCollectionStatVO;
 import org.dinky.data.vo.KbDocumentContentVO;
 import org.dinky.data.vo.KbDocumentPageVO;
 import org.dinky.data.vo.KbDocumentVO;
-import org.dinky.data.model.Skill;
 import org.dinky.data.vo.KbPushResultVO;
 import org.dinky.mapper.SkillMapper;
 import org.dinky.service.KbCollectionService;
@@ -46,8 +46,6 @@ import java.util.Set;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
-import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
-
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -55,6 +53,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 
 import cn.dev33.satoken.annotation.SaCheckLogin;
 import cn.dev33.satoken.annotation.SaCheckPermission;
@@ -396,8 +396,8 @@ public class KbController {
         }
 
         String path = pathOfSource(dto.getSource());
-        JSONObject body = proxied(() -> kbClient.createDocument(
-                filename, content, String.join(",", targets), path, dto.getExternalId()));
+        JSONObject body = proxied(
+                () -> kbClient.createDocument(filename, content, String.join(",", targets), path, dto.getExternalId()));
 
         KbPushResultVO result = new KbPushResultVO();
         result.setDocId(body.getStr("doc_id"));
@@ -428,9 +428,7 @@ public class KbController {
         if (!result.isDedup()) {
             return "已推送，后台解析中（可在「知识库」tab 查看状态）";
         }
-        return StrUtil.isBlank(owners)
-                ? "已存在（文档未重复入库）"
-                : "已存在（文档未重复入库），当前归属：" + owners;
+        return StrUtil.isBlank(owners) ? "已存在（文档未重复入库）" : "已存在（文档未重复入库），当前归属：" + owners;
     }
 
     /**

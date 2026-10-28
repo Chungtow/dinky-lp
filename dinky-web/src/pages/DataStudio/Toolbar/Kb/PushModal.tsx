@@ -43,7 +43,9 @@ export type KbPushPayload = {
  * <ul>
  *   <li>新文档 → 202 + {@code queued}，<b>解析是异步的</b>，所以要轮询到 {@code ready}/{@code failed}；</li>
  *   <li>同内容再推 → 200 + {@code dedup=true}，<b>没有重复入库</b>，返回的是合并后的最终归属——
- *       只提示"已存在"会让人以为归属变了；</li>
+ *       只提示"已存在"会让人以为归属变了；⚠️ 该标志只在那条已经 {@code ready} 时为 true，
+ *       还在解析时再推会回 {@code dedup=false} 但 doc_id 相同（实测），所以 dedup=false
+ *       一律按"去轮询状态"处理；</li>
  *   <li>内容改过 → 新 {@code doc_id}，<b>旧版本仍在库里</b>（本侧不自动删，D-K4）。</li>
  * </ul>
  *
