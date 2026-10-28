@@ -63,26 +63,17 @@ import lombok.extern.slf4j.Slf4j;
 public class KbCollectionServiceImpl extends SuperServiceImpl<KbCollectionMapper, KbCollection>
         implements KbCollectionService {
 
-    /** 可见性：同租户共享 */
-    public static final String VISIBILITY_TENANT = "tenant";
-
-    /** 授权表（D-K15：按租户/角色/用户额外授权） */
+    /** 授权表（D-K15：唯一授权入口，按租户/角色/用户） */
     @Autowired
     private KbCollectionGrantMapper grantMapper;
 
-    /** 用户-租户多对多（一人可属多个租户，D-K15 的"按租户授权"依据此表） */
+    /** 用户-租户多对多（一人可属多个租户，"按租户授权"的判定依据） */
     @Autowired
     private UserTenantMapper userTenantMapper;
 
     /** 角色（按角色授权时用） */
     @Autowired
     private RoleService roleService;
-
-    /** 可见性：私有（默认） */
-    public static final String VISIBILITY_PRIVATE = "private";
-
-    /** 可见性：全体公开（不限租户，所有登录用户可见） */
-    public static final String VISIBILITY_PUBLIC = "public";
 
     /**
      * 编码规范：{@code c_} + 8 位小写 hex。
@@ -144,24 +135,26 @@ public class KbCollectionServiceImpl extends SuperServiceImpl<KbCollectionMapper
     /**
      * 可见性条件（<b>唯一</b>的过滤入口，代理层与工具都靠它）。
      *
-     * <p>口径（D-K15 起）：{@code enabled=1} 且满足下列<b>任一</b>——
+     * <p>口径（v1.4 收敛后）：{@code enabled=1} 且满足下列<b>任一</b>——
      * <ol>
-     *   <li>本人所有（{@code owner_id = 我}）；</li>
-     *   <li>{@code visibility = public}（全体登录用户）；</li>
-     *   <li>{@code visibility = tenant} 且<b>库的归属租户 ∈ 我的租户集合</b>（依据
-     *       {@code dinky_user_tenant}，一人可属多租户——这比只看"当前会话租户"更符合直觉：
-     *       人在 A 租户上下文里，依然看得到自己所属 B 租户的共享库）；</li>
-     *   <li>或在 {@code dinky_kb_collection_grant} 里被显式授权（按 租户/角色/用户）。</li>
+     *   <li>{@code is_public = 1}（全体登录用户）——<b>唯一</b>的"非授权"可见通道；</li>
+     *   <li>{@code owner_id = 我}（属主天然可见，且拥有管理权）；</li>
+     *   <li>命中 {@code dinky_kb_collection_grant}（按 <b>租户</b>/角色/用户授权，见
+     *       {@link #listGrantedCollectionIds}）。</li>
      * </ol>
      *
-     * <p>{@code tenantId == null}（异步线程 / 未带租户）时仍能靠"我的租户集合"放行 tenant 档；
-     * 若连 actorId 都没有，则只剩 public ——宁可少给也不能多给。
+     * <p><b>为什么不再有 visibility 三档</b>：{@code private} ≈ "无任何 grant"、
+     * {@code tenant} ≈ "grant 给该租户"，两者都能被 grant 表达，留着就是第二套授权入口；
+     * 收敛后"授权只看 grant 表"，不会出现"两处都能配、以哪张为准"的困惑（D-K15 修订）。
+     *
+     * <p>{@code tenantId} 参数保留只为<b>向后兼容方法签名</b>，<b>不参与判定</b>——
+     * 归属租户不再自动获得可见性，必须显式授权（这也避免了"人在 A 租户却看到 B 租户库"的隐性扩散）。
      */
     private LambdaQueryWrapper<KbCollection> visibleWrapper(Integer actorId, Integer tenantId) {
         LambdaQueryWrapper<KbCollection> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(KbCollection::getEnabled, true);
 
-        // D-K15：用户所属租户（dinky_user_tenant 是真多对多）与显式授权命中的库
+        // 授权命中（唯一的授权来源）
         List<Integer> myTenantIds = listTenantIdsOf(actorId);
         List<Long> grantedIds = listGrantedCollectionIds(actorId, myTenantIds);
 
@@ -172,15 +165,7 @@ public class KbCollectionServiceImpl extends SuperServiceImpl<KbCollectionMapper
                 // 没有操作者就没有"本人资产"这一支：留一个恒假条件，避免 and() 段为空导致条件被吞
                 w.eq(KbCollection::getId, -1L);
             }
-            w.or(x -> x.eq(KbCollection::getVisibility, VISIBILITY_PUBLIC));
-            if (!myTenantIds.isEmpty()) {
-                w.or(x -> x.eq(KbCollection::getVisibility, VISIBILITY_TENANT)
-                        .in(KbCollection::getTenantId, myTenantIds));
-            }
-            if (tenantId != null) {
-                // 兼容：显式传入的会话租户也放行（与改造前行为一致，避免回退）
-                w.or(x -> x.eq(KbCollection::getVisibility, VISIBILITY_TENANT).eq(KbCollection::getTenantId, tenantId));
-            }
+            w.or(x -> x.eq(KbCollection::getIsPublic, true));
             if (!grantedIds.isEmpty()) {
                 w.or(x -> x.in(KbCollection::getId, grantedIds));
             }
@@ -218,52 +203,47 @@ public class KbCollectionServiceImpl extends SuperServiceImpl<KbCollectionMapper
      * {@code permission=? AND a OR b}，因 AND 优先级更高而把 write 权限的行也带出来。
      */
     private List<Long> listGrantedCollectionIds(Integer actorId, List<Integer> myTenantIds) {
+        // 三类主体各查一次再合并：比在一个 wrapper 里拼 or()/and() 嵌套可靠得多——
+        // MyBatis-Plus 的 `or()` 是"直接追加 OR 连接符"，紧跟 `and(consumer)` 会拼出
+        // `OR AND (...)` 这种非法片段，且异常会被下面的 catch 静默吞成"无授权"
+        // （UAT 2026-10-28 实际踩到：ta_dev1 明明被租户授权却看不到库）。
         List<Integer> roleIds = listRoleIdsOf(actorId);
-        if (actorId == null && roleIds.isEmpty() && myTenantIds.isEmpty()) {
-            return Collections.emptyList();
+        Set<Long> ids = new LinkedHashSet<>();
+        if (actorId != null) {
+            ids.addAll(selectGrantedIds(KbCollectionGrant.SUBJECT_USER, Collections.singletonList(actorId)));
+        }
+        if (!roleIds.isEmpty()) {
+            ids.addAll(selectGrantedIds(KbCollectionGrant.SUBJECT_ROLE, roleIds));
+        }
+        if (!myTenantIds.isEmpty()) {
+            ids.addAll(selectGrantedIds(KbCollectionGrant.SUBJECT_TENANT, myTenantIds));
+        }
+        return new ArrayList<>(ids);
+    }
+
+    /** 按单一主体类型查有效授权（{@code permission=view}）对应的知识库 id。 */
+    private Set<Long> selectGrantedIds(String subjectType, List<Integer> subjectIds) {
+        Set<Long> ids = new LinkedHashSet<>();
+        if (subjectIds == null || subjectIds.isEmpty()) {
+            return ids;
         }
         try {
             LambdaQueryWrapper<KbCollectionGrant> query = new LambdaQueryWrapper<>();
             query.eq(KbCollectionGrant::getPermission, KbCollectionGrant.PERMISSION_VIEW);
+            query.eq(KbCollectionGrant::getSubjectType, subjectType);
+            query.in(KbCollectionGrant::getSubjectId, subjectIds);
             query.select(KbCollectionGrant::getCollectionId);
-            query.and(w -> {
-                boolean first = true;
-                if (actorId != null) {
-                    w.and(x -> x.eq(KbCollectionGrant::getSubjectType, KbCollectionGrant.SUBJECT_USER)
-                            .eq(KbCollectionGrant::getSubjectId, actorId));
-                    first = false;
-                }
-                if (!roleIds.isEmpty()) {
-                    if (!first) {
-                        w.or();
-                    }
-                    w.and(x -> x.eq(KbCollectionGrant::getSubjectType, KbCollectionGrant.SUBJECT_ROLE)
-                            .in(KbCollectionGrant::getSubjectId, roleIds));
-                    first = false;
-                }
-                if (!myTenantIds.isEmpty()) {
-                    if (!first) {
-                        w.or();
-                    }
-                    w.and(x -> x.eq(KbCollectionGrant::getSubjectType, KbCollectionGrant.SUBJECT_TENANT)
-                            .in(KbCollectionGrant::getSubjectId, myTenantIds));
-                    first = false;
-                }
-                if (first) {
-                    w.eq(KbCollectionGrant::getId, -1L);
-                }
-            });
-            Set<Long> ids = new LinkedHashSet<>();
             for (KbCollectionGrant grant : grantMapper.selectList(query)) {
                 if (grant != null && grant.getCollectionId() != null) {
                     ids.add(grant.getCollectionId());
                 }
             }
-            return new ArrayList<>(ids);
         } catch (Exception e) {
-            log.warn("Failed to resolve granted collections for user {}, fallback to empty", actorId, e);
-            return Collections.emptyList();
+            // 不静默：授权解析失败必须能被看见，否则表现为"配了授权却没生效"
+            log.error(
+                    "Failed to resolve granted collections: subjectType={}, subjectIds={}", subjectType, subjectIds, e);
         }
+        return ids;
     }
 
     /** 用户所属角色 id（按角色授权用；失败降级为空）。 */

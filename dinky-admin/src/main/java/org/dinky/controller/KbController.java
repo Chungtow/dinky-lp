@@ -28,6 +28,7 @@ import org.dinky.service.KbCollectionService;
 import org.dinky.service.kb.KbClient;
 
 import java.util.List;
+import java.util.stream.Collectors;
 
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -36,6 +37,7 @@ import org.springframework.web.bind.annotation.RestController;
 import cn.dev33.satoken.annotation.SaCheckLogin;
 import cn.dev33.satoken.annotation.SaCheckPermission;
 import cn.dev33.satoken.annotation.SaMode;
+import cn.dev33.satoken.stp.StpUtil;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
 import lombok.RequiredArgsConstructor;
@@ -78,7 +80,24 @@ public class KbController {
             value = {PermissionConstants.REGISTRATION_KB_VIEW, PermissionConstants.AI_CHAT_USE},
             mode = SaMode.OR)
     public Result<List<KbCollectionBrief>> listVisibleCollections() {
-        return Result.succeed(kbCollectionService.listVisibleBriefs());
+        List<KbCollectionBrief> briefs = kbCollectionService.listVisibleBriefs();
+        // 可见集是排障第一现场：谁、看到几个、分别是哪几个（只记 code，不记名称与归属）。
+        // 缺了这行，出问题只能靠猜——"候选里少了一个库"既可能是可见性算错、也可能是前端过滤。
+        log.info(
+                "KB visible collections: user={}, size={}, codes={}",
+                currentUserIdQuietly(),
+                briefs.size(),
+                briefs.stream().map(KbCollectionBrief::getCode).collect(Collectors.toList()));
+        return Result.succeed(briefs);
+    }
+
+    /** 取当前用户 id，仅用于日志（不抛异常，避免影响主流程）。 */
+    private Object currentUserIdQuietly() {
+        try {
+            return StpUtil.getLoginIdDefaultNull();
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /**

@@ -47,9 +47,13 @@ import lombok.Data;
  * <p><b>为什么不存库内文档成员表</b>：归属是 kb-service 侧 payload 的属性，双写必然漂移；
  * 列表/计数一律实时向 kb-service 取（{@code GET /v1/collections}）。这是先行记录 v0.3 的既定决策。
  *
- * <p><b>权限</b>：本表<b>不接入</b> MyBatis-Plus 租户插件（与 {@link Skill} 同理），
- * 所有可见性判定走<b>显式条件</b>（{@code owner_id} / {@code tenant_id} / {@code visibility}），
- * 以免受「异步线程丢失租户上下文」影响（调研 §4.6.1 事实 3）。
+ * <p><b>权限（v1.4 收敛后）</b>：本表<b>只描述"这是谁的库"</b>，<b>不再承载授权</b>。
+ * 可见性 = {@code is_public} 或 属主 或 命中 {@code dinky_kb_collection_grant}——
+ * 授权只有一个入口（grant 表），避免"两处都能授权、以哪张为准"的双真相源
+ * （原 {@code visibility(private|tenant|public)} 三档已删除，见 D-K15 修订）。
+ *
+ * <p>本表<b>不接入</b> MyBatis-Plus 租户插件（与 {@link Skill} 同理），所有可见性判定走
+ * <b>显式条件</b>，以免受「异步线程丢失租户上下文」影响（调研 §4.6.1 事实 3）。
  *
  * @since 2026/10/27
  */
@@ -79,11 +83,20 @@ public class KbCollection implements Serializable {
     @ApiModelProperty(value = "Owner Id", dataType = "Integer", notes = "属主（sys_user.id）")
     private Integer ownerId;
 
-    @ApiModelProperty(value = "Tenant Id", dataType = "Integer", notes = "租户（sys_tenant.id，请求线程内取值）")
+    @ApiModelProperty(value = "Tenant Id", dataType = "Integer", notes = "组织归属租户（sys_tenant.id）")
     private Integer tenantId;
 
-    @ApiModelProperty(value = "Visibility", dataType = "String", notes = "private | tenant | public")
-    private String visibility;
+    /**
+     * 是否公开给全体登录用户。
+     *
+     * <p><b>这是唯一的"非授权"可见通道</b>（grant 表表达不了"所有人"）。除此之外的可见性，
+     * 一律由 {@code dinky_kb_collection_grant} 表达，包括"按租户授权"。
+     *
+     * <p>原 {@code visibility} 三档中：{@code private} ≈ 无任何 grant；{@code tenant} ≈
+     * grant(tenant_id)；{@code public} = 本字段。前两者已被 grant 覆盖，故删除。
+     */
+    @ApiModelProperty(value = "Is Public", dataType = "Boolean", notes = "是否公开（唯一非授权可见通道）")
+    private Boolean isPublic;
 
     @ApiModelProperty(value = "Enabled", dataType = "Boolean", notes = "是否可被检索（0 否 / 1 是）")
     private Boolean enabled;

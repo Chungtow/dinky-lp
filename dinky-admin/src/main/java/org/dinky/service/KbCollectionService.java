@@ -28,7 +28,8 @@ import java.util.List;
 /**
  * 知识库（{@code @kb}）服务（知识库 @kb 接入 v1.0）。
  *
- * <p><b>权限一律走显式条件</b>（{@code owner_id} / {@code tenant_id} / {@code visibility}），
+ * <p><b>权限一律走显式条件</b>（{@code owner_id} / {@code is_public} /
+ * {@code dinky_kb_collection_grant}），
  * 不依赖 MyBatis-Plus 租户插件、也不依赖 {@code TenantContextHolder} 做过滤——与
  * {@link SkillService} 同一口径（AI 对话跑在异步线程，那里租户上下文会丢）。
  *

@@ -36,13 +36,17 @@ import lombok.NoArgsConstructor;
 /**
  * 知识库授权（按租户 / 角色 / 用户）。
  *
- * <p><b>为什么需要这张表</b>：{@link KbCollection} 上的 {@code owner_id} + {@code visibility}
- * 只能表达"一个库归一个租户"（或"本人 / 全体公开"）三档，无法表达
- * <b>"同一个库同时授权给 A、B 两个租户"</b>，也无法按角色授权。UAT 阶段确认：知识库的实际
- * 使用形态是<b>按租户授权为主、个人授权为辅</b>，故补此 ACL 表。
+ * <p><b>定位（v1.4 收敛后）</b>：本表是<b>唯一的授权入口</b>。{@link KbCollection} 上的
+ * {@code owner_id}（属主）与 {@code is_public}（公开）不是"授权"，而是归属与全局可见；
+ * 其余一切"谁能看 / 谁能写"都记在这里，包括按租户授权。
  *
- * <p><b>与 visibility 的关系</b>：{@code visibility} 仍是"快捷三档"，优先级最高、无需查本表；
- * 本表只承载"额外授权"，可见性 = owner ∪ public ∪ 归属租户 ∈ 我的租户 ∪ 本表命中。
+ * <p><b>为什么必须是独立一张表</b>：一个库要能同时授权给 A、B 两个租户，也要能按角色或
+ * 个人授权——{@code dinky_kb_collection} 上的单值列表达不了。UAT 确认知识库的实际使用形态是
+ * <b>按租户授权为主、个人授权为辅</b>。
+ *
+ * <p><b>为什么不再保留 visibility 三档</b>：{@code private} ≈ 无任何 grant、
+ * {@code tenant} ≈ grant(tenant_id)，与原 {@code visibility} 完全重叠；保留即出现
+ * "两处都能授权、以哪张为准"的双真相源（D-K15 修订）。
  *
  * <p><b>为什么 subject_id 不建外键</b>：它是多态列（user / role / tenant 三类共用一列），
  * 数据库无法用一个外键指向三张表；合法性由应用层保证，ER 图中本表通过
