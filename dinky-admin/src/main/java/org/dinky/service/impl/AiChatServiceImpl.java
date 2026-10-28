@@ -656,23 +656,31 @@ public class AiChatServiceImpl implements AiChatService {
             audit.setExecStatus(execStatus);
             audit.setExecError(StrUtil.sub(execError, 0, 2000));
             audit.setRetryCount(retryCount);
+            // 知识库审计（批次 D）：三列都是"可查询的事实"，不是自由文本——
+            // 排障时能直接按 kb_denied 找出"谁在试越权"、按 kb_collections 找"这条回答检索过哪些库"。
+            // 拒绝记录有两个来源，必须分开处理：注入层（@kb 指到不可见库）在请求对象上就已确定，
+            // 与工具调用开关无关；工具层（collection 越权）只有 toolRun 存在时才可能有。
+            // 之前整块写在 if (toolRun != null) 里，导致关掉 llm.tool-call.enable（文档里的第一条退路）
+            // 期间，注入层的越权尝试完全不留痕——恰恰是这种降级期最需要能查。
+            List<String> denied = new ArrayList<>(request.getKbDeniedCodes());
             if (toolRun != null) {
                 audit.setToolCallCount(toolRun.getToolCallCount());
                 String logs = toolRun.getToolCallLogs() == null
                         ? ""
                         : toolRun.getToolCallLogs().toString();
                 audit.setToolCalls(StrUtil.sub(logs, 0, MAX_TOOL_AUDIT_CHARS));
-                // 知识库审计（批次 D）：三列都是"可查询的事实"，不是自由文本——
-                // 排障时能直接按 kb_denied 找出"谁在试越权"、按 kb_collections 找"这条回答检索过哪些库"
-                audit.setKbCollections(StrUtil.sub(String.join(",", toolRun.getKbSearchedCodes()), 0, 512));
-                audit.setKbHits(toolRun.getKbHitCount());
-                // 合并两个来源：注入层（@kb 指到不可见库，记在请求对象上）+ 工具层（collection 越权）
-                List<String> denied = new ArrayList<>(request.getKbDeniedCodes());
+                // 检索足迹：没有工具轮就没有检索，保持 NULL（而不是空串），便于按 IS NULL 统计"未检索"
+                if (!toolRun.getKbSearchedCodes().isEmpty()) {
+                    audit.setKbCollections(StrUtil.sub(String.join(",", toolRun.getKbSearchedCodes()), 0, 512));
+                    audit.setKbHits(toolRun.getKbHitCount());
+                }
                 for (String code : toolRun.getKbDeniedCodes()) {
                     if (!denied.contains(code)) {
                         denied.add(code);
                     }
                 }
+            }
+            if (!denied.isEmpty()) {
                 audit.setKbDenied(StrUtil.sub(String.join(",", denied), 0, 512));
             }
             // 20261025：空回答兜底——工具轮异常或模型只吐思考不吐正文时，必须给出可读提示，
