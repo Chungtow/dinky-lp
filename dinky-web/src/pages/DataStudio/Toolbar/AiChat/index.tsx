@@ -125,10 +125,17 @@ type AiChatProps = {
    * tabParams 会一直停在上次打开的文件所属项目上（UAT 2026-10-22）。
    */
   currentSemanticProject?: string;
+  /**
+   * 批次 E：左侧栏「知识库」tab 当前选中的库（来自 model）。
+   *
+   * <p>它决定本轮 {@code kb_search} 的**默认检索范围**，让用户不必手打
+   * {@code @kb/<8 位随机编码>}；显式 {@code @kb} 仍然优先（判定在后端）。
+   */
+  currentKbCollection?: string;
 };
 
 const AiChat = (props: AiChatProps) => {
-  const { tabs, activeTab, updateAction, currentSemanticProject } = props;
+  const { tabs, activeTab, updateAction, currentSemanticProject, currentKbCollection } = props;
 
   const [messages, setMessages] = useState<AiChatMessage[]>([]);
   const [inputValue, setInputValue] = useState<string>('');
@@ -163,6 +170,17 @@ const AiChat = (props: AiChatProps) => {
   const [datasourceId, setDatasourceId] = useState<number | undefined>();
   /** P4：语义项目临时覆盖（「改用树项目」与手动指定都落在这里） */
   const [semanticProjectOverride, setSemanticProjectOverride] = useState<string | undefined>();
+  /**
+   * 批次 E：本会话是否已主动解除「默认知识库」绑定。
+   *
+   * <p>单独一个开关而不是去清 model：左侧栏的选中是浏览态（用户还在看那个库），
+   * 解绑只是"这一轮别默认限定范围"。重新点选另一个库时自动恢复绑定（见下方 effect）。
+   */
+  const [kbBindingCleared, setKbBindingCleared] = useState<boolean>(false);
+  useEffect(() => {
+    // 用户重新挑了库 → 绑定重新生效（否则"解绑过一次就永远绑不上"）
+    setKbBindingCleared(false);
+  }, [currentKbCollection]);
   const [datasourceList, setDatasourceList] = useState<any[]>([]);
   /**
    * P4 一期：**唯一上下文解析出口**。
@@ -175,6 +193,8 @@ const AiChat = (props: AiChatProps) => {
       resolveBinding({
         activeTab: currentTab,
         currentSemanticProject,
+        currentKbCollection,
+        kbBindingCleared,
         datasourceList,
         override: {
           databaseId: datasourceId,
@@ -186,6 +206,8 @@ const AiChat = (props: AiChatProps) => {
     [
       currentTab,
       currentSemanticProject,
+      currentKbCollection,
+      kbBindingCleared,
       datasourceList,
       datasourceId,
       schemaName,
@@ -1412,6 +1434,9 @@ const AiChat = (props: AiChatProps) => {
           // P3b：「项目级资产清单常驻」（D17）。P4 起改由绑定模型统一决策：
           // 手动覆盖 > 语义文件 tab 所属项目 > 语义树当前项目；都没有则不注入
           semanticProject: effectiveSemanticProjectOf(binding),
+          // 批次 E：左侧栏当前选中的库 = 本轮默认检索范围（省去手打 @kb/<code>）。
+          // 后端会校验可见性；显式 @kb 优先于它；不可见时显式拒绝而非静默降级。
+          defaultCollection: binding.kbCollection,
           // P4：上下文指纹——后端据此判断本轮是否按首轮重注入（切 tab 时 sessionId 不变）
           contextFingerprint: fingerprint
         },
@@ -1558,6 +1583,8 @@ const AiChat = (props: AiChatProps) => {
           schemaName: effectiveSchemaName,
           tableName: effectiveTableName,
           semanticProject: effectiveSemanticProjectOf(binding),
+          // 批次 E：默认检索范围（与主发送链路同源，避免两条链路口径不一致）
+          defaultCollection: binding.kbCollection,
           dialect,
           sql: currentSql,
           taskId: binding.editor?.taskId,
@@ -1948,6 +1975,8 @@ const AiChat = (props: AiChatProps) => {
             setSemanticProjectOverride(binding.semanticTreeConflict?.treeProject)
           }
           onResetOverride={resetContextOverride}
+          // 批次 E：解绑只清本会话的默认范围（不动左侧栏选中，也不动表上下文）
+          onClearKbBinding={() => setKbBindingCleared(true)}
           overridden={
             datasourceId !== undefined ||
             schemaName !== undefined ||
@@ -2503,7 +2532,9 @@ export default connect(
     tabs: DataStudio.centerContent.tabs,
     activeTab: DataStudio.centerContent.activeTab,
     // P3b：语义树当前项目（切换语义项目不切 tab，见 model.tsx 的 saveCurrentSemanticProject 注释）
-    currentSemanticProject: DataStudio.currentSemanticProject
+    currentSemanticProject: DataStudio.currentSemanticProject,
+    // 批次 E：知识库面板当前选中的库（同一套绑定链路：model → 绑定 → 请求体 → 注入）
+    currentKbCollection: DataStudio.currentKbCollection
   }),
   mapDispatchToProps
 )(AiChat);

@@ -188,6 +188,24 @@ public class AiChatRequest {
     @com.fasterxml.jackson.annotation.JsonIgnore
     private java.util.List<String> kbDeniedCodes = new java.util.ArrayList<>();
 
+    /**
+     * 批次 E：左侧栏「知识库」tab 当前选中的库（前端绑定，省去手打 {@code @kb/<code>}）。
+     *
+     * <p><b>它只是"默认值"，不是"命令"</b>：显式 {@code @kb/} 永远优先（D-K16）；不可见时
+     * 显式拒绝并写 {@code kb_denied}，<b>绝不</b>降级成"全部可见库"（D-K17）。
+     */
+    private String defaultCollection;
+
+    /**
+     * 注入层算出的<b>生效</b>默认库编码（已通过可见性校验；被拒时为 null）。
+     *
+     * <p>为什么要单独一个字段：审计要区分"用户/前端指定的默认绑定"与"模型自己收窄的范围"（D-K20），
+     * 而校验发生在注入线程、写审计在另一条链路，请求对象是两者唯一的共同上下文。
+     * {@code @JsonIgnore} 保证它不会回传前端。
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private String effectiveKbDefault;
+
     /** 记录一次注入层拒绝（去重；不抛异常，审计永远不该影响主流程） */
     public void recordKbDenied(String code) {
         if (code != null && !code.trim().isEmpty() && !kbDeniedCodes.contains(code.trim())) {

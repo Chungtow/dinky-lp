@@ -92,6 +92,15 @@ export const mapDispatchToProps = (dispatch: Dispatch) => {
         project,
         type: STUDIO_MODEL.saveCurrentSemanticProject
       }),
+    /**
+     * 批次 E：记录知识库面板当前选中的库。AI Chat 把它当作默认检索范围，
+     * 用户因此不必手打 `@kb/<8 位随机编码>`（与语义项目同一套绑定链路）。
+     */
+    saveCurrentKbCollection: (collection?: string) =>
+      dispatch({
+        collection,
+        type: STUDIO_MODEL.saveCurrentKbCollection
+      }),
     updateProject: (payload: ProjectDTO) =>
       dispatch({
         ...payload,

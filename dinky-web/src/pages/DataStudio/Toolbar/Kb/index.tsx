@@ -81,8 +81,10 @@ const Kb = (props: {
   addCenterTab: (payload: any) => void;
   /** 已打开的文档要"定位过去"而不是重开一个（重开会把已看的位置重置） */
   activateCenterTab: (id: string) => void;
+  /** 批次 E：把当前选中的库写进 model，供 AI Chat 作默认检索范围 */
+  saveCurrentKbCollection?: (collection: string) => void;
 }) => {
-  const { centerContent, addCenterTab, activateCenterTab } = props;
+  const { centerContent, addCenterTab, activateCenterTab, saveCurrentKbCollection } = props;
 
   const [collections, setCollections] = useState<KbCollectionStat[]>([]);
   const [collection, setCollection] = useState<string | undefined>();
@@ -206,6 +208,10 @@ const Kb = (props: {
     setCollection(code);
     setKeyword('');
     setQuery('');
+    // 批次 E：把"用户正在看哪个库"写进 dva model，供 AI Chat 作默认检索范围。
+    // 只在这里（用户主动点选）写入——自动选中的首个库不算绑定，否则用户只是打开面板
+    // 就会被动改变问答范围（浏览态与绑定态必须分离，D-K18）。
+    saveCurrentKbCollection?.(code);
   };
 
   /** 库编码 → 名称（打开文档时随 tab 参数带给只读查看器，避免它再查一次） */

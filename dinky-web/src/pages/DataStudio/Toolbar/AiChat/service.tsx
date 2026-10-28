@@ -316,6 +316,14 @@ export type AiChatRequestBody = {
    */
   semanticProject?: string;
   /**
+   * 批次 E：左侧栏「知识库」tab 当前选中的库 = 本轮**默认检索范围**。
+   *
+   * <p>非空时后端校验可见性后，把它写进注入提示词（"默认在本库检索"）并作为
+   * {@code kb_search} 未传 collection 时的默认 filter。显式 {@code @kb/} 永远优先；
+   * 不可见（停用/撤权/换租户）时显式拒绝并留痕 `kb_denied`，**不**降级为"全部可见库"。
+   */
+  defaultCollection?: string;
+  /**
    * P4 一期：上下文指纹（`ctx_` + 8 位十六进制）。
    *
    * <p>由 `aiChatContext.buildFingerprint` 按「本轮全部绑定来源」同步计算，后端据此判断

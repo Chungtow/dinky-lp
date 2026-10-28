@@ -113,6 +113,11 @@ export type DataStudioState = {
    */
   currentSemanticProject?: string;
   /**
+   * zh: 左侧栏「知识库」tab 当前选中的库（批次 E，供 AI Chat 默认绑定检索范围）
+   * en: Currently selected knowledge base collection in the KB panel (batch E, default retrieval scope for AI Chat)
+   */
+  currentKbCollection?: string;
+  /**
    * zh: 基础布局数据
    * en: Basic layout data
    */
@@ -254,6 +259,11 @@ export type StudioModelType = {
      * P3b：记录语义面板当前选中的项目，供 AI Chat 的项目级注入跟随语义树切换。
      */
     saveCurrentSemanticProject: Reducer<DataStudioState, { project?: string }>;
+    /**
+     * 批次 E：记录知识库面板当前选中的库，供 AI Chat 作默认检索范围
+     * （省去用户手打 `@kb/<8 位随机编码>`）。
+     */
+    saveCurrentKbCollection: Reducer<DataStudioState, { collection?: string }>;
     //更新 project
     updateProject: Reducer<DataStudioState, ProjectDTO>;
     // 更新操作
@@ -300,6 +310,8 @@ const StudioModel: StudioModelType = {
     },
     // P3b：语义面板当前项目（未打开过语义面板时为 undefined → AI Chat 不注入项目清单）
     currentSemanticProject: undefined,
+    // 批次 E：知识库面板当前选中的库（仅在用户点选时写入；自动选中首个库不算"绑定"）
+    currentKbCollection: undefined,
     centerContent: {
       tabs: [],
       activeTab: undefined
@@ -688,6 +700,24 @@ const StudioModel: StudioModelType = {
       return {
         ...state,
         currentSemanticProject: project
+      };
+    },
+    /**
+     * 记录知识库面板当前选中的库（批次 E）。
+     *
+     * <p>与 {@link #saveCurrentSemanticProject} 同构：AI Chat 从这里取"默认检索范围"，
+     * 不必要求用户手打 `@kb/<code>`（一个 8 位随机编码，谁也记不住）。
+     *
+     * <p>同值不触发变更：这个值是上下文指纹的输入之一，无意义的写入会让每次点同一行都
+     * 触发"上下文变了 → 重注入"，白白多花一轮 schema token。
+     */
+    saveCurrentKbCollection(state, { collection }) {
+      if (state.currentKbCollection === collection) {
+        return state;
+      }
+      return {
+        ...state,
+        currentKbCollection: collection
       };
     },
     updateProject(state, { expandKeys, selectedKeys }) {

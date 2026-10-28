@@ -75,6 +75,13 @@ export interface ContextBinding {
   lineage?: ContextLineage;
   semanticTreeConflict?: SemanticTreeConflict;
   override?: ContextOverride;
+  /**
+   * 批次 E：默认检索范围（左侧栏「知识库」tab 当前选中的库编码）。
+   *
+   * <p>它只影响后端 {@code kb_search} 的默认 {@code filter.collection}，
+   * <b>不影响</b>表结构注入——与语义项目同构：都只声明"范围"，正文仍由工具按需召回。
+   */
+  kbCollection?: string;
   /** 参与指纹计算的来源标记（顺序无关，内部会排序） */
   sources: string[];
   /** 降级/缺失说明，供摘要行展示 */
@@ -86,6 +93,15 @@ export interface ResolveBindingInput {
   activeTab?: any;
   /** 语义树当前选中的项目（来自 DVA model 的 currentSemanticProject） */
   currentSemanticProject?: string;
+  /** 知识库面板当前选中的库（来自 DVA model 的 currentKbCollection，批次 E） */
+  currentKbCollection?: string;
+  /**
+   * 用户在本会话内主动解除了知识库绑定（点 chip 上的 ×）。
+   *
+   * <p>为什么要这个开关而不是直接清 model：tab 里的选中是<b>浏览态</b>（用户还在看那个库），
+   * 解绑只清<b>问答默认范围</b>（会话态）。两者混在一起会出现"点了解绑、一切 tab 又绑回来"（D-K18）。
+   */
+  kbBindingCleared?: boolean;
   /** 数据源清单（用于把 databaseId 溯源成数据源名） */
   datasourceList?: any[];
   /** 手动覆盖 */
@@ -177,7 +193,14 @@ export function resolveEditorContext(tab: any): EditorContext | undefined {
  * - 都没有 → 不注入。
  */
 export function resolveBinding(input: ResolveBindingInput): ContextBinding {
-  const { activeTab, currentSemanticProject, datasourceList = [], override } = input;
+  const {
+    activeTab,
+    currentSemanticProject,
+    currentKbCollection,
+    kbBindingCleared,
+    datasourceList = [],
+    override
+  } = input;
   const editor = resolveEditorContext(activeTab);
   const notices: string[] = [];
   const sources: string[] = [];
@@ -219,7 +242,16 @@ export function resolveBinding(input: ResolveBindingInput): ContextBinding {
     sources.push(`sem:${effectiveSemanticProject}`);
   }
 
-  // 4) 溯源
+  // 4) 批次 E：知识库默认范围。
+  //    与语义项目并列进指纹：会话中途换库必须触发重注入，否则后端沿用旧快照，
+  //    模型会拿着"上一轮的范围"回答（与 P4 的 `sem:` 同一条理由）。
+  //    显式 @kb 永远优先于它，但那个判定在后端（D-K16）——前端只负责如实上报"正在看哪个库"。
+  const kbCollection = kbBindingCleared ? undefined : currentKbCollection || undefined;
+  if (kbCollection) {
+    sources.push(`kb:${kbCollection}`);
+  }
+
+  // 5) 溯源
   const lineage: ContextLineage = {};
   if (effectiveDatabaseId) {
     const hit = datasourceList.find(
@@ -244,6 +276,7 @@ export function resolveBinding(input: ResolveBindingInput): ContextBinding {
     lineage,
     semanticTreeConflict,
     override,
+    kbCollection,
     sources,
     notices
   };
@@ -324,6 +357,12 @@ export function describeBinding(binding: ContextBinding): {
     // 前者要让用户知道口径来自树而不是正在看的文件（U35），因此用不同标签区分
     const fromTree = !binding.override?.semanticProject;
     items.push({ key: fromTree ? 'semanticProjectFromTree' : 'semanticProject', value: sem });
+  }
+
+  // 批次 E：知识库默认范围。这里显示的是编码（摘要行的其它项也都是 id/名字的折中），
+  // 库名由 AI Chat 面板的 chip 单独显示（它需要额外的接口数据，不适合塞进纯函数解析）。
+  if (binding.kbCollection) {
+    items.push({ key: 'kbCollection', value: binding.kbCollection });
   }
 
   return { items, empty: items.length === 0 };

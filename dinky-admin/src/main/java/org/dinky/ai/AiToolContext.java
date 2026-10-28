@@ -85,6 +85,17 @@ public class AiToolContext {
     private List<KbCollectionBrief> visibleCollections = Collections.emptyList();
 
     /**
+     * 批次 E：本次对话的<b>默认检索范围</b>（左侧栏「知识库」tab 当前选中的库，已通过可见性校验）。
+     *
+     * <p>用途只有一个：模型调 {@code kb_search} 却<b>没传</b> {@code collection} 时，用它代替
+     * "全部可见库"。为空表示未绑定 → 维持原行为（搜全部可见库）。
+     *
+     * <p><b>为什么不能直接用前端传来的值</b>：越权判定只能基于请求线程算好的可见集；
+     * 前端传什么都不能直接进 {@code filter.collection}（kb-service 不认人）。
+     */
+    private String defaultKbCollection;
+
+    /**
      * 审计：本次对话<b>实际检索过</b>的库编码（去重、保序）。
      *
      * <p><b>为什么用 {@link CopyOnWriteArrayList}</b>：工具循环在异步线程里跑，

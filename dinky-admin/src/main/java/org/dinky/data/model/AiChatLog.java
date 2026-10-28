@@ -132,10 +132,7 @@ public class AiChatLog implements Serializable {
     @ApiModelProperty(value = "Create Time", dataType = "LocalDateTime")
     private LocalDateTime createTime;
 
-    @ApiModelProperty(
-            value = "Kb Collections",
-            dataType = "String",
-            notes = "本次对话实际检索过的知识库编码（逗号分隔）。与「可见库」不同：这是事实，不是权限")
+    @ApiModelProperty(value = "Kb Collections", dataType = "String", notes = "本次对话实际检索过的知识库编码（逗号分隔）。与「可见库」不同：这是事实，不是权限")
     private String kbCollections;
 
     @ApiModelProperty(value = "Kb Hits", dataType = "Integer", notes = "知识库检索累计命中条数（0 也是结论）")
@@ -146,4 +143,10 @@ public class AiChatLog implements Serializable {
             dataType = "String",
             notes = "被显式拒绝的知识库编码（越权请求留痕；@kb 指到不可见库或工具传了越权 collection 时写入）")
     private String kbDenied;
+
+    @ApiModelProperty(
+            value = "Kb Default",
+            dataType = "String",
+            notes = "本轮默认绑定的知识库编码（左侧栏当前选中的库，批次 E）；NULL = 未绑定。" + "与 kb_collections（实际检索过）分开记：不一致说明模型显式收窄或绑定被拒")
+    private String kbDefault;
 }

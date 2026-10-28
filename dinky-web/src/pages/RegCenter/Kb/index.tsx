@@ -19,7 +19,7 @@
 
 import ThemeChip from '@/components/ThemeChip';
 import { l } from '@/utils/intl';
-import { ErrorMessage, SuccessMessage } from '@/utils/messages';
+import { ErrorMessage, InfoMessage, SuccessMessage } from '@/utils/messages';
 import {
   adoptKbCollection,
   addKbGrants,
@@ -172,6 +172,12 @@ const KbManage: React.FC = () => {
       return;
     }
     SuccessMessage(l(editing ? 'pages.kb.updateSuccess' : 'pages.kb.createSuccess'));
+    // 新建 ≠ 在 RAG 里建库：Dinky 只登记目录（code 由服务端生成），kb-service 的 collection
+    // 是"文档标签的聚合"（meta_scan），所以推第一篇文档之前，库在 RAG 侧并不存在——
+    // 此时检索必然 0 命中。这句话必须说出来，否则用户会以为"建好了却搜不到"是 bug。
+    if (!editing) {
+      InfoMessage(l('pages.kb.createHint'));
+    }
     setEditOpen(false);
     loadList();
   };

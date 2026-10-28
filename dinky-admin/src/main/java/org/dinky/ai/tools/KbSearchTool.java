@@ -28,6 +28,7 @@ import org.dinky.data.model.SystemConfiguration;
 import org.dinky.service.kb.KbClient;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -205,6 +206,13 @@ public class KbSearchTool implements AiTool {
      */
     private List<String> resolveScope(String rawCollection, AiToolContext context) {
         if (StrUtil.isBlank(rawCollection)) {
+            // 批次 E：左侧栏绑定了某个库时，它就是本轮的"默认范围"——
+            // 用户正在看 A 库，模型却把全部可见库都搜一遍，等于把范围意图丢了（还会多花 retrieval 预算）。
+            // 绑定值由注入层校验过可见性；这里仍再判一次，防止上下文被其它入口构造。
+            String bound = context == null ? null : context.getDefaultKbCollection();
+            if (StrUtil.isNotBlank(bound) && KbToolSupport.find(context, bound) != null) {
+                return new ArrayList<>(Collections.singletonList(bound));
+            }
             return KbToolSupport.visibleCodes(context);
         }
         Set<String> codes = new LinkedHashSet<>();

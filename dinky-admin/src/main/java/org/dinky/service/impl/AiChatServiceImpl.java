@@ -41,6 +41,7 @@ import org.dinky.ai.context.NameRegistryService;
 import org.dinky.ai.context.RequestSnapshot;
 import org.dinky.ai.kb.KbCollectionBrief;
 import org.dinky.ai.mention.EnvRefRenderer;
+import org.dinky.ai.mention.KbMentionInjector;
 import org.dinky.ai.mention.MentionInjectContext;
 import org.dinky.ai.mention.MentionInjector;
 import org.dinky.ai.mention.MentionType;
@@ -230,6 +231,15 @@ public class AiChatServiceImpl implements AiChatService {
 
     /** 知识库 {@code @kb} 接入 v1.0：库元数据与可见集（{@code @kb} 越权判定的数据源） */
     private final KbCollectionService kbCollectionService;
+
+    /**
+     * 批次 E：默认知识库范围渲染器。
+     *
+     * <p>为什么不从 {@link #mentionInjectors} 注册表里取：那份注册表按 {@code mention.type()} 分派，
+     * 服务于{@code @} 引用；默认绑定<b>不是 mention</b>（用户没打 {@code @}），走同一个渲染器是为了
+     * 让"范围声明/越权拒绝"的文案只有一份口径（见 {@link KbMentionInjector#renderDefault}）。
+     */
+    private final KbMentionInjector kbMentionInjector;
 
     /** 阶段 4b：assetType → 渲染器（初始化时构建一次；见 {@link #initSkillRenderers()}） */
     private Map<String, SkillRenderer> skillRenderers = Collections.emptyMap();
@@ -658,7 +668,7 @@ public class AiChatServiceImpl implements AiChatService {
             audit.setRetryCount(retryCount);
             // 知识库审计（批次 D）：三列都是"可查询的事实"，不是自由文本——
             // 排障时能直接按 kb_denied 找出"谁在试越权"、按 kb_collections 找"这条回答检索过哪些库"。
-            // 拒绝记录有两个来源，必须分开处理：注入层（@kb 指到不可见库）在请求对象上就已确定，
+            // 拒绝记录的两个来源必须分开处理：注入层（@kb 指到不可见库）在请求对象上就已确定，
             // 与工具调用开关无关；工具层（collection 越权）只有 toolRun 存在时才可能有。
             // 之前整块写在 if (toolRun != null) 里，导致关掉 llm.tool-call.enable（文档里的第一条退路）
             // 期间，注入层的越权尝试完全不留痕——恰恰是这种降级期最需要能查。
@@ -683,6 +693,9 @@ public class AiChatServiceImpl implements AiChatService {
             if (!denied.isEmpty()) {
                 audit.setKbDenied(StrUtil.sub(String.join(",", denied), 0, 512));
             }
+            // 批次 E（D-K20）：记下"默认绑定"的库编码，与「实际检索过的库」分开记——
+            // 两者不一致是正常现象（模型显式收窄 / 越权被拒），但排障时必须能看出是谁定的范围。
+            audit.setKbDefault(StrUtil.trimToNull(request.getEffectiveKbDefault()));
             // 20261025：空回答兜底——工具轮异常或模型只吐思考不吐正文时，必须给出可读提示，
             // 而不是静默 complete()（前端表现为"思考完就没有输出"，用户无从判断发生了什么）。
             boolean writePathHandled = toolRun != null && toolRun.isWriteAttempted();
@@ -792,6 +805,12 @@ public class AiChatServiceImpl implements AiChatService {
         // 知识库 @kb 接入 v1.0：可见库快照（同样是请求线程算好的那份）。
         // kb_search 只能用这份做集合判定——kb-service 不认人，越权编码一旦进了 filter 就会真的越权检索。
         context.setVisibleCollections(visibleCollections);
+        // 批次 E：默认检索范围（左侧栏当前选中的库）。
+        // 这里再解析一次（幂等）是因为"上下文指纹未变"的后续轮次会跳过注入，那时
+        // effectiveKbDefault 还是空的；而工具范围每轮都要按最新可见集校验——库被停用/撤权后
+        // 必须当轮就失效，不能靠上一轮的记忆继续检索（D-K17）。
+        resolveDefaultKbCollection(request, visibleCollections);
+        context.setDefaultKbCollection(request.getEffectiveKbDefault());
         // P1：跨数据源引用与命名检查所需的快照（数据源索引 + 命名名册）——
         // 同 visibleSkills，必须用请求线程解析好的那份，绝不能在此（异步线程）重新查。
         context.setRequestSnapshot(requestSnapshot);
@@ -1645,14 +1664,19 @@ public class AiChatServiceImpl implements AiChatService {
             RequestSnapshot snapshot,
             List<KbCollectionBrief> visibleCollections) {
         List<AiChatMention> mentions = resolveMentions(request);
-        if (CollUtil.isEmpty(mentions)) {
+        // 批次 E：默认绑定（左侧栏「知识库」tab 当前选中的库）。它不是 mention，但同属"本轮上下文"，
+        // 所以提前返回的条件必须同时考虑它——否则"只绑库、不打 @kb"这种最常见用法会整块注入消失。
+        String defaultKb = resolveDefaultKbCollection(request, visibleCollections);
+        if (CollUtil.isEmpty(mentions) && StrUtil.isBlank(defaultKb)) {
             return "";
         }
         // P1：单次对话的 @source/ 展开计数（上限可配）——一个库可有上百张表，
         // 不限量会把上下文预算一次吃光（P1 计划 §3.1 / D6）。
         int sourceExpansions = 0;
         StringBuilder sb = new StringBuilder();
-        sb.append("## 用户显式指定的上下文（@ 引用，优先级最高）\n");
+        if (CollUtil.isNotEmpty(mentions)) {
+            sb.append("## 用户显式指定的上下文（@ 引用，优先级最高）\n");
+        }
         for (AiChatMention mention : mentions) {
             if (mention == null) {
                 continue;
@@ -1739,8 +1763,71 @@ public class AiChatServiceImpl implements AiChatService {
                         .append("\n```\n");
             }
         }
+        // 批次 E：默认知识库范围。同一库已被显式 @kb 点名时不再重复输出（D-K16）——
+        // 提示词里出现两行一模一样的范围声明，模型会怀疑自己看错了，反而去检索别的库。
+        if (StrUtil.isNotBlank(defaultKb) && !hasKbMention(mentions, defaultKb)) {
+            sb.append("## 默认知识库范围（左侧栏当前选中的库，非用户手打）\n");
+            sb.append(kbMentionInjector.renderDefault(defaultKb, visibleCollections));
+        }
         sb.append("\n");
         return sb.toString();
+    }
+
+    /**
+     * 批次 E：解析并校验「默认绑定」的知识库编码。
+     *
+     * <p>三条口径（与 {@code @kb} 完全一致，避免两套判定分叉）：
+     * <ol>
+     *   <li>开关关闭 → 返回空串：连"无权访问"都不写（U-14 要求行为与接入前逐字一致）；</li>
+     *   <li>在可见集内 → 记为<b>生效</b>默认库（写进请求对象，供工具默认范围与审计取用）；</li>
+     *   <li>不在可见集内 → 记 {@code kb_denied} 留痕，并原样返回，让渲染器输出显式拒绝文案。
+     *       这里<b>不</b>回落成"全部可见库"——静默降级会让用户以为查的是 A 库、实际搜了全部（D-K17）。</li>
+     * </ol>
+     */
+    private String resolveDefaultKbCollection(AiChatRequest request, List<KbCollectionBrief> visibleCollections) {
+        String code = StrUtil.trimToEmpty(request.getDefaultCollection());
+        if (StrUtil.isBlank(code)) {
+            return "";
+        }
+        if (!SystemConfiguration.getInstances().isKbEnable()) {
+            return "";
+        }
+        KbCollectionBrief hit = null;
+        if (CollUtil.isNotEmpty(visibleCollections)) {
+            for (KbCollectionBrief brief : visibleCollections) {
+                if (brief != null && code.equals(brief.getCode())) {
+                    hit = brief;
+                    break;
+                }
+            }
+        }
+        if (hit == null) {
+            log.info(
+                    "Kb default binding denied: code={}, visible={}",
+                    code,
+                    visibleCollections == null ? 0 : visibleCollections.size());
+            request.recordKbDenied(code);
+            return code;
+        }
+        request.setEffectiveKbDefault(code);
+        return code;
+    }
+
+    /** mentions 里是否已有指向同一知识库的显式 {@code @kb}（用于去重，D-K16） */
+    private boolean hasKbMention(List<AiChatMention> mentions, String code) {
+        if (CollUtil.isEmpty(mentions) || StrUtil.isBlank(code)) {
+            return false;
+        }
+        for (AiChatMention mention : mentions) {
+            if (mention == null) {
+                continue;
+            }
+            if (MentionType.KB.equalsIgnoreCase(mention.getType())
+                    && code.equals(StrUtil.trimToEmpty(mention.getName()))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

@@ -118,6 +118,48 @@ public class KbMentionInjector implements MentionInjector {
         return "- 知识库：当前账号没有可访问的知识库，不要调用 `kb_search`。\n";
     }
 
+    /**
+     * 批次 E：渲染<b>默认检索范围</b>（左侧栏「知识库」tab 当前选中的库，用户没有手打 {@code @kb}）。
+     *
+     * <p>与 {@link #render(String, List)} 的差异只有措辞：那份是"用户点名要哪个库"，这份是
+     * "用户没点名，按他正在看的库来"。<b>语义完全一致</b>——都只声明范围，正文仍由模型调
+     * {@code kb_search} 召回；都<b>不</b>在不可见时静默降级（D-K17）。
+     *
+     * @param code 绑定的库编码（调用方已 {@code trim}；空表示未绑定，返回空串）
+     * @param visibleCollections 请求线程算好的可见集快照
+     */
+    public String renderDefault(String code, List<KbCollectionBrief> visibleCollections) {
+        String target = StrUtil.trimToEmpty(code);
+        if (StrUtil.isBlank(target)) {
+            return "";
+        }
+        KbCollectionBrief hit = find(visibleCollections, target);
+        if (hit == null) {
+            // 停用 / 授权被撤 / 换了租户：显式拒绝，绝不回落到"该库"
+            log.info("Kb default denied: code={}, visible={}", target, labels(visibleCollections));
+            // ⚠️ 只写"不可用"不够：实测（U-25，2026-10-28）模型会默默改搜其它可见库并不告知用户，
+            // 用户以为自己问的是 A 库、答案其实来自 B 库。所以这里必须**命令**它先声明。
+            return "- 默认知识库 " + target + " 不可用（无访问权限或已停用，本次无法在其中检索）。\n"
+                    + "  → **回答的第一句必须先告诉用户**：「你当前选中的知识库 " + target
+                    + " 不可用，请在左侧栏重新选择或直接 @kb 指定」；之后才可以选择"
+                    + "（a）基于下列可用范围作答并注明来源，或（b）直接说明无法回答。禁止假装已在该库检索。可用范围："
+                    + labels(visibleCollections) + "\n";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("- 知识库默认范围：")
+                .append(StrUtil.nullToEmpty(hit.getName()))
+                .append("（")
+                .append(hit.getCode())
+                .append("）");
+        if (StrUtil.isNotBlank(hit.getDescription())) {
+            sb.append(" — ").append(hit.getDescription());
+        }
+        sb.append("\n");
+        sb.append("  → 用户当前正在浏览该库且未指定其他库：调用 `kb_search` 时默认在本库检索；" + "若模型显式传 collection，则以传入值为准。命中后回答需带出处（来源 §章节）。\n");
+        log.info("Kb default injected: code={}, name={}", hit.getCode(), hit.getName());
+        return sb.toString();
+    }
+
     private KbCollectionBrief find(List<KbCollectionBrief> visibleCollections, String code) {
         if (CollUtil.isEmpty(visibleCollections)) {
             return null;
