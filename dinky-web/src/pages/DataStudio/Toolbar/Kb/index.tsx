@@ -18,6 +18,7 @@
  */
 
 import { connect } from '@@/exports';
+import ThemeChip from '@/components/ThemeChip';
 import { CenterTab, DataStudioState } from '@/pages/DataStudio/model';
 import { mapDispatchToProps } from '@/pages/DataStudio/DvaFunction';
 import { KbCollectionStat, KbDocument } from '@/pages/DataStudio/Toolbar/Kb/data.d';
@@ -25,13 +26,23 @@ import { listKbCollectionStats, listKbDocuments, readKbDocument } from './servic
 import { l } from '@/utils/intl';
 import { WarningMessage } from '@/utils/messages';
 import { getTabIcon } from '@/pages/DataStudio/function';
-import { Empty, Input, List, Pagination, Space, Spin, Tag, Tooltip, Typography } from 'antd';
-import { BookOutlined, FileTextOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
-import React, { useCallback, useEffect, useState } from 'react';
+import { Empty, Input, List, Space, Spin, Tooltip, Typography } from 'antd';
+import { BookOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 const { Text } = Typography;
 
-const PAGE_SIZE = 20;
+/** 每页条数：kb-service 支持 limit/offset，服务端分页，浏览器永远只持有已加载的部分 */
+const PAGE_SIZE = 50;
+
+/**
+ * 已加载条数的硬上限。
+ *
+ * <p>为什么要有上限：库里可能有几万篇（IMA 这类外部系统会持续推），无限滚动一路拉下去
+ * 会让 DOM 与内存线性增长，最后卡死的是浏览器而不是后端。到上限后停止自动加载，
+ * 提示"用文件名搜索缩小范围"——搜索是**服务端**过滤，不要求先加载。
+ */
+const MAX_LOADED = 500;
 
 /** epoch 秒 → 「x 分钟前 / y 天前」；0 表示该库还没有文档 */
 const relativeTime = (epochSeconds?: number): string => {
@@ -57,8 +68,13 @@ const isProcessing = (status: string): boolean =>
  *
  * <p><b>不做目录树</b>：文档零散且海量，树没有意义。只有"库 → 平铺文档列表 + 文件名搜索 + 分页"。
  *
- * <p><b>搜索走服务端</b>（`GET /api/kb/documents?q=`）：全量拉回浏览器再过滤会拖垮前端，
- * 而且可见集文档数没有上限。
+ * <p><b>大库策略（2026-10-28 按反馈调整）</b>：
+ * <ul>
+ *   <li>列表<b>服务端分页</b>（`limit/offset`），每页 {@value PAGE_SIZE} 条；</li>
+ *   <li>滚动到底<b>自动续拉</b>下一页，不要求用户点页码；</li>
+ *   <li>累计到 {@value MAX_LOADED} 条即停止自动加载并提示改用搜索——见 {@code MAX_LOADED} 注释；</li>
+ *   <li>搜索是<b>服务端</b>过滤（`q` 传 kb-service），不会为了搜一个文件名先把全库拉下来。</li>
+ * </ul>
  */
 const Kb = (props: {
   centerContent: DataStudioState['centerContent'];
@@ -72,12 +88,16 @@ const Kb = (props: {
   const [collection, setCollection] = useState<string | undefined>();
   const [documents, setDocuments] = useState<KbDocument[]>([]);
   const [total, setTotal] = useState<number>(0);
-  const [offset, setOffset] = useState<number>(0);
   const [keyword, setKeyword] = useState<string>('');
   const [query, setQuery] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
   const [loadingDocs, setLoadingDocs] = useState<boolean>(false);
   const [error, setError] = useState<string | undefined>();
+
+  // 请求代次：切换库/改搜索词时递增，丢弃"旧请求后到"的结果（否则会出现 A 库的文档
+  // 覆盖 B 库列表这种串台现象）
+  const generation = useRef<number>(0);
+  const scrollBox = useRef<HTMLDivElement>(null);
 
   const loadCollections = useCallback(async () => {
     setLoading(true);
@@ -101,47 +121,101 @@ const Kb = (props: {
     }
   }, []);
 
-  const loadDocuments = useCallback(async (code?: string, page?: number, q?: string) => {
-    if (!code) {
-      setDocuments([]);
-      setTotal(0);
-      return;
-    }
-    setLoadingDocs(true);
-    setError(undefined);
-    try {
-      const res = await listKbDocuments({
-        collection: code,
-        q,
-        sort: 'updated_desc',
-        limit: PAGE_SIZE,
-        offset: page ?? 0
-      });
-      if (res?.code !== 0) {
+  /** 拉一页文档；append=true 表示滚动续拉，false 表示换库/换搜索词后重来 */
+  const loadDocuments = useCallback(
+    async (code: string | undefined, q: string, offset: number, append: boolean) => {
+      if (!code) {
         setDocuments([]);
         setTotal(0);
-        setError(res?.msg ?? l('datastudio.kb.loadFailed'));
         return;
       }
-      setDocuments(res?.data?.items ?? []);
-      setTotal(res?.data?.total ?? 0);
-    } catch (e: any) {
-      setDocuments([]);
-      setTotal(0);
-      setError(e?.message ?? l('datastudio.kb.loadFailed'));
-    } finally {
-      setLoadingDocs(false);
-    }
-  }, []);
+      const current = ++generation.current;
+      setLoadingDocs(true);
+      setError(undefined);
+      try {
+        const res = await listKbDocuments({
+          collection: code,
+          q,
+          sort: 'updated_desc',
+          limit: PAGE_SIZE,
+          offset
+        });
+        if (current !== generation.current) {
+          return; // 已有更新的请求发出，丢弃本次结果
+        }
+        if (res?.code !== 0) {
+          setDocuments((prev) => (append ? prev : []));
+          setTotal(0);
+          setError(res?.msg ?? l('datastudio.kb.loadFailed'));
+          return;
+        }
+        const items: KbDocument[] = res?.data?.items ?? [];
+        setDocuments((prev) => (append ? [...prev, ...items] : items));
+        setTotal(res?.data?.total ?? 0);
+      } catch (e: any) {
+        if (current !== generation.current) {
+          return;
+        }
+        setDocuments((prev) => (append ? prev : []));
+        setTotal(0);
+        setError(e?.message ?? l('datastudio.kb.loadFailed'));
+      } finally {
+        if (current === generation.current) {
+          setLoadingDocs(false);
+        }
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     loadCollections();
   }, []);
 
+  // 换库 / 换搜索词：从第 0 页重新拉
   useEffect(() => {
-    loadDocuments(collection, offset, query);
+    if (scrollBox.current) {
+      scrollBox.current.scrollTop = 0;
+    }
+    loadDocuments(collection, query, 0, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [collection, offset, query]);
+  }, [collection, query]);
+
+  /** 滚动到底自动续拉；到上限就停，提示改用搜索 */
+  const onScroll = () => {
+    const box = scrollBox.current;
+    if (!box || loadingDocs || !collection) {
+      return;
+    }
+    if (documents.length >= total || documents.length >= MAX_LOADED) {
+      return;
+    }
+    if (box.scrollTop + box.clientHeight >= box.scrollHeight - 80) {
+      loadDocuments(collection, query, documents.length, true);
+    }
+  };
+
+  const onSearch = (value: string) => {
+    setQuery(value.trim());
+  };
+
+  const onSelectCollection = (code: string) => {
+    if (code === collection) {
+      return;
+    }
+    setCollection(code);
+    setKeyword('');
+    setQuery('');
+  };
+
+  /** 库编码 → 名称（打开文档时随 tab 参数带给只读查看器，避免它再查一次） */
+  const collectionNames = React.useMemo(() => {
+    const map: Record<string, string> = {};
+    collections.forEach((item) => {
+      map[item.code] = item.name;
+    });
+    return map;
+  }, [collections]);
 
   /**
    * 打开文档：已打开则只激活，不重读。
@@ -180,7 +254,11 @@ const Kb = (props: {
           // 与语义文件同构：正文放 statement，只读标记恒 true（从根上不给编辑可能）
           statement: data.content ?? '',
           readOnly: true,
-          collections: data.collections ?? doc.collections ?? [],
+          // 只带 name：标题栏要显示"库名称"，编码对用户没有信息量
+          collectionNames: (data.collections ?? doc.collections ?? []).map((code: string) => ({
+            code,
+            name: collectionNames[code] ?? code
+          })),
           chunks: doc.chunks
         }
       };
@@ -190,25 +268,12 @@ const Kb = (props: {
     }
   };
 
-  const onSearch = (value: string) => {
-    setOffset(0);
-    setQuery(value.trim());
-  };
-
-  const onSelectCollection = (code: string) => {
-    if (code === collection) {
-      return;
-    }
-    setCollection(code);
-    setOffset(0);
-    setKeyword('');
-    setQuery('');
-  };
+  const reachedCap = documents.length >= MAX_LOADED && documents.length < total;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '0 4px' }}>
       {/* 上半栏：库列表（名称 + 篇数 + 最近入库） */}
-      <div style={{ flex: '0 0 auto', maxHeight: '45%', overflow: 'auto' }}>
+      <div style={{ flex: '0 0 auto', maxHeight: '40%', overflow: 'auto' }}>
         <Space style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 4px' }}>
           <Text strong>
             <BookOutlined /> {l('datastudio.kb.collections')}
@@ -234,13 +299,13 @@ const Kb = (props: {
                     style={{
                       cursor: 'pointer',
                       padding: '4px 8px',
-                      background: active ? 'rgba(22,119,255,0.08)' : undefined,
+                      background: active ? 'rgba(22,119,255,0.12)' : undefined,
                       borderRadius: 4
                     }}
                     onClick={() => onSelectCollection(item.code)}
                   >
                     <div style={{ width: '100%' }}>
-                      <Tooltip title={item.description || item.code}>
+                      <Tooltip title={item.description || item.name}>
                         <Text strong={active} ellipsis style={{ display: 'block' }}>
                           {item.name}
                         </Text>
@@ -265,12 +330,12 @@ const Kb = (props: {
         </Spin>
       </div>
 
-      {/* 下半栏：文档列表 + 服务端搜索 + 分页 */}
+      {/* 下半栏：文档列表 + 服务端搜索 + 滚动续拉 */}
       <div
         style={{
           flex: 1,
           minHeight: 0,
-          borderTop: '1px solid rgba(5,5,5,0.06)',
+          borderTop: '1px solid rgba(128,128,128,0.24)',
           display: 'flex',
           flexDirection: 'column'
         }}
@@ -288,76 +353,80 @@ const Kb = (props: {
             disabled={!collection}
           />
           <Text type='secondary' style={{ fontSize: 12 }}>
-            {l('datastudio.kb.totalPrefix')} {total} {l('datastudio.kb.docsUnit')}
+            {query
+              ? `${l('datastudio.kb.searchHit')} ${total} ${l('datastudio.kb.docsUnit')}`
+              : `${l('datastudio.kb.totalPrefix')} ${total} ${l('datastudio.kb.docsUnit')}`}
+            {documents.length > 0 && documents.length < total
+              ? ` · ${l('datastudio.kb.loadedPrefix')} ${documents.length}`
+              : ''}
           </Text>
         </Space>
-        <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-          <Spin spinning={loadingDocs} size='small'>
-            {documents.length === 0 && !loadingDocs ? (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description={
-                  error ??
-                  (collection ? l('datastudio.kb.emptyDocs') : l('datastudio.kb.noCollection'))
-                }
-              />
-            ) : (
-              <List
-                size='small'
-                dataSource={documents}
-                renderItem={(item) => (
-                  <List.Item
-                    style={{
-                      padding: '4px 8px',
-                      cursor: item.openable ? 'pointer' : 'not-allowed'
-                    }}
-                    onClick={() => openDocument(item)}
-                  >
-                    <div style={{ width: '100%', opacity: item.openable ? 1 : 0.55 }}>
-                      <Tooltip title={item.filename}>
-                        <Text ellipsis style={{ display: 'block' }}>
-                          {getTabIcon(item.filename?.split('.').pop() || 'txt', 14)} {item.filename}
-                        </Text>
-                      </Tooltip>
-                      <Space size={6} wrap>
-                        {isProcessing(item.status) && (
-                          <Tag color='processing'>{l('datastudio.kb.statusProcessing')}</Tag>
-                        )}
-                        {item.status === 'failed' && (
-                          <Tooltip title={item.error || ''}>
-                            <Tag color='error'>{l('datastudio.kb.statusFailed')}</Tag>
-                          </Tooltip>
-                        )}
+        <div
+          ref={scrollBox}
+          onScroll={onScroll}
+          style={{ flex: 1, minHeight: 0, overflow: 'auto' }}
+        >
+          {documents.length === 0 && !loadingDocs ? (
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={
+                error ??
+                (collection ? l('datastudio.kb.emptyDocs') : l('datastudio.kb.noCollection'))
+              }
+            />
+          ) : (
+            <List
+              size='small'
+              dataSource={documents}
+              renderItem={(item) => (
+                <List.Item
+                  style={{ padding: '4px 8px', cursor: item.openable ? 'pointer' : 'not-allowed' }}
+                  onClick={() => openDocument(item)}
+                >
+                  <div style={{ width: '100%', opacity: item.openable ? 1 : 0.6 }}>
+                    <Tooltip title={item.filename}>
+                      <Text ellipsis style={{ display: 'block' }}>
+                        {getTabIcon(item.filename?.split('.').pop() || 'txt', 14)} {item.filename}
+                      </Text>
+                    </Tooltip>
+                    <Space size={6} wrap>
+                      {isProcessing(item.status) && (
+                        <ThemeChip tone='info'>{l('datastudio.kb.statusProcessing')}</ThemeChip>
+                      )}
+                      {item.status === 'failed' && (
+                        <ThemeChip tone='danger' title={item.error || ''}>
+                          {l('datastudio.kb.statusFailed')}
+                        </ThemeChip>
+                      )}
+                      <Text type='secondary' style={{ fontSize: 12 }}>
+                        {item.chunks ?? 0} {l('datastudio.kb.chunksUnit')}
+                      </Text>
+                      {item.updatedAt ? (
                         <Text type='secondary' style={{ fontSize: 12 }}>
-                          {item.chunks ?? 0} {l('datastudio.kb.chunksUnit')}
+                          {relativeTime(item.updatedAt)}
                         </Text>
-                        {item.updatedAt ? (
-                          <Text type='secondary' style={{ fontSize: 12 }}>
-                            {relativeTime(item.updatedAt)}
-                          </Text>
-                        ) : null}
-                        {!item.openable && (
-                          <Tag color='default'>{l('datastudio.kb.notOpenableTag')}</Tag>
-                        )}
-                      </Space>
-                    </div>
-                  </List.Item>
-                )}
-              />
-            )}
-          </Spin>
+                      ) : null}
+                      {!item.openable && <ThemeChip>{l('datastudio.kb.notOpenableTag')}</ThemeChip>}
+                    </Space>
+                  </div>
+                </List.Item>
+              )}
+            />
+          )}
+          <div style={{ textAlign: 'center', padding: '6px 0' }}>
+            {loadingDocs ? (
+              <Spin size='small' />
+            ) : reachedCap ? (
+              <Text type='secondary' style={{ fontSize: 12 }}>
+                {l('datastudio.kb.reachedCap')}
+              </Text>
+            ) : documents.length > 0 && documents.length >= total ? (
+              <Text type='secondary' style={{ fontSize: 12 }}>
+                {l('datastudio.kb.allLoaded')}
+              </Text>
+            ) : null}
+          </div>
         </div>
-        {total > PAGE_SIZE && (
-          <Pagination
-            size='small'
-            simple
-            current={Math.floor(offset / PAGE_SIZE) + 1}
-            pageSize={PAGE_SIZE}
-            total={total}
-            style={{ textAlign: 'center', padding: '4px 0' }}
-            onChange={(page) => setOffset((page - 1) * PAGE_SIZE)}
-          />
-        )}
       </div>
     </div>
   );

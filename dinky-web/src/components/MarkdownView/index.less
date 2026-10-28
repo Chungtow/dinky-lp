@@ -1,0 +1,124 @@
+/*
+ * Markdown 渲染容器样式（主题中立）。
+ *
+ * 背景：antd / 全局 reset 抹平 heading 与 table 的默认样式，react-markdown 输出的
+ * <h2> 不放大不加粗、<table> 无边框。这里以 .dinky-md 为作用域恢复阅读性排版。
+ *
+ * 为什么与 AiChat 的 .ai-chat-md 分开：那份样式服务的是窄面板里的对话正文，
+ * 这里的预览面板更宽、需要更大的行距与代码块内边距；两份独立后互不牵连（改对话排版
+ * 不会改变知识库预览）。颜色全部用中灰半透明，不依赖主题 token（DataStudio 有明暗两套主题）。
+ */
+.dinky-md {
+  font-size: 13px;
+  line-height: 1.75;
+  word-break: break-word;
+  padding: 8px 12px;
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    margin: 14px 0 8px;
+    font-weight: 600;
+    line-height: 1.4;
+  }
+
+  h1 {
+    font-size: 22px;
+  }
+
+  h2 {
+    font-size: 19px;
+  }
+
+  h3 {
+    font-size: 16px;
+  }
+
+  h4,
+  h5,
+  h6 {
+    font-size: 14px;
+  }
+
+  p {
+    margin: 6px 0;
+  }
+
+  ul,
+  ol {
+    margin: 6px 0;
+    padding-left: 22px;
+  }
+
+  li {
+    margin: 3px 0;
+  }
+
+  hr {
+    border: none;
+    border-top: 1px solid rgba(128, 128, 128, 0.35);
+    margin: 12px 0;
+  }
+
+  a {
+    color: #4096ff;
+  }
+
+  code {
+    background: rgba(128, 128, 128, 0.16);
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 12px;
+  }
+
+  pre {
+    background: rgba(128, 128, 128, 0.12);
+    padding: 10px;
+    border-radius: 4px;
+    overflow-x: auto;
+
+    code {
+      background: none;
+      padding: 0;
+    }
+  }
+
+  blockquote {
+    margin: 8px 0;
+    padding: 2px 12px;
+    border-left: 3px solid rgba(128, 128, 128, 0.4);
+    opacity: 0.85;
+  }
+
+  // remark-gfm 的表格：display:block + overflow-x 让宽表可横向滚动，不撑破面板
+  table {
+    margin: 8px 0;
+    border-collapse: collapse;
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    white-space: normal;
+  }
+
+  th,
+  td {
+    border: 1px solid rgba(128, 128, 128, 0.45);
+    padding: 4px 8px;
+    text-align: left;
+    vertical-align: top;
+    font-size: 12px;
+  }
+
+  th {
+    background: rgba(128, 128, 128, 0.12);
+    font-weight: 600;
+  }
+
+  // 原文里的图片在暗色主题下常是白底长图，限制最大宽度避免横向溢出
+  img {
+    max-width: 100%;
+  }
+}
