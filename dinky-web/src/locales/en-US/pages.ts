@@ -746,6 +746,8 @@ export default {
   'datastudio.aiChat.context.label.datasource': 'Datasource',
   'datastudio.aiChat.context.label.semanticProject': 'Semantic project',
   'datastudio.aiChat.context.label.semanticProjectFromTree': 'Semantic project (no file open)',
+  'datastudio.aiChat.context.label.kbCollection': 'Default knowledge base',
+  'datastudio.aiChat.kbBound': 'KB {collection}',
   // Stage 1a: @ mention
   'datastudio.aiChat.mention.groupTable': 'Table',
   'datastudio.aiChat.mention.groupColumn': 'Columns',
@@ -1509,6 +1511,9 @@ export default {
   'sys.setting.resource': 'Resource Configuration',
   'sys.setting.semantic': 'Semantic Configuration',
   'sys.setting.tag.semantic': 'Semantic',
+  'sys.setting.kb': 'Knowledge Base',
+  'sys.setting.kb.tooltip': 'RAG (kb-service) connection: service URL, API key, retrieval switch and injection budget',
+  'sys.setting.tag.kb': 'Knowledge Base',
   'sys.setting.tag.core': 'Core Configuration',
   'sys.setting.tag.extend': 'Extended Configuration',
   'sys.setting.tag.integration': 'Integration Configuration',
@@ -1863,6 +1868,8 @@ export default {
   'pages.kb.grantHint':
     'Grant tenants first, then refine to roles/users. Search permission does not imply push permission',
   'pages.kb.createSuccess': 'Created',
+  'pages.kb.createHint':
+    'Registered on the Dinky side (it is now a valid push target). A collection on the knowledge base service is aggregated from document ownership, so it only appears there after the first document is pushed and parsed — before that, searches will always return nothing.',
   'pages.kb.updateSuccess': 'Saved',
   'pages.kb.grantSuccess': 'Grant applied',
   'pages.kb.adoptSuccess': 'Registered'

@@ -98,7 +98,7 @@ public class KbSearchTool implements AiTool {
      */
     @Override
     public boolean isEnabled(SystemConfiguration config) {
-        if (config == null || !config.isLlmKbEnable()) {
+        if (config == null || !config.isKbEnable()) {
             return false;
         }
         return kbClient.isReachable();
@@ -342,7 +342,7 @@ public class KbSearchTool implements AiTool {
     /** 本次允许的最大字符数：工具结果上限与知识库独立预算取小 */
     private int budgetOf(AiToolContext context) {
         int toolLimit = context == null ? 0 : context.getMaxResultChars();
-        int kbLimit = SystemConfiguration.getInstances().getLlmKbMaxChars();
+        int kbLimit = SystemConfiguration.getInstances().getKbMaxChars();
         if (toolLimit <= 0) {
             return kbLimit > 0 ? kbLimit : 4000;
         }

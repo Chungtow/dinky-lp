@@ -675,6 +675,8 @@ export default {
   'datastudio.aiChat.context.label.datasource': '数据源',
   'datastudio.aiChat.context.label.semanticProject': '语义项目',
   'datastudio.aiChat.context.label.semanticProjectFromTree': '语义项目（未打开文件）',
+  'datastudio.aiChat.context.label.kbCollection': '默认知识库',
+  'datastudio.aiChat.kbBound': '知识库 {collection}',
   // 阶段 1a：@ 引用
   'datastudio.aiChat.mention.groupTable': '表',
   'datastudio.aiChat.mention.groupColumn': '字段',
@@ -1415,6 +1417,9 @@ export default {
   'sys.setting.resource': 'Resource 配置',
   'sys.setting.semantic': '语义层配置',
   'sys.setting.tag.semantic': '语义层',
+  'sys.setting.kb': '知识库配置',
+  'sys.setting.kb.tooltip': 'RAG（kb-service）连接：服务地址、访问密钥、检索开关与注入预算',
+  'sys.setting.tag.kb': '知识库',
   'sys.setting.tag.core': '核心配置',
   'sys.setting.tag.extend': '扩展配置',
   'sys.setting.tag.integration': '集成配置',
@@ -1755,6 +1760,8 @@ export default {
   'pages.kb.grantHint':
     '先授租户、再按需细化到角色/成员；可检索 ≠ 可推送，推送需要单独授「可推送」',
   'pages.kb.createSuccess': '创建成功',
+  'pages.kb.createHint':
+    '已在 Dinky 侧登记该库（推送目标已可用）。知识库服务中的集合由文档归属聚合而成，推送第一篇文档并通过解析后才会在该侧出现，在此之前检索必然无结果',
   'pages.kb.updateSuccess': '保存成功',
   'pages.kb.grantSuccess': '授权已生效',
   'pages.kb.adoptSuccess': '纳管成功'

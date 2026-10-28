@@ -29,7 +29,9 @@ export enum SettingConfigKeyEnum {
   RESOURCE = 'Resource',
   ENV = 'Env',
   /** P2：语义层（sys.semantic.settings.*） */
-  SEMANTIC = 'Semantic'
+  SEMANTIC = 'Semantic',
+  /** v1.9：知识库/RAG 连接（sys.kb.settings.*，与 LLM、语义层并列） */
+  KB = 'KB'
 }
 
 export enum ButtonFrontendType {

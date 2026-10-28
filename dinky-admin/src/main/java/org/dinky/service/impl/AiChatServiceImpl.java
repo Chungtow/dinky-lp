@@ -341,7 +341,7 @@ public class AiChatServiceImpl implements AiChatService {
     private List<KbCollectionBrief> loadVisibleKbCollections() {
         try {
             SystemConfiguration config = SystemConfiguration.getInstances();
-            if (!config.isLlmKbEnable()) {
+            if (!config.isKbEnable()) {
                 return Collections.emptyList();
             }
             List<KbCollectionBrief> briefs = kbCollectionService.listVisibleBriefs();
@@ -403,7 +403,7 @@ public class AiChatServiceImpl implements AiChatService {
                 .profiles(profiles)
                 .skillEnable(config.isLlmSkillEnable())
                 // 知识库 @kb 接入 v1.0：前端据此决定 @ 候选里是否提供 @kb/
-                .kbEnable(config.isLlmKbEnable())
+                .kbEnable(config.isKbEnable())
                 .build();
     }
 

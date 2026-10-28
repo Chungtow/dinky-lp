@@ -64,7 +64,7 @@ public class KbMentionInjector implements MentionInjector {
         }
         // 开关关闭时**完全不注入**（连"无权访问"都不写）：U-14 要求行为与接入前逐字一致，
         // 否则用户会看到一句莫名其妙的"知识库无权限"，以为是自己配置错了。
-        if (!SystemConfiguration.getInstances().isLlmKbEnable()) {
+        if (!SystemConfiguration.getInstances().isKbEnable()) {
             return "";
         }
         String code = context.getMention().getName();

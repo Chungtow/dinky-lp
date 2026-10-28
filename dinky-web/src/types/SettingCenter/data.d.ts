@@ -81,6 +81,8 @@ export type Settings = {
   kafka: BaseConfigProperties[];
   /** P2：语义层分组（sys.semantic.settings.*：开关 + 语义根） */
   semantic: BaseConfigProperties[];
+  /** v1.9：知识库分组（sys.kb.settings.*：RAG 服务地址/密钥、检索开关与注入预算） */
+  kb: BaseConfigProperties[];
 };
 
 export type BaseConfigProperties = {

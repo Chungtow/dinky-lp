@@ -339,7 +339,7 @@ public class KbClient {
         SystemConfiguration config = SystemConfiguration.getInstances();
         String baseUrl = config.getKbBaseUrl();
         if (StrUtil.isBlank(baseUrl)) {
-            throw new KbUnavailableException("知识库服务地址未配置（配置中心 - LLM 配置 - 知识库服务地址）");
+            throw new KbUnavailableException("知识库服务地址未配置（配置中心 - 全局设置 - 知识库配置 - 知识库服务地址）");
         }
         boolean timeoutSet = false;
         try {
