@@ -25,6 +25,7 @@ import org.dinky.data.constant.PermissionConstants;
 import org.dinky.data.dto.KbDocumentPushDTO;
 import org.dinky.data.enums.BusinessType;
 import org.dinky.data.exception.BusException;
+import org.dinky.data.model.KbPushRecord;
 import org.dinky.data.model.Skill;
 import org.dinky.data.result.Result;
 import org.dinky.data.vo.KbCollectionStatVO;
@@ -32,6 +33,7 @@ import org.dinky.data.vo.KbDocumentContentVO;
 import org.dinky.data.vo.KbDocumentPageVO;
 import org.dinky.data.vo.KbDocumentVO;
 import org.dinky.data.vo.KbPushResultVO;
+import org.dinky.mapper.KbPushRecordMapper;
 import org.dinky.mapper.SkillMapper;
 import org.dinky.service.KbCollectionService;
 import org.dinky.service.kb.KbClient;
@@ -40,6 +42,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.time.LocalDateTime;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -54,6 +57,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 
 import cn.dev33.satoken.annotation.SaCheckLogin;
@@ -111,6 +115,9 @@ public class KbController {
 
     /** 推送后写回 {@code kb_doc_id}（只有 skills 有业务表，见 V20261028.1.4.14） */
     private final SkillMapper skillMapper;
+
+    /** 推送台账：三种来源统一记录 (source, bizKey) → docId（见 V20261028.1.4.15） */
+    private final KbPushRecordMapper kbPushRecordMapper;
 
     /**
      * 当前用户可见的知识库列表（{@code @} 候选的数据来源）。
@@ -412,7 +419,7 @@ public class KbController {
                 result.isDedup(),
                 targets,
                 result.getCollections());
-        writeBackSkillDocId(dto, result);
+        recordPush(dto, result);
         return Result.succeed(result);
     }
 
@@ -432,10 +439,104 @@ public class KbController {
     }
 
     /**
+     * 推送台账查询（排障与批次 D 的"清旧版"用）。
+     *
+     * <p>为什么给读接口：语义层/资源中心没有业务表，{@code doc_id} 只存在这张台账里——
+     * 没有它就只能翻 kb-service 的 meta.json 猜"哪条是上一版"。
+     *
+     * @param source 可选：semantic / skill / resource / editor
+     * @param bizKey 可选：skill id / 资源 id / 语义层 项目/路径
+     */
+    @Log(title = "KB Push Record", businessType = BusinessType.QUERY)
+    @GetMapping("/pushes")
+    @ApiOperation("List push records (which content became which doc_id)")
+    @SaCheckPermission(
+            value = {PermissionConstants.REGISTRATION_KB_VIEW, PermissionConstants.AI_CHAT_USE},
+            mode = SaMode.OR)
+    public Result<List<KbPushRecord>> listPushRecords(
+            @RequestParam(required = false) String source, @RequestParam(required = false) String bizKey) {
+        LambdaQueryWrapper<KbPushRecord> query = new LambdaQueryWrapper<KbPushRecord>()
+                .eq(StrUtil.isNotBlank(source), KbPushRecord::getSource, StrUtil.trimToEmpty(source))
+                .eq(StrUtil.isNotBlank(bizKey), KbPushRecord::getBizKey, StrUtil.trimToEmpty(bizKey))
+                .orderByDesc(KbPushRecord::getUpdateTime)
+                .last("limit 100");
+        return Result.succeed(kbPushRecordMapper.selectList(query));
+    }
+
+    /**
      * 推送成功后把 {@code doc_id} 写回业务表（B11b）。当前只有 skills 有业务表。
      *
      * <p>写回失败<b>不影响推送结果</b>：文档已经在库里了，把整次请求判失败只会让用户重复推
      * （虽然 dedup 会兜住，但体验是"怎么推都不成功"）。所以这里只 warn。
+     */
+    /**
+     * 推送成功后的落库动作：<b>台账（全来源）+ skills 业务列回写</b>。
+     *
+     * <p>两者都<b>不影响推送结果</b>：文档已经在 RAG 里了，把整次请求判失败只会让用户重复推
+     * （dedup 能兜住，但体感是"怎么推都不成功"）。所以全程只 warn。
+     *
+     * <p>台账为什么要覆盖 skills：{@code dinky_skill.kb_doc_id} 只保留"最近一次"，历史版本
+     * 与旧 id 的对应关系只有台账记得住——那是将来"编辑后清旧版"的唯一依据。
+     */
+    private void recordPush(KbDocumentPushDTO dto, KbPushResultVO result) {
+        recordPushLedger(dto, result);
+        writeBackSkillDocId(dto, result);
+    }
+
+    /** 登录 id 可能是 Integer 也可能是 String（Sa-Token 按登录方式返回），统一转 Integer */
+    private Integer asUserId(Object loginId) {
+        if (loginId instanceof Number) {
+            return ((Number) loginId).intValue();
+        }
+        try {
+            return StrUtil.isBlank(String.valueOf(loginId)) ? null : Integer.valueOf(String.valueOf(loginId));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /** 写台账：同一 (source, bizKey, docId) 幂等——重推同内容只更新时间与归属，不新增行 */
+    private void recordPushLedger(KbDocumentPushDTO dto, KbPushResultVO result) {
+        if (StrUtil.isBlank(result.getDocId())) {
+            return;
+        }
+        String source = StrUtil.blankToDefault(StrUtil.trimToEmpty(dto.getSource()), "editor");
+        String bizKey = StrUtil.blankToDefault(dto.getExternalId(), "");
+        if (StrUtil.isBlank(bizKey)) {
+            // 没有业务键就没有"是谁推的"可追，记了也没法反查；宁可空着也不写脏数据
+            return;
+        }
+        try {
+            String collections = String.join(",", result.getCollections());
+            KbPushRecord existing = kbPushRecordMapper.selectOne(new LambdaQueryWrapper<KbPushRecord>()
+                    .eq(KbPushRecord::getSource, source)
+                    .eq(KbPushRecord::getBizKey, bizKey)
+                    .eq(KbPushRecord::getDocId, result.getDocId())
+                    .last("limit 1"));
+            if (existing != null) {
+                existing.setCollections(collections);
+                existing.setFilename(dto.getFilename());
+                existing.setUpdateTime(LocalDateTime.now());
+                kbPushRecordMapper.updateById(existing);
+                return;
+            }
+            KbPushRecord record = new KbPushRecord();
+            record.setSource(source);
+            record.setBizKey(bizKey);
+            record.setDocId(result.getDocId());
+            record.setCollections(collections);
+            record.setFilename(dto.getFilename());
+            record.setPushedBy(asUserId(currentUserIdQuietly()));
+            kbPushRecordMapper.insert(record);
+        } catch (Exception e) {
+            log.warn("KB push: failed to record ledger for {} / {}", source, bizKey, e);
+        }
+    }
+
+    /**
+     * 把 {@code doc_id} 写回 skills 业务表（B11b）。
+     *
+     * <p>只覆盖 skills 的"最近一次"；完整版本历史在台账里。
      */
     private void writeBackSkillDocId(KbDocumentPushDTO dto, KbPushResultVO result) {
         if (!"skill".equalsIgnoreCase(StrUtil.trimToEmpty(dto.getSource()))
