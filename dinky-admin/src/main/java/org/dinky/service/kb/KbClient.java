@@ -179,9 +179,8 @@ public class KbClient {
      * 调用方要给可读提示而不是 500。
      */
     public KbDocumentContent documentContent(String docId) {
-        KbRawResponse raw = send(new HttpGet(urlOf("/v1/documents/" + urlEncode(docId) + "/content")),
-                SEARCH_TIMEOUT_SECONDS,
-                true);
+        KbRawResponse raw = send(
+                new HttpGet(urlOf("/v1/documents/" + urlEncode(docId) + "/content")), SEARCH_TIMEOUT_SECONDS, true);
         if (!raw.isSuccess()) {
             throw errorOf(raw);
         }
@@ -201,8 +200,7 @@ public class KbClient {
      */
     private String urlEncode(String value) {
         try {
-            return java.net.URLEncoder.encode(
-                    StrUtil.nullToEmpty(value), StandardCharsets.UTF_8.name());
+            return java.net.URLEncoder.encode(StrUtil.nullToEmpty(value), StandardCharsets.UTF_8.name());
         } catch (java.io.UnsupportedEncodingException e) {
             // UTF-8 一定存在，此分支不可达；退化为原值以免整条链路失败
             return StrUtil.nullToEmpty(value);

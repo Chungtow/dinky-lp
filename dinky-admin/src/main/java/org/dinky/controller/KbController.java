@@ -356,7 +356,8 @@ public class KbController {
         try {
             return supplier.get();
         } catch (KbClient.KbNotFoundException e) {
-            throw BusException.of("该文档原文未保留，无法在编辑区打开（可能已被清理）：" + e.getMessage());
+            // kb-service 对"文档不存在"与"原文已被 keep_raw=0 清理"都回 404，这里两种可能都要说清
+            throw BusException.of("该文档不存在或原文已被清理，无法在编辑区打开（可在 MinIO Console 查看）：" + e.getMessage());
         } catch (KbClient.KbUnavailableException | KbClient.KbBadRequestException e) {
             throw BusException.of(e.getMessage());
         }
@@ -410,13 +411,38 @@ public class KbController {
      * 只看扩展名会把 {@code text/plain} 的无后缀文件（如 {@code Dockerfile}）误判为不可打开。
      */
     private boolean isOpenable(String filename, String contentType) {
-        if (StrUtil.isNotBlank(contentType) && contentType.toLowerCase(Locale.ROOT).startsWith("text/")) {
+        if (StrUtil.isNotBlank(contentType)
+                && contentType.toLowerCase(Locale.ROOT).startsWith("text/")) {
             return true;
         }
         String name = StrUtil.nullToEmpty(filename).toLowerCase(Locale.ROOT);
         Set<String> textExt = new HashSet<>(java.util.Arrays.asList(
-                "md", "markdown", "txt", "sql", "yaml", "yml", "py", "java", "scala", "json", "xml", "sh", "conf",
-                "properties", "csv", "log", "kt", "js", "ts", "go", "rs", "c", "cpp", "h", "ini", "toml"));
+                "md",
+                "markdown",
+                "txt",
+                "sql",
+                "yaml",
+                "yml",
+                "py",
+                "java",
+                "scala",
+                "json",
+                "xml",
+                "sh",
+                "conf",
+                "properties",
+                "csv",
+                "log",
+                "kt",
+                "js",
+                "ts",
+                "go",
+                "rs",
+                "c",
+                "cpp",
+                "h",
+                "ini",
+                "toml"));
         int dot = name.lastIndexOf('.');
         return dot >= 0 && textExt.contains(name.substring(dot + 1));
     }
