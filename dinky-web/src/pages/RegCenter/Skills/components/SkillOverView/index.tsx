@@ -20,10 +20,19 @@
 import { Authorized } from '@/hooks/useAccess';
 import { PermissionConstants } from '@/types/Public/constants';
 import { l } from '@/utils/intl';
-import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import { CloudUploadOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import PushModal, { KbPushPayload } from '@/pages/DataStudio/Toolbar/Kb/PushModal';
+import { message } from 'antd';
 import { Button, Card, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag } from 'antd';
 import { useEffect, useState } from 'react';
-import { createSkill, detailSkill, listSkills, removeSkill, saveSkill, updateSkillVisibility } from '../../service';
+import {
+  createSkill,
+  detailSkill,
+  listSkills,
+  removeSkill,
+  saveSkill,
+  updateSkillVisibility
+} from '../../service';
 import SkillFilePanel from '../SkillFilePanel';
 import type { SkillInfo } from '@/types/RegCenter/skill';
 
@@ -52,11 +61,22 @@ const SkillOverView = () => {
   const [editing, setEditing] = useState<{ id: number; name: string; content: string }>();
   const [saving, setSaving] = useState(false);
   // 阶段 4b：文件面板（管理 skill 目录树与 references/ 子文件）
-  const [filePanel, setFilePanel] = useState<{ id: number; name: string; assetType?: string; editable: boolean }>();
+  const [filePanel, setFilePanel] = useState<{
+    id: number;
+    name: string;
+    assetType?: string;
+    editable: boolean;
+  }>();
   // 2026-10-14 三档可见性：修改可见性弹窗
-  const [visibilityTarget, setVisibilityTarget] = useState<{ id: number; name: string; visibility?: string }>();
+  const [visibilityTarget, setVisibilityTarget] = useState<{
+    id: number;
+    name: string;
+    visibility?: string;
+  }>();
   const [visibilityForm] = Form.useForm();
   const [visibilitySaving, setVisibilitySaving] = useState(false);
+  /** 批次 C：待推送的 skill（载荷 null = 弹窗关闭） */
+  const [pushPayload, setPushPayload] = useState<KbPushPayload | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -94,6 +114,28 @@ const SkillOverView = () => {
   };
 
   /** 2026-10-14 三档可见性：打开「修改可见性」弹窗（属主校验由后端负责） */
+  /**
+   * 打开推送弹窗：<b>先取最新正文</b>再推。
+   *
+   * <p>不能用列表行数据——列表不含 content；也不能用编辑弹窗里的草稿——那可能是没保存的改动，
+   * 推上去的就不是"当前生效的 skill"。
+   */
+  const openPush = async (row: SkillInfo) => {
+    try {
+      const detail = await detailSkill(row.id);
+      setPushPayload({
+        // skill 正文是 markdown：后缀决定按标题切分，别省
+        filename: `${row.name}.md`,
+        content: detail?.content ?? '',
+        source: 'skill',
+        // id 作为业务主键：服务端据此把 doc_id 写回 dinky_skill.kb_doc_id
+        externalId: String(row.id)
+      });
+    } catch (e: any) {
+      message.error(e?.message ?? l('datastudio.kb.readFailed'));
+    }
+  };
+
   const openVisibility = (row: SkillInfo) => {
     visibilityForm.setFieldsValue({ visibility: row.visibility ?? 'private' });
     setVisibilityTarget({ id: row.id, name: row.name, visibility: row.visibility });
@@ -106,9 +148,12 @@ const SkillOverView = () => {
     const values = await visibilityForm.validateFields();
     setVisibilitySaving(true);
     try {
-      await updateSkillVisibility({ id: visibilityTarget.id, visibility: values.visibility }, () => {
-        setVisibilityTarget(undefined);
-      });
+      await updateSkillVisibility(
+        { id: visibilityTarget.id, visibility: values.visibility },
+        () => {
+          setVisibilityTarget(undefined);
+        }
+      );
       await load();
     } finally {
       setVisibilitySaving(false);
@@ -168,7 +213,8 @@ const SkillOverView = () => {
       title: l('pages.skill.action'),
       // 2026-10-14：本列为 4 个操作（查看/编辑、文件、可见性、删除），原 230 会裁掉末尾的删除按钮；
       // 同时给 Table 加了 scroll.x 兜底，窄屏横向滚动而非裁切；右侧固定，滚动时按钮始终可见。
-      width: 300,
+      // 批次 C 起本列是 5 个操作（查看/编辑、文件、可见性、推送知识库、删除），300 会裁掉末尾
+      width: 420,
       fixed: 'right' as const,
       render: (_: any, row: SkillInfo) => (
         <Space>
@@ -186,6 +232,18 @@ const SkillOverView = () => {
           <Authorized path={PermissionConstants.REGISTRATION_SKILL_SAVE}>
             <Button size={'small'} type={'link'} onClick={() => openVisibility(row)}>
               {l('pages.skill.visibilityChange')}
+            </Button>
+          </Authorized>
+          {/* 批次 C：把 skill 正文推入知识库。有 kb:write 只代表能调接口，
+              具体能不能推某个库由后端按该库的 grant(write) 判定 */}
+          <Authorized path={PermissionConstants.KB_WRITE}>
+            <Button
+              size={'small'}
+              type={'link'}
+              icon={<CloudUploadOutlined />}
+              onClick={() => openPush(row)}
+            >
+              {l('datastudio.kb.pushFromSkill')}
             </Button>
           </Authorized>
           <Authorized path={PermissionConstants.REGISTRATION_SKILL_DELETE}>
@@ -256,6 +314,12 @@ const SkillOverView = () => {
       </Card>
 
       {/* 阶段 4b：文件面板（目录树 + references 子文件；与 AI 工具共用同一组后端接口） */}
+      <PushModal
+        open={Boolean(pushPayload)}
+        payload={pushPayload}
+        onClose={() => setPushPayload(null)}
+      />
+
       <SkillFilePanel
         skillId={filePanel?.id}
         skillName={filePanel?.name}
@@ -267,7 +331,9 @@ const SkillOverView = () => {
 
       <Modal
         open={createOpen}
-        title={createAssetType === 'doc' ? l('pages.skill.createDocTitle') : l('pages.skill.createTitle')}
+        title={
+          createAssetType === 'doc' ? l('pages.skill.createDocTitle') : l('pages.skill.createTitle')
+        }
         okText={l('button.create')}
         cancelText={l('button.cancel')}
         onCancel={() => setCreateOpen(false)}
@@ -292,7 +358,11 @@ const SkillOverView = () => {
             <Input placeholder={l('pages.skill.descriptionPlaceholder')} />
           </Form.Item>
           {/* 2026-10-14 三档可见性：创建时即可选择（默认私有），创建后可在列表行「可见性」中修改 */}
-          <Form.Item name={'visibility'} label={l('pages.skill.visibility')} initialValue={'private'}>
+          <Form.Item
+            name={'visibility'}
+            label={l('pages.skill.visibility')}
+            initialValue={'private'}
+          >
             <Select
               options={[
                 { value: 'private', label: l('pages.skill.visibilityPrivate') },
@@ -301,7 +371,9 @@ const SkillOverView = () => {
               ]}
             />
           </Form.Item>
-          <div style={{ color: 'rgba(0, 0, 0, 0.45)', fontSize: 12 }}>{l('pages.skill.visibilityHint')}</div>
+          <div style={{ color: 'rgba(0, 0, 0, 0.45)', fontSize: 12 }}>
+            {l('pages.skill.visibilityHint')}
+          </div>
         </Form>
       </Modal>
 
@@ -316,7 +388,11 @@ const SkillOverView = () => {
         onOk={handleVisibilitySave}
       >
         <Form form={visibilityForm} layout={'vertical'}>
-          <Form.Item name={'visibility'} label={l('pages.skill.visibility')} rules={[{ required: true }]}>
+          <Form.Item
+            name={'visibility'}
+            label={l('pages.skill.visibility')}
+            rules={[{ required: true }]}
+          >
             <Select
               options={[
                 { value: 'private', label: l('pages.skill.visibilityPrivate') },
@@ -325,7 +401,9 @@ const SkillOverView = () => {
               ]}
             />
           </Form.Item>
-          <div style={{ color: 'rgba(0, 0, 0, 0.45)', fontSize: 12 }}>{l('pages.skill.visibilityHint')}</div>
+          <div style={{ color: 'rgba(0, 0, 0, 0.45)', fontSize: 12 }}>
+            {l('pages.skill.visibilityHint')}
+          </div>
         </Form>
       </Modal>
 

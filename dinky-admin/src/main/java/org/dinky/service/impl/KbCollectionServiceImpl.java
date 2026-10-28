@@ -223,13 +223,23 @@ public class KbCollectionServiceImpl extends SuperServiceImpl<KbCollectionMapper
 
     /** 按单一主体类型查有效授权（{@code permission=view}）对应的知识库 id。 */
     private Set<Long> selectGrantedIds(String subjectType, List<Integer> subjectIds) {
+        return selectGrantedIds(subjectType, subjectIds, KbCollectionGrant.PERMISSION_VIEW);
+    }
+
+    /**
+     * 按单一主体类型 + 权限档查授权对应的知识库 id。
+     *
+     * <p>{@code permission} 必须显式传入：view 决定"能不能看"，write 决定"能不能往里推"，
+     * 两者混用会让"只读授权"变成"可写授权"（把 view 行当 write 用就是提权）。
+     */
+    private Set<Long> selectGrantedIds(String subjectType, List<Integer> subjectIds, String permission) {
         Set<Long> ids = new LinkedHashSet<>();
         if (subjectIds == null || subjectIds.isEmpty()) {
             return ids;
         }
         try {
             LambdaQueryWrapper<KbCollectionGrant> query = new LambdaQueryWrapper<>();
-            query.eq(KbCollectionGrant::getPermission, KbCollectionGrant.PERMISSION_VIEW);
+            query.eq(KbCollectionGrant::getPermission, permission);
             query.eq(KbCollectionGrant::getSubjectType, subjectType);
             query.in(KbCollectionGrant::getSubjectId, subjectIds);
             query.select(KbCollectionGrant::getCollectionId);
@@ -241,7 +251,72 @@ public class KbCollectionServiceImpl extends SuperServiceImpl<KbCollectionMapper
         } catch (Exception e) {
             // 不静默：授权解析失败必须能被看见，否则表现为"配了授权却没生效"
             log.error(
-                    "Failed to resolve granted collections: subjectType={}, subjectIds={}", subjectType, subjectIds, e);
+                    "Failed to resolve {} grants: subjectType={}, subjectIds={}",
+                    permission,
+                    subjectType,
+                    subjectIds,
+                    e);
+        }
+        return ids;
+    }
+
+    @Override
+    public boolean canWrite(String code) {
+        KbCollection collection = getByCode(code);
+        if (collection == null || !Boolean.TRUE.equals(collection.getEnabled())) {
+            return false;
+        }
+        Integer actorId = currentUserId();
+        if (actorId == null) {
+            return false;
+        }
+        if (actorId.equals(collection.getOwnerId())) {
+            return true;
+        }
+        return listWritableCollectionIds(actorId).contains(collection.getId());
+    }
+
+    @Override
+    public List<KbCollectionBrief> listWritableBriefs() {
+        Integer actorId = currentUserId();
+        if (actorId == null) {
+            return Collections.emptyList();
+        }
+        Set<Long> writableIds = listWritableCollectionIds(actorId);
+        // 用可变副本：下面要 addAll，直接改 mapper 返回的集合不可靠
+        List<KbCollection> all = new ArrayList<>(list(new LambdaQueryWrapper<KbCollection>()
+                .eq(KbCollection::getEnabled, true)
+                .eq(KbCollection::getOwnerId, actorId)));
+        // 属主的库 + 被授 write 的库：两段合并后按更新时间倒序
+        if (!writableIds.isEmpty()) {
+            all.addAll(list(new LambdaQueryWrapper<KbCollection>()
+                    .eq(KbCollection::getEnabled, true)
+                    .in(KbCollection::getId, writableIds)));
+        }
+        List<KbCollectionBrief> briefs = new ArrayList<>(all.size());
+        Set<Long> seen = new LinkedHashSet<>();
+        for (KbCollection collection : all) {
+            if (seen.add(collection.getId())) {
+                briefs.add(toBrief(collection));
+            }
+        }
+        return briefs;
+    }
+
+    /** 被显式授予 {@code permission=write} 的库 id（三类主体各查一次后合并，理由同 view） */
+    private Set<Long> listWritableCollectionIds(Integer actorId) {
+        Set<Long> ids = new LinkedHashSet<>();
+        List<Integer> roleIds = listRoleIdsOf(actorId);
+        List<Integer> myTenantIds = listTenantIdsOf(actorId);
+        ids.addAll(selectGrantedIds(
+                KbCollectionGrant.SUBJECT_USER, Collections.singletonList(actorId), KbCollectionGrant.PERMISSION_WRITE));
+        if (!roleIds.isEmpty()) {
+            ids.addAll(selectGrantedIds(
+                    KbCollectionGrant.SUBJECT_ROLE, roleIds, KbCollectionGrant.PERMISSION_WRITE));
+        }
+        if (!myTenantIds.isEmpty()) {
+            ids.addAll(selectGrantedIds(
+                    KbCollectionGrant.SUBJECT_TENANT, myTenantIds, KbCollectionGrant.PERMISSION_WRITE));
         }
         return ids;
     }

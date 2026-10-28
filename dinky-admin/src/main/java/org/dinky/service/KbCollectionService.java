@@ -74,4 +74,23 @@ public interface KbCollectionService extends ISuperService<KbCollection> {
 
     /** 该编码是否在当前用户可见集内（{@code @kb} 越权判定的唯一入口） */
     boolean isVisible(String code);
+
+    /**
+     * 当前用户对某库是否有<b>写</b>权限（批次 C 推送的唯一校验入口）。
+     *
+     * <p>口径（与"可见"故意不同）：<b>属主</b>，或命中 {@code permission='write'} 的 grant。
+     *
+     * <p><b>为什么 {@code is_public=1} 不能推</b>：公开只表示"大家能看"。A 侧 dedup 是
+     * <b>合并归属</b>（只加不减），一旦放任往公开库推，等于任何人都能把自己的内容塞进
+     * 全公司可见的语料里，还会顺带把内容带进其他归属库——这是越权扩散，不是便利（D-K3）。
+     */
+    boolean canWrite(String code);
+
+    /**
+     * 当前用户可写的库（推送弹窗的候选，<b>只列可写的</b>，避免"选了才被告知没权限"）。
+     *
+     * <p>空列表本身就说明"你没有任何可推送的目标"，弹窗应据此给出可操作提示，
+     * 而不是丢一个空的库下拉让用户猜。
+     */
+    List<KbCollectionBrief> listWritableBriefs();
 }

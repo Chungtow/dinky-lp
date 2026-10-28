@@ -82,3 +82,34 @@ export type KbDocumentQuery = {
   limit?: number;
   offset?: number;
 };
+
+/** 可推送的库（只含有写权限的：属主 或 grant(write)） */
+export type KbCollectionBrief = {
+  code: string;
+  name: string;
+  description?: string;
+};
+
+/** 推送请求（服务端注入 provider 与 path，前端不可传） */
+export type KbPushRequest = {
+  filename: string;
+  content: string;
+  collections: string[];
+  /** semantic / skill / resource → 服务端映射成 path 标记 */
+  source: 'semantic' | 'skill' | 'resource';
+  externalId?: string;
+};
+
+/**
+ * 推送结果。
+ *
+ * <p>`dedup=false` 是新文档（异步解析，要轮询 status）；`dedup=true` 表示同内容已存在、
+ * **未重复入库**，`collections` 是合并后的最终归属。
+ */
+export type KbPushResult = {
+  docId: string;
+  dedup: boolean;
+  status: string;
+  collections: string[];
+  message: string;
+};

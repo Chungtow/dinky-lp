@@ -201,6 +201,8 @@ export enum PermissionConstants {
   // dbt 语义项目在线编辑（P2）：3 段式，与后端 datastudio:semantic:view / edit 自洽
   /** 知识库（@kb）浏览：左侧栏「知识库」tab 的可见性判定（F 类权限点，见迁移 .1.4.13） */
   KB_VIEW = '/registration/kb/view',
+  /** 推送到知识库（F 类权限点 194）。⚠️ 有它只代表"能调接口"，能不能推某个库还看该库的 grant(write) */
+  KB_WRITE = '/registration/kb/write',
   DATASTUDIO_SEMANTIC_VIEW = '/datastudio/semantic/view',
   DATASTUDIO_SEMANTIC_EDIT = '/datastudio/semantic/edit',
   // P4 一期：处理语义反馈（提交反馈沿用 VIEW——能看的人都能提，否则收不到反馈）

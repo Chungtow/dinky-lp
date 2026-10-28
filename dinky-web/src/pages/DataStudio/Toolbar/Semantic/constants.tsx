@@ -20,6 +20,7 @@
 import { PermissionConstants } from '@/types/Public/constants';
 import { l } from '@/utils/intl';
 import {
+  CloudUploadOutlined,
   CommentOutlined,
   DeleteOutlined,
   EditOutlined,
@@ -35,6 +36,8 @@ export enum SemanticRightMenuKey {
   RENAME = 'rename',
   DELETE = 'delete',
   FEEDBACK = 'feedback',
+  /** 批次 C：把该文件正文推进知识库 */
+  PUSH = 'push',
   REFRESH = 'refresh'
 }
 
@@ -94,6 +97,16 @@ export const getSemanticContextMenu = ({ isDir, readOnly }: SemanticMenuContext)
       label: l('datastudio.semantic.ctx.feedback'),
       disabled: isDir || readOnly,
       path: PermissionConstants.DATASTUDIO_SEMANTIC_VIEW
+    },
+    { type: 'divider' as const },
+    {
+      // 批次 C：把这份定义（models/metrics 的 yaml、sql 等）推进知识库。
+      // 权限用 kb:write（推送是写动作）；目录没有正文，故 disabled。
+      key: SemanticRightMenuKey.PUSH,
+      icon: <CloudUploadOutlined />,
+      label: l('datastudio.kb.pushFromSemantic'),
+      disabled: isDir,
+      path: PermissionConstants.KB_WRITE
     },
     { type: 'divider' as const },
     {

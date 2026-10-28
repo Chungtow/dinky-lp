@@ -17,9 +17,9 @@
  *
  */
 
-import { getData } from '@/services/api';
+import { getData, postAll } from '@/services/api';
 import { API_CONSTANTS } from '@/services/endpoints';
-import { KbDocumentQuery } from './data.d';
+import { KbDocumentQuery, KbPushRequest } from './data.d';
 
 /**
  * 知识库浏览接口（批次 B，全部只读）。
@@ -51,4 +51,24 @@ export async function listKbDocuments(params: KbDocumentQuery) {
 /** 文档原文（只读打开） */
 export async function readKbDocument(docId: string) {
   return (await getData(`${API_CONSTANTS.KB_DOCUMENTS}/${docId}/content`)) as any;
+}
+
+/** 可推送的库（弹窗候选；服务端按 canWrite 过滤，空列表 = 无任何可推目标） */
+export async function listWritableKbCollections() {
+  return (await getData(API_CONSTANTS.KB_COLLECTIONS_WRITABLE)) as any;
+}
+
+/**
+ * 推送一段文本入知识库。
+ *
+ * <p>只传业务参数：`provider` 与 `path` 由服务端注入（来源标记是审计口径，前端不许伪造成
+ * "从语雀导进来的"）。返回的 `dedup` 决定后续要不要轮询解析状态。
+ */
+export async function pushKbDocument(payload: KbPushRequest) {
+  return (await postAll(API_CONSTANTS.KB_DOCUMENTS, payload)) as any;
+}
+
+/** 轮询推送后的解析状态（queued → parsing → embedding → ready / failed） */
+export async function getKbDocument(docId: string) {
+  return (await getData(`${API_CONSTANTS.KB_DOCUMENTS}/${docId}`)) as any;
 }

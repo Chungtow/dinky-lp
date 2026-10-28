@@ -1783,5 +1783,30 @@ export default {
   'datastudio.kb.justNow': 'just now',
   'datastudio.kb.minutesAgo': 'min ago',
   'datastudio.kb.hoursAgo': 'hour(s) ago',
-  'datastudio.kb.daysAgo': 'day(s) ago'
+  'datastudio.kb.daysAgo': 'day(s) ago',
+  'datastudio.kb.pushFromSemantic': 'Push to KB',
+  'datastudio.kb.pushFromSkill': 'Push',
+  'datastudio.kb.pushFromResource': 'Push to KB',
+  'datastudio.kb.pushNoProject': 'Please select a semantic project first',
+  'datastudio.kb.pushTitle': 'Push to knowledge base',
+  'datastudio.kb.pushOk': 'Push',
+  'datastudio.kb.pushFilename': 'Filename',
+  'datastudio.kb.pushFilenamePlaceholder': 'e.g. naming-convention.md',
+  'datastudio.kb.pushFilenameTip':
+    'The suffix decides chunking: .md splits by heading, .sql/.yaml as plain text. Do not rename to .md just to get it in',
+  'datastudio.kb.pushTargets': 'Target collections (only writable ones are listed)',
+  'datastudio.kb.pickCollection': 'Please select at least one collection',
+  'datastudio.kb.noWritable':
+    'You have no writable collection (public means readable, not writable: owner or write grant required)',
+  'datastudio.kb.pushFailed': 'Failed to push',
+  'datastudio.kb.pushFailedStatus': 'Parsing failed (see the error returned by kb-service)',
+  'datastudio.kb.pushStatusLabel': 'Parse status',
+  'datastudio.kb.pushPolling':
+    'Parsing in background, you may close this dialog and check the KB tab later',
+  'datastudio.kb.pushNotText': 'This resource is not a text file (jar/zip/pdf cannot be pushed)',
+  'datastudio.kb.pushStatus.queued': 'Queued',
+  'datastudio.kb.pushStatus.parsing': 'Parsing',
+  'datastudio.kb.pushStatus.embedding': 'Embedding',
+  'datastudio.kb.pushStatus.ready': 'Ready',
+  'datastudio.kb.pushStatus.failed': 'Failed'
 };

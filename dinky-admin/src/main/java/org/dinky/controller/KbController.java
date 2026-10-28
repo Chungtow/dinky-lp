@@ -22,6 +22,7 @@ package org.dinky.controller;
 import org.dinky.ai.kb.KbCollectionBrief;
 import org.dinky.data.annotations.Log;
 import org.dinky.data.constant.PermissionConstants;
+import org.dinky.data.dto.KbDocumentPushDTO;
 import org.dinky.data.enums.BusinessType;
 import org.dinky.data.exception.BusException;
 import org.dinky.data.result.Result;
@@ -29,6 +30,9 @@ import org.dinky.data.vo.KbCollectionStatVO;
 import org.dinky.data.vo.KbDocumentContentVO;
 import org.dinky.data.vo.KbDocumentPageVO;
 import org.dinky.data.vo.KbDocumentVO;
+import org.dinky.data.model.Skill;
+import org.dinky.data.vo.KbPushResultVO;
+import org.dinky.mapper.SkillMapper;
 import org.dinky.service.KbCollectionService;
 import org.dinky.service.kb.KbClient;
 
@@ -42,8 +46,12 @@ import java.util.Set;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -68,10 +76,11 @@ import lombok.extern.slf4j.Slf4j;
  * <p><b>端点分三批落地</b>：
  * <ul>
  *   <li>批次 A：库列表（{@code @} 候选与范围声明用）与连通性；</li>
- *   <li>批次 B（本版）：{@code /documents}、{@code /documents/{id}}、{@code /documents/{id}/content}
+ *   <li>批次 B：{@code /documents}、{@code /documents/{id}}、{@code /documents/{id}/content}
  *       ——<b>全部只读</b>，可见性在代理层收窄；</li>
- *   <li>批次 C/D：{@code POST /documents}（推送，需 {@code registration:kb:write} 且校验目标库写权限）、
- *       {@code PATCH /documents/{id}}（改归属）与授权 CRUD。</li>
+ *   <li>批次 C（本版）：{@code POST /documents}（推送，需 {@code registration:kb:write} 且
+ *       <b>逐个校验目标库写权限</b>）、{@code /collections/writable}（弹窗候选）；</li>
+ *   <li>批次 D：{@code PATCH /documents/{id}}（改归属）、授权 CRUD、未纳管库发现。</li>
  * </ul>
  *
  * <p><b>安全红线</b>：本类<b>不得</b>返回 kb-service 的地址或 API Key。{@code /health} 只回一个布尔，
@@ -87,9 +96,21 @@ import lombok.extern.slf4j.Slf4j;
 @RequiredArgsConstructor
 public class KbController {
 
+    /**
+     * 单次推送的正文上限（字符数）。
+     *
+     * <p>为什么要有：kb-service 的 embedding 按 token 计费，一次塞几百万字既贵又会把
+     * 切片数量顶爆；而这个入口是"从编辑器推一篇文章"，正常量级在几万字以内。
+     * 超限直接拒绝并提示拆分，比让它排队十分钟再失败体验好。
+     */
+    private static final int MAX_PUSH_CHARS = 200_000;
+
     private final KbCollectionService kbCollectionService;
 
     private final KbClient kbClient;
+
+    /** 推送后写回 {@code kb_doc_id}（只有 skills 有业务表，见 V20261028.1.4.14） */
+    private final SkillMapper skillMapper;
 
     /**
      * 当前用户可见的知识库列表（{@code @} 候选的数据来源）。
@@ -308,6 +329,154 @@ public class KbController {
         vo.setSize(content.getText() == null ? 0 : content.getText().length());
         vo.setCollections(strList(detail.getJSONArray("collection")));
         return Result.succeed(vo);
+    }
+
+    // ------------------------------------------------------------------ 批次 C：推送入知识库
+
+    /**
+     * 可推送的库（弹窗候选）：<b>只列有写权限的</b>。
+     *
+     * <p>列出"可见但不可写"的库再让用户选失败，是最差的交互——用户不知道差在哪一步。
+     */
+    @Log(title = "KB Writable Collection", businessType = BusinessType.QUERY)
+    @GetMapping("/collections/writable")
+    @ApiOperation("List collections the current user can push into")
+    @SaCheckPermission(PermissionConstants.REGISTRATION_KB_WRITE)
+    public Result<List<KbCollectionBrief>> listWritableCollections() {
+        return Result.succeed(kbCollectionService.listWritableBriefs());
+    }
+
+    /**
+     * 推送一段文本入知识库（批次 C 唯一的写入口）。
+     *
+     * <p><b>校验顺序是有讲究的</b>：
+     * <ol>
+     *   <li>内容/文件名合法（后缀决定解析方式，缺后缀服务端会按未知类型处理）；</li>
+     *   <li><b>每个目标库都要有写权限</b>——少校验一个，就等于允许往别人的库/公开库里塞内容，
+     *       而 A 侧 dedup 是合并归属（只加不减），会顺手把内容扩散到该文档的其他归属库（D-K3）；</li>
+     *   <li>最后才发请求，避免"校验没过但已经在 RAG 里留下半条"。 </li>
+     * </ol>
+     */
+    @Log(title = "KB Push Document", businessType = BusinessType.INSERT)
+    @PostMapping("/documents")
+    @ApiOperation("Push a text into knowledge base collections")
+    @SaCheckPermission(PermissionConstants.REGISTRATION_KB_WRITE)
+    public Result<KbPushResultVO> pushDocument(@RequestBody KbDocumentPushDTO dto) {
+        String filename = StrUtil.trimToEmpty(dto.getFilename());
+        if (StrUtil.isBlank(filename)) {
+            throw BusException.of("文件名不能为空（需要带后缀，例如 命名规范.md）");
+        }
+        if (filename.lastIndexOf('.') <= 0) {
+            throw BusException.of("文件名必须带后缀：" + filename + "（后缀决定按 markdown 还是纯文本切分）");
+        }
+        String content = StrUtil.nullToEmpty(dto.getContent());
+        if (StrUtil.isBlank(content)) {
+            throw BusException.of("内容为空，无法推送");
+        }
+        if (content.length() > MAX_PUSH_CHARS) {
+            throw BusException.of("内容过长（" + content.length() + " 字符 > " + MAX_PUSH_CHARS + "），请拆分后再推送");
+        }
+
+        List<String> targets = new ArrayList<>();
+        for (String code : dto.getCollections() == null ? new ArrayList<String>() : dto.getCollections()) {
+            String trimmed = StrUtil.trimToEmpty(code);
+            if (StrUtil.isNotBlank(trimmed) && !targets.contains(trimmed)) {
+                targets.add(trimmed);
+            }
+        }
+        if (targets.isEmpty()) {
+            throw BusException.of("请至少选择一个目标知识库");
+        }
+        List<String> denied = targets.stream()
+                .filter(code -> !kbCollectionService.canWrite(code))
+                .collect(Collectors.toList());
+        if (!denied.isEmpty()) {
+            log.warn("KB push denied: user={}, collections={}", currentUserIdQuietly(), denied);
+            throw BusException.of("你对以下知识库没有写权限：" + String.join("、", denied));
+        }
+
+        String path = pathOfSource(dto.getSource());
+        JSONObject body = proxied(() -> kbClient.createDocument(
+                filename, content, String.join(",", targets), path, dto.getExternalId()));
+
+        KbPushResultVO result = new KbPushResultVO();
+        result.setDocId(body.getStr("doc_id"));
+        result.setDedup(body.getBool("dedup", false));
+        result.setStatus(body.getStr("status"));
+        result.setCollections(strList(body.getJSONArray("collection")));
+        result.setMessage(pushMessage(result));
+        log.info(
+                "KB push ok: user={}, doc={}, dedup={}, targets={}, final={}",
+                currentUserIdQuietly(),
+                result.getDocId(),
+                result.isDedup(),
+                targets,
+                result.getCollections());
+        writeBackSkillDocId(dto, result);
+        return Result.succeed(result);
+    }
+
+    /**
+     * 幂等文案（先行记录 §10.3 矩阵）。
+     *
+     * <p>刻意<b>不写</b>"已补充归属到 Y"：kb-service 只回合并后的最终集合，回不出"这次新加了哪个"
+     * （实测 dedup 响应只有 {@code collection[]}）。与其猜一个库名，不如把最终归属完整列出来——
+     * 用户要的正是"这条现在在哪些库里"。
+     */
+    private String pushMessage(KbPushResultVO result) {
+        String owners = String.join("、", result.getCollections());
+        if (!result.isDedup()) {
+            return "已推送，后台解析中（可在「知识库」tab 查看状态）";
+        }
+        return StrUtil.isBlank(owners)
+                ? "已存在（文档未重复入库）"
+                : "已存在（文档未重复入库），当前归属：" + owners;
+    }
+
+    /**
+     * 推送成功后把 {@code doc_id} 写回业务表（B11b）。当前只有 skills 有业务表。
+     *
+     * <p>写回失败<b>不影响推送结果</b>：文档已经在库里了，把整次请求判失败只会让用户重复推
+     * （虽然 dedup 会兜住，但体验是"怎么推都不成功"）。所以这里只 warn。
+     */
+    private void writeBackSkillDocId(KbDocumentPushDTO dto, KbPushResultVO result) {
+        if (!"skill".equalsIgnoreCase(StrUtil.trimToEmpty(dto.getSource()))
+                || StrUtil.isBlank(dto.getExternalId())
+                || StrUtil.isBlank(result.getDocId())) {
+            return;
+        }
+        Long skillId;
+        try {
+            skillId = Long.valueOf(StrUtil.trim(dto.getExternalId()));
+        } catch (NumberFormatException e) {
+            log.warn("KB push: externalId is not a skill id, skip write-back: {}", dto.getExternalId());
+            return;
+        }
+        try {
+            skillMapper.update(
+                    null,
+                    new LambdaUpdateWrapper<Skill>()
+                            .eq(Skill::getId, skillId)
+                            .set(Skill::getKbDocId, result.getDocId()));
+        } catch (Exception e) {
+            log.warn("KB push: failed to write back kb_doc_id for skill {}", skillId, e);
+        }
+    }
+
+    /** 来源 → {@code path} 标记。服务端映射，前端不能自定义（来源标记是审计口径） */
+    private String pathOfSource(String source) {
+        String key = StrUtil.blankToDefault(source, "editor").trim().toLowerCase(Locale.ROOT);
+        switch (key) {
+            case "semantic":
+                return "语义层";
+            case "skill":
+            case "skills":
+                return "skills";
+            case "resource":
+                return "资源";
+            default:
+                return "编辑器";
+        }
     }
 
     // ------------------------------------------------------------------ 内部：可见性与字段映射

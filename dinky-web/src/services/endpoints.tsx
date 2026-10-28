@@ -203,8 +203,10 @@ export enum API_CONSTANTS {
   KB_HEALTH = '/api/kb/health',
   /** 可见库 + 计数（左侧栏「知识库」tab 上半栏；计数来自 kb-service 实时聚合） */
   KB_COLLECTION_STATS = '/api/kb/collections/stats',
-  /** 库内文档列表（真实地址 `{id}` / `{id}/content` 拼在其后） */
+  /** 库内文档列表（真实地址 `{id}` / `{id}/content` 拼在其后；POST 同址 = 推送入库） */
   KB_DOCUMENTS = '/api/kb/documents',
+  /** 可推送的库（只含当前用户有写权限的：属主 或 grant(write)） */
+  KB_COLLECTIONS_WRITABLE = '/api/kb/collections/writable',
 
   /** --------------------------------------------  skill（阶段 4a）  ------------------------------------------------------- */
   SKILL_LIST = '/api/skill/list',

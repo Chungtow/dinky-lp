@@ -110,6 +110,13 @@ public class Skill implements Serializable {
     @ApiModelProperty(value = "Create Time", dataType = "String", notes = "创建时间")
     private LocalDateTime createTime;
 
+    @ApiModelProperty(
+            value = "Kb Doc Id",
+            dataType = "String",
+            notes = "最近一次推送到知识库得到的 doc_id（sha256(正文)）。内容一改就是新 id，"
+                    + "旧 id 仍留在库里——要清旧版得拿它显式删（知识库 @kb 接入 v1.0 / B11b）")
+    private String kbDocId;
+
     @TableField(fill = FieldFill.INSERT_UPDATE)
     @JsonDeserialize(using = LocalDateTimeDeserializer.class)
     @JsonSerialize(using = LocalDateTimeSerializer.class)

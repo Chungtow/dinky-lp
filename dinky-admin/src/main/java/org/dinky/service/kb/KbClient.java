@@ -72,6 +72,14 @@ public class KbClient {
     /** 检索超时（与工具 timeoutSeconds 对齐） */
     public static final int SEARCH_TIMEOUT_SECONDS = 15;
 
+    /**
+     * 推送超时。比检索长：要传整篇正文 + 服务端做 dedup 判定与入队。
+     *
+     * <p>注意返回 202 只代表"入队成功"，解析与 embedding 是异步的——状态靠轮询详情接口，
+     * 不要指望把超时调大就能等到 {@code ready}。
+     */
+    public static final int PUSH_TIMEOUT_SECONDS = 30;
+
     private final CloseableHttpClient httpClient = HttpClients.createDefault();
 
     private volatile long lastProbeAt = 0L;
@@ -190,6 +198,65 @@ public class KbClient {
         content.contentType = raw.contentType;
         content.text = raw.body;
         return content;
+    }
+
+    /**
+     * 推送一篇文档入库（{@code POST /v1/documents}，批次 C 的唯一写入口）。
+     *
+     * <p><b>返回语义要分清（2026-10-28 实测）</b>：
+     * <ul>
+     *   <li>首次推送 → <b>HTTP 202</b>、{@code dedup=false}、{@code status=queued}，
+     *       之后需轮询 {@code GET /v1/documents/{id}} 等 {@code ready}/{@code failed}；</li>
+     *   <li>同内容再推 → <b>HTTP 200</b>、{@code dedup=true}、{@code status=ready}，
+     *       响应里的 {@code collection[]} 是<b>合并后</b>的最终归属（只加不减）；</li>
+     *   <li>内容改过再推 → 新 {@code doc_id}，旧文档仍留在库里（A 侧没有"更新"动作，
+     *       实测 {@code supersede_result} 恒为 {@code none}）。</li>
+     * </ul>
+     *
+     * <p><b>为什么手写 multipart</b>：仓库没有 httpmime 依赖，而这里要传的只有一个纯文本
+     * 部件，为它引一个依赖不值得。格式按 RFC 7578：每部分前导边界行、结尾 {@code --boundary--}。
+     *
+     * @param collectionsCsv 库编码逗号分隔（A 侧只接受字符串，传数组会被拒）
+     */
+    public JSONObject createDocument(
+            String filename, String content, String collectionsCsv, String path, String externalId) {
+        String boundary = "----DinkyKbBoundary" + System.nanoTime();
+        StringBuilder body = new StringBuilder();
+        appendFormField(body, boundary, "source", filename);
+        appendFormField(body, boundary, "collection", collectionsCsv);
+        // provider 由服务端注入，前端不许覆盖（来源标记的真相源在服务端）
+        appendFormField(body, boundary, "provider", "dinky");
+        appendFormField(body, boundary, "path", path);
+        if (StrUtil.isNotBlank(externalId)) {
+            appendFormField(body, boundary, "external_id", externalId);
+        }
+        // 文件部件：后缀决定解析方式（.md 切标题，其余按纯文本切分），不要擅自改成 .md
+        body.append("--").append(boundary).append("\r\n");
+        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"")
+                .append(safePartName(filename))
+                .append("\"\r\n");
+        body.append("Content-Type: text/plain; charset=UTF-8\r\n\r\n");
+        body.append(StrUtil.nullToEmpty(content)).append("\r\n");
+        body.append("--").append(boundary).append("--\r\n");
+
+        HttpPost post = new HttpPost(urlOf("/v1/documents"));
+        StringEntity entity = new StringEntity(body.toString(), StandardCharsets.UTF_8);
+        entity.setContentType("multipart/form-data; boundary=" + boundary);
+        post.setEntity(entity);
+        return execute(post, PUSH_TIMEOUT_SECONDS, true);
+    }
+
+    /** multipart 的普通文本字段 */
+    private void appendFormField(StringBuilder body, String boundary, String name, String value) {
+        body.append("--").append(boundary).append("\r\n");
+        body.append("Content-Disposition: form-data; name=\"").append(name).append("\"\r\n\r\n");
+        body.append(StrUtil.nullToEmpty(value)).append("\r\n");
+    }
+
+    /** 文件名里的引号/换行会破坏 multipart 头部，直接替换掉（kb-service 侧也只是当标签用） */
+    private String safePartName(String filename) {
+        String name = StrUtil.blankToDefault(filename, "untitled.txt");
+        return name.replace("\"", "_").replace("\r", "_").replace("\n", "_");
     }
 
     /**
