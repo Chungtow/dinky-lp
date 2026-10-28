@@ -208,6 +208,15 @@ export enum API_CONSTANTS {
   /** 可推送的库（只含当前用户有写权限的：属主 或 grant(write)） */
   KB_COLLECTIONS_WRITABLE = '/api/kb/collections/writable',
 
+  /** 管理：我管理的库（属主库；超管为全部）。子路径 `/{id}/grants` 拼在其后 */
+  KB_ADMIN_COLLECTIONS = '/api/kb/admin/collections',
+  /** 管理：kb-service 有、Dinky 未纳管的库（超管） */
+  KB_ADMIN_ORPHANS = '/api/kb/admin/orphans',
+  /** 管理：纳管既有库（code 原样沿用 RAG 标识） */
+  KB_ADMIN_ADOPT = '/api/kb/admin/collections/adopt',
+  /** 管理：撤销授权，子路径 `/{grantId}` */
+  KB_ADMIN_GRANTS = '/api/kb/admin/grants',
+
   /** --------------------------------------------  skill（阶段 4a）  ------------------------------------------------------- */
   SKILL_LIST = '/api/skill/list',
   SKILL_DETAIL = '/api/skill/detail',

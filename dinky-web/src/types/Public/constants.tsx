@@ -203,6 +203,10 @@ export enum PermissionConstants {
   KB_VIEW = '/registration/kb/view',
   /** 推送到知识库（F 类权限点 194）。⚠️ 有它只代表"能调接口"，能不能推某个库还看该库的 grant(write) */
   KB_WRITE = '/registration/kb/write',
+  /** 知识库管理：建库/改名/启停（F 类权限点 192） */
+  KB_SAVE = '/registration/kb/save',
+  /** 知识库授权：增删 grant（F 类权限点 193） */
+  KB_SHARE = '/registration/kb/share',
   DATASTUDIO_SEMANTIC_VIEW = '/datastudio/semantic/view',
   DATASTUDIO_SEMANTIC_EDIT = '/datastudio/semantic/edit',
   // P4 一期：处理语义反馈（提交反馈沿用 VIEW——能看的人都能提，否则收不到反馈）

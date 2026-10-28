@@ -175,4 +175,23 @@ public class AiChatRequest {
      * <p><b>不接受前端传入</b>：Controller 会用 Sa-Token 的登录 id 覆盖，防止伪造绕过限流。
      */
     private Integer userId;
+
+    /**
+     * 知识库审计（批次 D）：<b>注入层</b>被拒绝的库编码（{@code @kb} 指到不可见/已停用的库）。
+     *
+     * <p>为什么挂在请求对象上：注入发生在请求线程（{@link org.dinky.ai.mention.KbMentionInjector}），
+     * 而审计对象在另一条链路上构建；两者唯一的共同上下文就是这个请求。用 {@code @JsonIgnore}
+     * 保证它<b>绝不会</b>被序列化回前端——那是内部审计数据，不是响应字段。
+     *
+     * <p>工具层的越权记录走 {@code AiToolContext}（异步线程里攒），二者在审计落库时合并。
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private java.util.List<String> kbDeniedCodes = new java.util.ArrayList<>();
+
+    /** 记录一次注入层拒绝（去重；不抛异常，审计永远不该影响主流程） */
+    public void recordKbDenied(String code) {
+        if (code != null && !code.trim().isEmpty() && !kbDeniedCodes.contains(code.trim())) {
+            kbDeniedCodes.add(code.trim());
+        }
+    }
 }

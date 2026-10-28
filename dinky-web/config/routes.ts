@@ -206,6 +206,13 @@ export default [
         name: 'skill',
         icon: 'ThunderboltOutlined',
         component: './RegCenter/Skills'
+      },
+      {
+        // 批次 D：知识库管理（库列表/未纳管发现/授权）。菜单 191 在迁移 .1.4.17 里打开 display
+        path: '/registration/kb',
+        name: 'kb',
+        icon: 'BookOutlined',
+        component: './RegCenter/Kb'
       }
     ]
   },

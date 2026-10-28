@@ -26,8 +26,10 @@ import org.dinky.data.model.DataBase;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import cn.hutool.core.util.StrUtil;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -81,6 +83,45 @@ public class AiToolContext {
      * <p>默认为<b>空列表</b>而非 {@code null}：工具侧可直接遍历，无需判空。
      */
     private List<KbCollectionBrief> visibleCollections = Collections.emptyList();
+
+    /**
+     * 审计：本次对话<b>实际检索过</b>的库编码（去重、保序）。
+     *
+     * <p><b>为什么用 {@link CopyOnWriteArrayList}</b>：工具循环在异步线程里跑，
+     * 同一个 context 可能被并发写；普通 ArrayList 会丢元素甚至抛
+     * {@code ConcurrentModificationException}——审计数据丢一条就等于"看起来没检索过"。
+     *
+     * <p>与 {@link #visibleCollections} 的区别：那个是"能看什么"，这个是"实际搜了什么"。
+     * 排障时要回答的是后者（"用户说答错了，他到底检索了哪几个库"）。
+     */
+    private final List<String> kbSearchedCodes = new CopyOnWriteArrayList<>();
+
+    /** 审计：本次对话被<b>显式拒绝</b>的库编码（越权请求，实施计划 U-05/U-16 的落点） */
+    private final List<String> kbDeniedCodes = new CopyOnWriteArrayList<>();
+
+    /** 审计：本次对话知识库检索的累计命中条数（0 也要记——"检索了但没命中"本身就是结论） */
+    private final AtomicInteger kbHitCount = new AtomicInteger();
+
+    /** 记录一次成功下发的检索（在检索真正返回之后调用） */
+    public void recordKbSearch(List<String> codes, int hits) {
+        if (codes != null) {
+            for (String code : codes) {
+                if (StrUtil.isNotBlank(code) && !kbSearchedCodes.contains(code)) {
+                    kbSearchedCodes.add(code);
+                }
+            }
+        }
+        if (hits > 0) {
+            kbHitCount.addAndGet(hits);
+        }
+    }
+
+    /** 记录一次越权拒绝（库不在可见集内） */
+    public void recordKbDenied(String code) {
+        if (StrUtil.isNotBlank(code) && !kbDeniedCodes.contains(code)) {
+            kbDeniedCodes.add(code);
+        }
+    }
 
     /**
      * P1：请求线程预解析的上下文快照（本租户启用中的数据源索引 + 命名名册）。

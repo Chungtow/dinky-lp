@@ -67,7 +67,17 @@ public class KbMentionInjector implements MentionInjector {
         if (!SystemConfiguration.getInstances().isLlmKbEnable()) {
             return "";
         }
-        return render(context.getMention().getName(), context.getVisibleCollections());
+        String code = context.getMention().getName();
+        List<KbCollectionBrief> visible = context.getVisibleCollections();
+        String rendered = render(code, visible);
+        // 审计：@kb 指到不可见/已停用的库时留痕。判定条件与 render 内部完全一致（同一个 find），
+        // 不另写一套"是否越权"的判断——两套口径迟早会分叉
+        if (StrUtil.isNotBlank(StrUtil.trim(code))
+                && find(visible, StrUtil.trim(code)) == null
+                && context.getRequest() != null) {
+            context.getRequest().recordKbDenied(StrUtil.trim(code));
+        }
+        return rendered;
     }
 
     /**

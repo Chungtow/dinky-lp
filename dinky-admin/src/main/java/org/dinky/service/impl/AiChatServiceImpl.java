@@ -662,6 +662,18 @@ public class AiChatServiceImpl implements AiChatService {
                         ? ""
                         : toolRun.getToolCallLogs().toString();
                 audit.setToolCalls(StrUtil.sub(logs, 0, MAX_TOOL_AUDIT_CHARS));
+                // 知识库审计（批次 D）：三列都是"可查询的事实"，不是自由文本——
+                // 排障时能直接按 kb_denied 找出"谁在试越权"、按 kb_collections 找"这条回答检索过哪些库"
+                audit.setKbCollections(StrUtil.sub(String.join(",", toolRun.getKbSearchedCodes()), 0, 512));
+                audit.setKbHits(toolRun.getKbHitCount());
+                // 合并两个来源：注入层（@kb 指到不可见库，记在请求对象上）+ 工具层（collection 越权）
+                List<String> denied = new ArrayList<>(request.getKbDeniedCodes());
+                for (String code : toolRun.getKbDeniedCodes()) {
+                    if (!denied.contains(code)) {
+                        denied.add(code);
+                    }
+                }
+                audit.setKbDenied(StrUtil.sub(String.join(",", denied), 0, 512));
             }
             // 20261025：空回答兜底——工具轮异常或模型只吐思考不吐正文时，必须给出可读提示，
             // 而不是静默 complete()（前端表现为"思考完就没有输出"，用户无从判断发生了什么）。
@@ -806,7 +818,7 @@ public class AiChatServiceImpl implements AiChatService {
         });
         // 阶段 2c-2：装配自动纠错上限（工具据此在失败达上限后停止重试）
         context.setMaxRepairAttempts(Math.max(config.getLlmToolAutoRepairMaxAttempts(), 1));
-        return toolLoop.run(
+        AiToolRunResult runResult = toolLoop.run(
                 messages,
                 context,
                 profile,
@@ -868,6 +880,12 @@ public class AiChatServiceImpl implements AiChatService {
                     }
                 },
                 cancelled);
+        // 知识库审计（批次 D）：把工具线程里攒下的审计事实搬回请求线程。
+        // 工具循环在异步线程跑，审计对象却在调用方手里——不搬这一跳，库里只有 tool_calls 的自由文本。
+        runResult.setKbSearchedCodes(new ArrayList<>(context.getKbSearchedCodes()));
+        runResult.setKbDeniedCodes(new ArrayList<>(context.getKbDeniedCodes()));
+        runResult.setKbHitCount(context.getKbHitCount().get());
+        return runResult;
     }
 
     /**

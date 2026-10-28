@@ -150,6 +150,10 @@ public class KbSearchTool implements AiTool {
 
         List<String> scope = resolveScope(args.getStr("collection"), context);
         if (scope == null) {
+            // 审计：越权请求必须留痕（排障第一现场：用户说"我明明有权限"时查这里）
+            if (context != null && StrUtil.isNotBlank(args.getStr("collection"))) {
+                context.recordKbDenied(args.getStr("collection"));
+            }
             return AiToolResult.failure(
                     KbToolSupport.notVisibleMessage(args.getStr("collection")) + "当前可用："
                             + KbToolSupport.visibleLabels(context),
@@ -169,6 +173,11 @@ public class KbSearchTool implements AiTool {
 
         try {
             JSONObject response = kbClient.search(body);
+            if (context != null) {
+                // 记"实际搜了哪些库 + 命中多少条"：0 条也要记，它是"检索了但库里没有"的客观依据
+                JSONArray results = response == null ? null : response.getJSONArray("results");
+                context.recordKbSearch(scope, results == null ? 0 : results.size());
+            }
             String text = render(query, scope, expand, response, context);
             return AiToolResult.success(text, System.currentTimeMillis() - start);
         } catch (KbClient.KbBadRequestException e) {
