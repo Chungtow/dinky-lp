@@ -18,6 +18,7 @@
  */
 
 import { HasAuthority } from '@/hooks/useAccess';
+import ThemeChip from '@/components/ThemeChip';
 import { PermissionConstants } from '@/types/Public/constants';
 import { l } from '@/utils/intl';
 import { SuccessMessage, WarningMessage } from '@/utils/messages';
@@ -386,10 +387,12 @@ export const SemanticFeedbackDrawer = (props: SemanticFeedbackDrawerProps) => {
       }
       extra={
         <Space size={6}>
+          {/* 用 ThemeChip 而不是 antd Tag：DataStudio 的 ConfigProvider 把 colorBgContainer
+              设成了 CSS 变量字符串，Tag 的派生底色会退化，深色主题下计数标签「黑字黑底」看不清 */}
           {counters.map((item) => (
-            <Tag key={item.key}>
+            <ThemeChip key={item.key} tone={item.key === 'open' ? 'warn' : 'neutral'}>
               {item.label} {item.value}
-            </Tag>
+            </ThemeChip>
           ))}
           <Button size={'small'} loading={loading} onClick={() => load(status)}>
             {l('datastudio.semantic.refresh')}

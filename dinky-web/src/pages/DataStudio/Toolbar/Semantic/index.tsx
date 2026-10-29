@@ -59,6 +59,7 @@ import {
   SemanticFeedbackModal,
   semanticAssetOf
 } from './FeedbackModal';
+import PushModal, { KbPushPayload } from '@/pages/DataStudio/Toolbar/Kb/PushModal';
 import { l } from '@/utils/intl';
 
 const { Text } = Typography;
@@ -184,6 +185,8 @@ const Semantic = (props: {
     { assetName: string; assetType: SemanticAssetType } | undefined
   >();
   const [todoOpen, setTodoOpen] = useState<boolean>(false);
+  /** 批次 C：待推送的语义文件（打开弹窗用的载荷，null = 弹窗关闭） */
+  const [pushPayload, setPushPayload] = useState<KbPushPayload | null>(null);
   const [todoCount, setTodoCount] = useState<number>(0);
 
   const loadProjects = useCallback(async () => {
@@ -544,6 +547,34 @@ const Semantic = (props: {
         setFeedbackTarget(asset);
         break;
       }
+      case SemanticRightMenuKey.PUSH: {
+        // 推送前现读一次正文：树里的节点没有内容，而"推送的是不是最新版"必须在这一刻确定，
+        // 不能拿几分钟前打开过的 tab 里的快照（那可能是未保存的编辑内容）。
+        const path = rightClicked.key;
+        const name = path.split('/').pop() ?? 'semantic.md';
+        // project 为 undefined 时（未选项目）没有可读的路径，直接提示而不是发一个空项目请求
+        if (!project) {
+          message.warning(l('datastudio.kb.pushNoProject'));
+          break;
+        }
+        const projectName: string = project;
+        readSemanticFile(projectName, path)
+          .then((res: any) => {
+            if (res?.code !== 0) {
+              message.error(res?.msg ?? l('datastudio.kb.readFailed'));
+              return;
+            }
+            setPushPayload({
+              filename: name,
+              content: res?.data?.content ?? '',
+              source: 'semantic',
+              // 项目 + 路径作为业务主键，排障时能反查是哪个文件推的
+              externalId: `${projectName}/${path}`
+            });
+          })
+          .catch((e: any) => message.error(e?.message ?? l('datastudio.kb.readFailed')));
+        break;
+      }
       case SemanticRightMenuKey.REFRESH:
         refresh();
         break;
@@ -631,6 +662,12 @@ const Semantic = (props: {
           )}
         </Spin>
       )}
+
+      <PushModal
+        open={Boolean(pushPayload)}
+        payload={pushPayload}
+        onClose={() => setPushPayload(null)}
+      />
 
       <RightContextMenu
         contextMenuPosition={contextMenuPosition}

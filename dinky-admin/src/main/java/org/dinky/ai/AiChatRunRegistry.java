@@ -53,8 +53,11 @@ public class AiChatRunRegistry {
     public static class RunContext {
         /** 发起用户（鉴权用） */
         private final Integer userId;
-        /** 待确认结果的投递队列（容量 1）：true=确认执行；false=拒绝 */
-        private final BlockingQueue<Boolean> confirmQueue = new LinkedBlockingQueue<>(1);
+        /**
+         * 待确认结果的投递队列（容量 1）：{@link AiConfirmDecision} 三态
+         * （拒绝 / 落盘确认 / 仅应用到编辑区）。
+         */
+        private final BlockingQueue<AiConfirmDecision> confirmQueue = new LinkedBlockingQueue<>(1);
         /** 是否已被请求取消（volatile，供循环线程读取） */
         private volatile boolean cancelled = false;
 
@@ -76,7 +79,7 @@ public class AiChatRunRegistry {
         }
 
         /** 等待一个确认结果；返回 null 表示超时未确认 */
-        public Boolean awaitConfirm(long timeoutSeconds) {
+        public AiConfirmDecision awaitConfirm(long timeoutSeconds) {
             try {
                 return confirmQueue.poll(Math.max(timeoutSeconds, 1), TimeUnit.SECONDS);
             } catch (InterruptedException e) {
@@ -86,8 +89,8 @@ public class AiChatRunRegistry {
         }
 
         /** 投递确认结果（重复投递由队列容量保证只接受首个） */
-        boolean offer(Boolean approve) {
-            return confirmQueue.offer(approve);
+        boolean offer(AiConfirmDecision decision) {
+            return confirmQueue.offer(decision);
         }
 
         /**
@@ -164,12 +167,23 @@ public class AiChatRunRegistry {
      * @param confirmName 用户手输的目标名称；非强化确认场景传 {@code null}
      */
     public boolean submitConfirm(String runId, Integer userId, boolean approve, String confirmName) {
+        return submitConfirm(
+                runId, userId, approve ? AiConfirmDecision.APPROVE : AiConfirmDecision.REJECT, confirmName);
+    }
+
+    /**
+     * 三态确认投递（2026-10-29）：在"确认 / 拒绝"之外额外支持 {@link AiConfirmDecision#APPLY_ONLY}
+     * ——用户把 AI 的改写"接收进编辑区"，但<b>不落盘</b>。
+     *
+     * <p>名称同样在投递结果<b>之前</b>写入上下文，保证等待线程读到的是同一次确认的输入。
+     */
+    public boolean submitConfirm(String runId, Integer userId, AiConfirmDecision decision, String confirmName) {
         RunContext context = get(runId);
         if (context == null || !Objects.equals(context.getUserId(), userId)) {
             return false;
         }
         context.setConfirmTypedName(confirmName);
-        boolean accepted = context.offer(approve);
+        boolean accepted = context.offer(decision == null ? AiConfirmDecision.REJECT : decision);
         if (!accepted) {
             log.debug("Duplicate confirm ignored, runId: {}", runId);
         }
@@ -191,7 +205,7 @@ public class AiChatRunRegistry {
         // 阶段 2c-2 修复：必须先清空可能残留的确认值——队列容量为 1，若已有一个尚未被消费的 TRUE，
         // 直接 offer(FALSE) 会失败被丢弃，阻塞中的写操作将消费到旧值而照常执行。
         context.clearConfirm();
-        context.offer(Boolean.FALSE);
+        context.offer(AiConfirmDecision.REJECT);
         return true;
     }
 

@@ -23,6 +23,7 @@ import org.dinky.data.annotations.Log;
 import org.dinky.data.constant.PermissionConstants;
 import org.dinky.data.dto.SkillCreateDTO;
 import org.dinky.data.dto.SkillFileRemoveDTO;
+import org.dinky.data.dto.SkillFileRenameDTO;
 import org.dinky.data.dto.SkillFileWriteDTO;
 import org.dinky.data.dto.SkillSaveDTO;
 import org.dinky.data.dto.SkillVisibilityDTO;
@@ -131,7 +132,9 @@ public class SkillController {
             value = {PermissionConstants.REGISTRATION_SKILL_SAVE, PermissionConstants.REGISTRATION_RESOURCE_UPLOAD},
             mode = SaMode.OR)
     public Result<Skill> save(@RequestBody SkillSaveDTO skillSaveDTO) {
-        return Result.succeed(skillService.save(skillSaveDTO.getId(), skillSaveDTO.getContent()));
+        // 批次 F：带上编辑起点的 version 做乐观锁（为空则不校验，兼容旧前端与脚本）
+        return Result.succeed(
+                skillService.save(skillSaveDTO.getId(), skillSaveDTO.getContent(), skillSaveDTO.getBaseVersion()));
     }
 
     @PostMapping("/visibility")
@@ -196,7 +199,9 @@ public class SkillController {
                 skillFileWriteDTO.getSkillId(),
                 skillFileWriteDTO.getRelativePath(),
                 skillFileWriteDTO.getContent(),
-                StpUtil.getLoginIdAsInt()));
+                StpUtil.getLoginIdAsInt(),
+                // 批次 F：主文件乐观锁（附件不递增版本，服务端会忽略）
+                skillFileWriteDTO.getBaseVersion()));
     }
 
     @PostMapping("/file/mkdir")
@@ -208,6 +213,20 @@ public class SkillController {
     public Result<SkillFileNode> mkdir(@RequestBody SkillFileRemoveDTO skillFileRemoveDTO) {
         return Result.succeed(skillService.mkdir(
                 skillFileRemoveDTO.getSkillId(), skillFileRemoveDTO.getRelativePath(), StpUtil.getLoginIdAsInt()));
+    }
+
+    @PostMapping("/file/rename")
+    @ApiOperation("Rename a File Inside a Skill")
+    @Log(title = "Rename Skill File", businessType = BusinessType.UPDATE)
+    @SaCheckPermission(
+            value = {PermissionConstants.REGISTRATION_SKILL_FILE, PermissionConstants.REGISTRATION_RESOURCE_UPLOAD},
+            mode = SaMode.OR)
+    public Result<SkillFileNode> renameFile(@RequestBody SkillFileRenameDTO skillFileRenameDTO) {
+        return Result.succeed(skillService.renameFile(
+                skillFileRenameDTO.getSkillId(),
+                skillFileRenameDTO.getRelativePath(),
+                skillFileRenameDTO.getNewName(),
+                StpUtil.getLoginIdAsInt()));
     }
 
     @PostMapping("/file/remove")

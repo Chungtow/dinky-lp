@@ -21,6 +21,7 @@ package org.dinky.service.impl;
 
 import org.dinky.ai.AiChatRateLimiter;
 import org.dinky.ai.AiChatRunRegistry;
+import org.dinky.ai.AiConfirmDecision;
 import org.dinky.ai.AiToolCall;
 import org.dinky.ai.AiToolContext;
 import org.dinky.ai.AiToolLoop;
@@ -39,7 +40,11 @@ import org.dinky.ai.context.ContextFingerprintCache;
 import org.dinky.ai.context.FlinkContextProvider;
 import org.dinky.ai.context.NameRegistryService;
 import org.dinky.ai.context.RequestSnapshot;
+import org.dinky.ai.kb.KbCollectionBrief;
 import org.dinky.ai.mention.EnvRefRenderer;
+import org.dinky.ai.mention.KbMentionInjector;
+import org.dinky.ai.mention.MentionInjectContext;
+import org.dinky.ai.mention.MentionInjector;
 import org.dinky.ai.mention.MentionType;
 import org.dinky.ai.mention.SourceRefRenderer;
 import org.dinky.ai.mention.TopicRefRenderer;
@@ -75,6 +80,7 @@ import org.dinky.service.AiChatService;
 import org.dinky.service.DataBaseService;
 import org.dinky.service.HistoryService;
 import org.dinky.service.JobInstanceService;
+import org.dinky.service.KbCollectionService;
 import org.dinky.service.SkillService;
 import org.dinky.sse.SseEmitterUTF8;
 
@@ -168,6 +174,14 @@ public class AiChatServiceImpl implements AiChatService {
     private static final int MAX_TOOL_RESULT_CHARS = 8000;
     /** 审计列 tool_calls 的字符上限 */
     private static final int MAX_TOOL_AUDIT_CHARS = 2000;
+
+    /**
+     * 批次 F：「当前绑定的技能」区块里最多列多少个文件路径。
+     *
+     * <p>只列路径不列正文，所以比正文预算宽松；但 references/ 可以有很多篇，
+     * 全列出来会把提示词撑长却几乎不增加信息量。
+     */
+    private static final int MAX_SKILL_FILE_HINTS = 12;
     /** 工具参数在一帧里展示的字符上限 */
     private static final int MAX_TOOL_ARGS_CHARS = 60;
     /** 阶段 2c-0：写语句二次确认的等待超时（秒），超时按「拒绝」处理；常量统一由 {@link AiChatRunRegistry} 持有 */
@@ -215,6 +229,26 @@ public class AiChatServiceImpl implements AiChatService {
 
     /** P3b：语义资产只读入口（{@code @semantic/} 引用 + 项目清单常驻） */
     private final SemanticAssetProvider semanticAssetProvider;
+
+    /**
+     * 知识库 {@code @kb} 接入 v1.0：{@code @} 引用注入器注册表（Spring 自动收集）。
+     *
+     * <p><b>只做前置分派</b>：注册表里有的类型走注入器，其余仍走下面那条按类型硬编码的
+     * {@code if/else}。这样新增 {@code @kb} 不必改动任何既有分支（零回归风险，见实施计划 D-K1）。
+     */
+    private final List<MentionInjector> mentionInjectors;
+
+    /** 知识库 {@code @kb} 接入 v1.0：库元数据与可见集（{@code @kb} 越权判定的数据源） */
+    private final KbCollectionService kbCollectionService;
+
+    /**
+     * 批次 E：默认知识库范围渲染器。
+     *
+     * <p>为什么不从 {@link #mentionInjectors} 注册表里取：那份注册表按 {@code mention.type()} 分派，
+     * 服务于{@code @} 引用；默认绑定<b>不是 mention</b>（用户没打 {@code @}），走同一个渲染器是为了
+     * 让"范围声明/越权拒绝"的文案只有一份口径（见 {@link KbMentionInjector#renderDefault}）。
+     */
+    private final KbMentionInjector kbMentionInjector;
 
     /** 阶段 4b：assetType → 渲染器（初始化时构建一次；见 {@link #initSkillRenderers()}） */
     private Map<String, SkillRenderer> skillRenderers = Collections.emptyMap();
@@ -275,11 +309,20 @@ public class AiChatServiceImpl implements AiChatService {
         // P1：跨数据源引用（@source/ @topic/）与工具所需的快照（数据源索引 + 命名名册）必须在请求线程解析——
         // 工具循环与渲染都可能落到异步线程，那里租户上下文已丢失（见 RequestSnapshot 头注释）。
         final RequestSnapshot requestSnapshot = buildRequestSnapshot();
+        // 阶段 4b 修复：可见 skill / doc 快照也必须在这里（请求线程）算好——工具循环跑在异步线程，
+        // 那里 Sa-Token 与租户上下文都已丢失，loadVisibleSkillBriefs() 会取不到登录用户而抛异常、
+        // 降级为空集合（表现为 list_skills 恒为空，AI 据此断言"当前账号没有 skill"）。
+        final List<SkillBrief> visibleSkills = loadVisibleSkillBriefs();
+        // 知识库 @kb 接入 v1.0：可见库快照同样必须在这里（请求线程）算好——理由与 visibleSkills 完全相同，
+        // 且多一层安全含义：kb-service 不认人，filter.collection 里放什么就搜什么，
+        // 因此"能搜哪些库"只能在请求线程定，工具线程只做集合判定。
+        // 注意它必须早于 buildSchemaContext：@kb 的范围声明就注入在 schema 上下文里。
+        final List<KbCollectionBrief> visibleCollections = loadVisibleKbCollections();
         // schema 也在请求线程构建：元数据接口内部按 id 反查数据源，同样依赖租户上下文
         String built = null;
         try {
             if (request != null) {
-                built = buildSchemaContext(request, requestSnapshot);
+                built = buildSchemaContext(request, requestSnapshot, visibleCollections);
             }
         } catch (Exception e) {
             log.warn("Build schema context before stream failed", e);
@@ -296,13 +339,38 @@ public class AiChatServiceImpl implements AiChatService {
             log.warn("Build flink context before stream failed", e);
         }
         final String flinkContext = builtFlinkContext;
-        // 阶段 4b 修复：可见 skill / doc 快照也必须在这里（请求线程）算好——工具循环跑在异步线程，
-        // 那里 Sa-Token 与租户上下文都已丢失，loadVisibleSkillBriefs() 会取不到登录用户而抛异常、
-        // 降级为空集合（表现为 list_skills 恒为空，AI 据此断言"当前账号没有 skill"）。
-        final List<SkillBrief> visibleSkills = loadVisibleSkillBriefs();
-        chatExecutor.execute(
-                () -> doChat(request, emitter, dataBase, schemaContext, flinkContext, visibleSkills, requestSnapshot));
+        chatExecutor.execute(() -> doChat(
+                request,
+                emitter,
+                dataBase,
+                schemaContext,
+                flinkContext,
+                visibleSkills,
+                visibleCollections,
+                requestSnapshot));
         return emitter;
+    }
+
+    /**
+     * 知识库 {@code @kb} 接入 v1.0：请求线程预解析「当前用户可见的知识库快照」。
+     *
+     * <p>开关关闭时返回空列表（{@code @kb} 不注入、{@code kb_search} 也不注册），
+     * 行为与接入前完全一致——这就是 U-14「开关等价回滚」的落点。
+     */
+    private List<KbCollectionBrief> loadVisibleKbCollections() {
+        try {
+            SystemConfiguration config = SystemConfiguration.getInstances();
+            if (!config.isKbEnable()) {
+                return Collections.emptyList();
+            }
+            List<KbCollectionBrief> briefs = kbCollectionService.listVisibleBriefs();
+            log.info("Load visible kb collections for tool context: count={}", briefs.size());
+            return briefs;
+        } catch (Exception e) {
+            // 失败降级为空集：宁可让 @kb 用不了，也不能让越权范围蒙混过关
+            log.warn("Load visible kb collections failed: {}", e.getMessage());
+            return Collections.emptyList();
+        }
     }
 
     /**
@@ -353,6 +421,8 @@ public class AiChatServiceImpl implements AiChatService {
                 .defaultProfileId(LlmProfile.DEFAULT_ID)
                 .profiles(profiles)
                 .skillEnable(config.isLlmSkillEnable())
+                // 知识库 @kb 接入 v1.0：前端据此决定 @ 候选里是否提供 @kb/
+                .kbEnable(config.isKbEnable())
                 .build();
     }
 
@@ -376,6 +446,7 @@ public class AiChatServiceImpl implements AiChatService {
             String prebuiltSchemaContext,
             String prebuiltFlinkContext,
             List<SkillBrief> visibleSkills,
+            List<KbCollectionBrief> visibleCollections,
             RequestSnapshot requestSnapshot) {
         long start = System.currentTimeMillis();
         TokenUsage totalUsage = new TokenUsage();
@@ -459,7 +530,7 @@ public class AiChatServiceImpl implements AiChatService {
 
             String schemaContext = StrUtil.isNotEmpty(prebuiltSchemaContext)
                     ? prebuiltSchemaContext
-                    : buildSchemaContext(request, requestSnapshot);
+                    : buildSchemaContext(request, requestSnapshot, visibleCollections);
             List<AiChatMessage> messages = buildMessages(request, schemaContext, prebuiltFlinkContext);
 
             StringBuilder answer = new StringBuilder();
@@ -477,6 +548,7 @@ public class AiChatServiceImpl implements AiChatService {
                         run,
                         () -> runRegistry.isCancelled(run),
                         visibleSkills,
+                        visibleCollections,
                         requestSnapshot);
                 mergeUsage(totalUsage, toolRun.getUsage());
                 // 阶段 2c-0：用户已请求中断——停止后续校验 / 修复，直接收尾
@@ -603,13 +675,36 @@ public class AiChatServiceImpl implements AiChatService {
             audit.setExecStatus(execStatus);
             audit.setExecError(StrUtil.sub(execError, 0, 2000));
             audit.setRetryCount(retryCount);
+            // 知识库审计（批次 D）：三列都是"可查询的事实"，不是自由文本——
+            // 排障时能直接按 kb_denied 找出"谁在试越权"、按 kb_collections 找"这条回答检索过哪些库"。
+            // 拒绝记录的两个来源必须分开处理：注入层（@kb 指到不可见库）在请求对象上就已确定，
+            // 与工具调用开关无关；工具层（collection 越权）只有 toolRun 存在时才可能有。
+            // 之前整块写在 if (toolRun != null) 里，导致关掉 llm.tool-call.enable（文档里的第一条退路）
+            // 期间，注入层的越权尝试完全不留痕——恰恰是这种降级期最需要能查。
+            List<String> denied = new ArrayList<>(request.getKbDeniedCodes());
             if (toolRun != null) {
                 audit.setToolCallCount(toolRun.getToolCallCount());
                 String logs = toolRun.getToolCallLogs() == null
                         ? ""
                         : toolRun.getToolCallLogs().toString();
                 audit.setToolCalls(StrUtil.sub(logs, 0, MAX_TOOL_AUDIT_CHARS));
+                // 检索足迹：没有工具轮就没有检索，保持 NULL（而不是空串），便于按 IS NULL 统计"未检索"
+                if (!toolRun.getKbSearchedCodes().isEmpty()) {
+                    audit.setKbCollections(StrUtil.sub(String.join(",", toolRun.getKbSearchedCodes()), 0, 512));
+                    audit.setKbHits(toolRun.getKbHitCount());
+                }
+                for (String code : toolRun.getKbDeniedCodes()) {
+                    if (!denied.contains(code)) {
+                        denied.add(code);
+                    }
+                }
             }
+            if (!denied.isEmpty()) {
+                audit.setKbDenied(StrUtil.sub(String.join(",", denied), 0, 512));
+            }
+            // 批次 E（D-K20）：记下"默认绑定"的库编码，与「实际检索过的库」分开记——
+            // 两者不一致是正常现象（模型显式收窄 / 越权被拒），但排障时必须能看出是谁定的范围。
+            audit.setKbDefault(StrUtil.trimToNull(request.getEffectiveKbDefault()));
             // 20261025：空回答兜底——工具轮异常或模型只吐思考不吐正文时，必须给出可读提示，
             // 而不是静默 complete()（前端表现为"思考完就没有输出"，用户无从判断发生了什么）。
             boolean writePathHandled = toolRun != null && toolRun.isWriteAttempted();
@@ -698,6 +793,7 @@ public class AiChatServiceImpl implements AiChatService {
             AiChatRunRegistry.RunContext run,
             BooleanSupplier cancelled,
             List<SkillBrief> visibleSkills,
+            List<KbCollectionBrief> visibleCollections,
             RequestSnapshot requestSnapshot) {
         AiToolContext context = AiToolContext.create(
                 dataBase,
@@ -715,6 +811,15 @@ public class AiChatServiceImpl implements AiChatService {
         // 注意：这里必须使用【请求线程】预解析并传入的快照，不能在此（异步线程）重新查询——
         // 否则 Sa-Token / 租户上下文均已丢失，会静默降级为空集合（4b UAT 的 B1 即此表现）。
         context.setVisibleSkills(visibleSkills);
+        // 知识库 @kb 接入 v1.0：可见库快照（同样是请求线程算好的那份）。
+        // kb_search 只能用这份做集合判定——kb-service 不认人，越权编码一旦进了 filter 就会真的越权检索。
+        context.setVisibleCollections(visibleCollections);
+        // 批次 E：默认检索范围（左侧栏当前选中的库）。
+        // 这里再解析一次（幂等）是因为"上下文指纹未变"的后续轮次会跳过注入，那时
+        // effectiveKbDefault 还是空的；而工具范围每轮都要按最新可见集校验——库被停用/撤权后
+        // 必须当轮就失效，不能靠上一轮的记忆继续检索（D-K17）。
+        resolveDefaultKbCollection(request, visibleCollections);
+        context.setDefaultKbCollection(request.getEffectiveKbDefault());
         // P1：跨数据源引用与命名检查所需的快照（数据源索引 + 命名名册）——
         // 同 visibleSkills，必须用请求线程解析好的那份，绝不能在此（异步线程）重新查。
         context.setRequestSnapshot(requestSnapshot);
@@ -746,10 +851,21 @@ public class AiChatServiceImpl implements AiChatService {
                         context.getRepairAttempts().get(),
                         lastToolError.get());
             }
+
+            @Override
+            public AiConfirmDecision requestDecision(ConfirmPayload payload) {
+                return requestWriteConfirmationDecision(
+                        emitter,
+                        runId,
+                        run,
+                        payload,
+                        context.getRepairAttempts().get(),
+                        lastToolError.get());
+            }
         });
         // 阶段 2c-2：装配自动纠错上限（工具据此在失败达上限后停止重试）
         context.setMaxRepairAttempts(Math.max(config.getLlmToolAutoRepairMaxAttempts(), 1));
-        return toolLoop.run(
+        AiToolRunResult runResult = toolLoop.run(
                 messages,
                 context,
                 profile,
@@ -811,6 +927,12 @@ public class AiChatServiceImpl implements AiChatService {
                     }
                 },
                 cancelled);
+        // 知识库审计（批次 D）：把工具线程里攒下的审计事实搬回请求线程。
+        // 工具循环在异步线程跑，审计对象却在调用方手里——不搬这一跳，库里只有 tool_calls 的自由文本。
+        runResult.setKbSearchedCodes(new ArrayList<>(context.getKbSearchedCodes()));
+        runResult.setKbDeniedCodes(new ArrayList<>(context.getKbDeniedCodes()));
+        runResult.setKbHitCount(context.getKbHitCount().get());
+        return runResult;
     }
 
     /**
@@ -1072,6 +1194,25 @@ public class AiChatServiceImpl implements AiChatService {
             ConfirmPayload confirm,
             int attempt,
             String previousError) {
+        return requestWriteConfirmationDecision(emitter, runId, run, confirm, attempt, previousError)
+                .isApproved();
+    }
+
+    /**
+     * 三态版写确认（2026-10-29）：在「确认 / 拒绝」之外支持 {@link AiConfirmDecision#APPLY_ONLY}。
+     *
+     * <p>为什么需要第三种结局：用户明确要求"AI 的改写只进编辑区、由人自己点保存"。
+     * 前端收到 {@code kind=skill_file} 的确认框后，点确认会带上 {@code applyOnly=true}，
+     * 本方法据此把 {@code APPLY_ONLY} 投给正在等待的写工具——工具必须<b>跳过落盘</b>，
+     * 否则就会出现"版本号自己涨了、编辑区却没刷新"（批次 F UAT 2026-10-29）。
+     */
+    private AiConfirmDecision requestWriteConfirmationDecision(
+            SseEmitter emitter,
+            String runId,
+            AiChatRunRegistry.RunContext run,
+            ConfirmPayload confirm,
+            int attempt,
+            String previousError) {
         JSONObject payload = new JSONObject();
         payload.set("runId", runId);
         payload.set("kind", StrUtil.blankToDefault(confirm.getKind(), ConfirmPayload.KIND_SQL));
@@ -1117,25 +1258,30 @@ public class AiChatServiceImpl implements AiChatService {
         if (StrUtil.isNotBlank(previousError)) {
             payload.set("previousError", previousError);
         }
+        // 批次 F 补：告知前端该确认框支持"仅应用到编辑区"（只有能表达成正文的写工具才支持）
+        if (ConfirmPayload.KIND_SKILL_FILE.equals(StrUtil.blankToDefault(confirm.getKind(), ConfirmPayload.KIND_SQL))) {
+            payload.set("applyToEditorSupported", true);
+        }
         sendJsonFrame(emitter, "confirmRequest", payload);
-        Boolean approved = run.awaitConfirm(WRITE_CONFIRM_TIMEOUT_SECONDS);
-        if (approved == null) {
+        AiConfirmDecision decision = run.awaitConfirm(WRITE_CONFIRM_TIMEOUT_SECONDS);
+        if (decision == null) {
             log.info(
                     "Write confirmation timed out, runId={}, kind={}",
                     runId,
                     StrUtil.blankToDefault(confirm.getKind(), ConfirmPayload.KIND_SQL));
-            return false;
+            return AiConfirmDecision.REJECT;
         }
-        if (!Boolean.TRUE.equals(approved)) {
-            return false;
+        if (!decision.isApproved()) {
+            // REJECT 与 APPLY_ONLY 原样上抛：后者需要写工具跳过落盘并如实告知模型
+            return decision;
         }
         if (confirm.isRequireTypedName()
                 && !StrUtil.equals(
                         StrUtil.trimToEmpty(run.getConfirmTypedName()), StrUtil.trimToEmpty(confirm.getTargetName()))) {
             log.info("Typed-name confirmation mismatch, runId={}, expected={}", runId, confirm.getTargetName());
-            return false;
+            return AiConfirmDecision.REJECT;
         }
-        return true;
+        return AiConfirmDecision.APPROVE;
     }
 
     @Override
@@ -1144,8 +1290,14 @@ public class AiChatServiceImpl implements AiChatService {
             return false;
         }
         boolean approved = Boolean.TRUE.equals(request.getApprove());
+        // 批次 F（2026-10-29）：确认 + applyOnly = 「接收进编辑区但不落盘」，这是第三种结局
+        AiConfirmDecision decision = !approved
+                ? AiConfirmDecision.REJECT
+                : (Boolean.TRUE.equals(request.getApplyOnly())
+                        ? AiConfirmDecision.APPLY_ONLY
+                        : AiConfirmDecision.APPROVE);
         // 阶段 4b：把「用户手输的名称」一并投递给等待中的写操作（强化确认用；普通确认传 null）
-        return runRegistry.submitConfirm(request.getRunId(), request.getUserId(), approved, request.getConfirmName());
+        return runRegistry.submitConfirm(request.getRunId(), request.getUserId(), decision, request.getConfirmName());
     }
 
     @Override
@@ -1387,7 +1539,9 @@ public class AiChatServiceImpl implements AiChatService {
      * （语义句柄超过 3 段由 {@code SemanticAssetProvider#resolve} 显式拒绝）。
      */
     private static final Pattern PATH_MENTION_PATTERN = Pattern.compile(
-            "@(source|topic|env|semantic)[-/]([\\p{L}\\p{N}_\\-.$]{1,64}(?:/[\\p{L}\\p{N}_\\-.$]{1,64}){0,3})",
+            // 知识库 @kb 接入 v1.0：追加 kb（@kb/<code>）。它与 source/topic/env/semantic 同为路径式句柄，
+            // 且必须在这里登记，否则用户"手打 @kb/c_xxxxxxxx"时后端收不到（前端只在点选候选时登记 mentions）。
+            "@(source|topic|env|semantic|kb)[-/]([\\p{L}\\p{N}_\\-.$]{1,64}(?:/[\\p{L}\\p{N}_\\-.$]{1,64}){0,3})",
             Pattern.CASE_INSENSITIVE);
 
     /**
@@ -1456,6 +1610,9 @@ public class AiChatServiceImpl implements AiChatService {
                 return MentionType.TOPIC;
             case "semantic":
                 return MentionType.SEMANTIC;
+            case "kb":
+                // 知识库 @kb 接入 v1.0：范围句柄（只声明检索范围，正文由 kb_search 召回）
+                return MentionType.KB;
             default:
                 return MentionType.ENV;
         }
@@ -1529,19 +1686,64 @@ public class AiChatServiceImpl implements AiChatService {
         }
     }
 
+    /**
+     * 按 {@code mention.type} 找注入器（知识库 {@code @kb} 接入 v1.0，B0）。
+     *
+     * <p>注册表规模是个位数，线性查找即可，不做 Map 缓存——避免"单例里维护可变状态"这种
+     * 在并发对话下容易出错的写法。类型匹配<b>大小写不敏感</b>：前端历史上发出过 `TABLE` / `table`
+     * 两种写法，既有分支也用 {@code equalsIgnoreCase}。
+     *
+     * @return 对应注入器；未注册的类型返回 {@code null}（调用方继续走原有硬编码分支）
+     */
+    private MentionInjector findMentionInjector(String type) {
+        if (StrUtil.isBlank(type) || CollUtil.isEmpty(mentionInjectors)) {
+            return null;
+        }
+        for (MentionInjector injector : mentionInjectors) {
+            if (injector != null && type.equalsIgnoreCase(injector.type())) {
+                return injector;
+            }
+        }
+        return null;
+    }
+
     private String buildMentionContext(
-            AiChatRequest request, Integer databaseId, String schemaName, RequestSnapshot snapshot) {
+            AiChatRequest request,
+            Integer databaseId,
+            String schemaName,
+            RequestSnapshot snapshot,
+            List<KbCollectionBrief> visibleCollections) {
         List<AiChatMention> mentions = resolveMentions(request);
-        if (CollUtil.isEmpty(mentions)) {
+        // 批次 E：默认绑定（左侧栏「知识库」tab 当前选中的库）。它不是 mention，但同属"本轮上下文"，
+        // 所以提前返回的条件必须同时考虑它——否则"只绑库、不打 @kb"这种最常见用法会整块注入消失。
+        String defaultKb = resolveDefaultKbCollection(request, visibleCollections);
+        if (CollUtil.isEmpty(mentions) && StrUtil.isBlank(defaultKb)) {
             return "";
         }
         // P1：单次对话的 @source/ 展开计数（上限可配）——一个库可有上百张表，
         // 不限量会把上下文预算一次吃光（P1 计划 §3.1 / D6）。
         int sourceExpansions = 0;
         StringBuilder sb = new StringBuilder();
-        sb.append("## 用户显式指定的上下文（@ 引用，优先级最高）\n");
+        if (CollUtil.isNotEmpty(mentions)) {
+            sb.append("## 用户显式指定的上下文（@ 引用，优先级最高）\n");
+        }
         for (AiChatMention mention : mentions) {
             if (mention == null) {
+                continue;
+            }
+            // 知识库 @kb 接入 v1.0（B0）：注册表里注册过的类型优先走注入器（目前只有 @kb）。
+            // 既有 8 类没有对应实现，仍然走下面的硬编码分支——分支代码一行未动，
+            // B0 的"产物逐字节不变"（U-19）由此保证，新增类型也不必再改本方法。
+            MentionInjector injector = findMentionInjector(mention.getType());
+            if (injector != null) {
+                sb.append(injector.inject(MentionInjectContext.builder()
+                        .mention(mention)
+                        .request(request)
+                        .databaseId(databaseId)
+                        .schemaName(schemaName)
+                        .snapshot(snapshot)
+                        .visibleCollections(visibleCollections)
+                        .build()));
                 continue;
             }
             if (MentionType.TABLE.equalsIgnoreCase(mention.getType())) {
@@ -1611,8 +1813,71 @@ public class AiChatServiceImpl implements AiChatService {
                         .append("\n```\n");
             }
         }
+        // 批次 E：默认知识库范围。同一库已被显式 @kb 点名时不再重复输出（D-K16）——
+        // 提示词里出现两行一模一样的范围声明，模型会怀疑自己看错了，反而去检索别的库。
+        if (StrUtil.isNotBlank(defaultKb) && !hasKbMention(mentions, defaultKb)) {
+            sb.append("## 默认知识库范围（左侧栏当前选中的库，非用户手打）\n");
+            sb.append(kbMentionInjector.renderDefault(defaultKb, visibleCollections));
+        }
         sb.append("\n");
         return sb.toString();
+    }
+
+    /**
+     * 批次 E：解析并校验「默认绑定」的知识库编码。
+     *
+     * <p>三条口径（与 {@code @kb} 完全一致，避免两套判定分叉）：
+     * <ol>
+     *   <li>开关关闭 → 返回空串：连"无权访问"都不写（U-14 要求行为与接入前逐字一致）；</li>
+     *   <li>在可见集内 → 记为<b>生效</b>默认库（写进请求对象，供工具默认范围与审计取用）；</li>
+     *   <li>不在可见集内 → 记 {@code kb_denied} 留痕，并原样返回，让渲染器输出显式拒绝文案。
+     *       这里<b>不</b>回落成"全部可见库"——静默降级会让用户以为查的是 A 库、实际搜了全部（D-K17）。</li>
+     * </ol>
+     */
+    private String resolveDefaultKbCollection(AiChatRequest request, List<KbCollectionBrief> visibleCollections) {
+        String code = StrUtil.trimToEmpty(request.getDefaultCollection());
+        if (StrUtil.isBlank(code)) {
+            return "";
+        }
+        if (!SystemConfiguration.getInstances().isKbEnable()) {
+            return "";
+        }
+        KbCollectionBrief hit = null;
+        if (CollUtil.isNotEmpty(visibleCollections)) {
+            for (KbCollectionBrief brief : visibleCollections) {
+                if (brief != null && code.equals(brief.getCode())) {
+                    hit = brief;
+                    break;
+                }
+            }
+        }
+        if (hit == null) {
+            log.info(
+                    "Kb default binding denied: code={}, visible={}",
+                    code,
+                    visibleCollections == null ? 0 : visibleCollections.size());
+            request.recordKbDenied(code);
+            return code;
+        }
+        request.setEffectiveKbDefault(code);
+        return code;
+    }
+
+    /** mentions 里是否已有指向同一知识库的显式 {@code @kb}（用于去重，D-K16） */
+    private boolean hasKbMention(List<AiChatMention> mentions, String code) {
+        if (CollUtil.isEmpty(mentions) || StrUtil.isBlank(code)) {
+            return false;
+        }
+        for (AiChatMention mention : mentions) {
+            if (mention == null) {
+                continue;
+            }
+            if (MentionType.KB.equalsIgnoreCase(mention.getType())
+                    && code.equals(StrUtil.trimToEmpty(mention.getName()))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -1720,7 +1985,103 @@ public class AiChatServiceImpl implements AiChatService {
      *
      * <p>开关关闭 / 无可见 skill / 查询失败时返回空串——<b>任何情况都不阻断对话</b>。
      */
+    /**
+     * 批次 F：注入「左侧栏当前绑定的技能」。
+     *
+     * <p>绑定来源（前端按优先级算好再传 id）：
+     * <ol>
+     *   <li>中间编辑区正在编辑的 skill 文件所属 skill（{@code tabType='skillFile'}）；</li>
+     *   <li>左侧技能树当前选中的目录/文件所属 skill（dva model {@code currentSkillId}）。</li>
+     * </ol>
+     *
+     * <p><b>只介绍名字/说明/文件清单，不灌正文</b>：与 U-06 同一条红线——正文由模型按需
+     * 调 {@code read_skill} 取，否则一次问答就把一个 skill 的全部 references 吃光预算。
+     *
+     * <p><b>不可见不静默降级</b>（与 kb 的 D-K17 同口径）：被删/撤权/换租户后仍命令模型
+     * **先告知用户**，再决定是否基于其它可用技能作答。
+     */
+    private String buildDefaultSkillContext(AiChatRequest request) {
+        Long skillId = request.getDefaultSkillId();
+        if (skillId == null) {
+            return "";
+        }
+        if (!SystemConfiguration.getInstances().isLlmSkillEnable()) {
+            return "";
+        }
+        Skill hit = null;
+        try {
+            for (Skill skill : skillService.listVisible()) {
+                if (skill.getId() != null && skill.getId().equals(skillId)) {
+                    hit = skill;
+                    break;
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Resolve default skill failed: id={}, error={}", skillId, e.getMessage());
+            return "";
+        }
+        if (hit == null) {
+            log.info("Skill default binding denied: id={}", skillId);
+            return "- 当前绑定的技能（id=" + skillId + "）不可用（无访问权限或已被删除）。\n"
+                    + "  → **回答的第一句必须先告诉用户**：「你左侧栏选中的技能不可用，请重新选择或直接 @skill 指定」；"
+                    + "之后才可以选择（a）基于下列可用技能清单作答并注明来源，或（b）直接说明无法回答。"
+                    + "禁止假装已读取该技能。\n";
+        }
+        request.setEffectiveSkillDefault(hit.getId());
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("## 当前正在编辑的技能（左侧栏绑定，优先参考）\n");
+        sb.append("- ").append(hit.getName());
+        if (StrUtil.isNotBlank(hit.getDescription())) {
+            sb.append(" — ").append(hit.getDescription());
+        }
+        sb.append("\n");
+        // 文件清单只给路径，正文靠 read_skill 按需取（references/ 可能有很多篇）
+        try {
+            List<String> paths = new ArrayList<>();
+            collectSkillFilePaths(skillService.listFiles(hit.getId()), paths);
+            if (!paths.isEmpty()) {
+                sb.append("  文件：")
+                        .append(String.join("、", paths.subList(0, Math.min(paths.size(), MAX_SKILL_FILE_HINTS))))
+                        .append(paths.size() > MAX_SKILL_FILE_HINTS ? " 等" : "")
+                        .append("\n");
+            }
+        } catch (Exception e) {
+            log.warn("List skill files for binding failed: id={}, error={}", hit.getId(), e.getMessage());
+        }
+        sb.append("  → 该技能与本次问题相关时，**优先**调用 `read_skill` 读取它（用户正在这个技能里工作）；" + "其他技能仅在明确相关时使用，并在回答中注明引用了哪个技能。\n\n");
+        log.info("Skill default injected: id={}, name={}", hit.getId(), hit.getName());
+        return sb.toString();
+    }
+
+    /** 递归收集 skill 文件树里的文件相对路径（目录跳过） */
+    private void collectSkillFilePaths(List<SkillFileNode> nodes, List<String> out) {
+        if (CollUtil.isEmpty(nodes) || out.size() >= MAX_SKILL_FILE_HINTS * 2) {
+            return;
+        }
+        for (SkillFileNode node : nodes) {
+            if (node == null) {
+                continue;
+            }
+            if (node.isDirectory()) {
+                collectSkillFilePaths(node.getChildren(), out);
+            } else if (StrUtil.isNotBlank(node.getRelativePath())) {
+                out.add(node.getRelativePath());
+            }
+        }
+    }
+
     private String buildSkillListContext() {
+        return buildSkillListContext(null);
+    }
+
+    /**
+     * 注入「可用 skill 清单」。
+     *
+     * @param excludeSkillId 已在"当前绑定的技能"区块里单独介绍过的 skill，清单里跳过它
+     *                       （同一份 skill 出现两次会让模型怀疑是两个东西）
+     */
+    private String buildSkillListContext(Long excludeSkillId) {
         if (!SystemConfiguration.getInstances().isLlmSkillEnable()) {
             return "";
         }
@@ -1732,6 +2093,9 @@ public class AiChatServiceImpl implements AiChatService {
             StringBuilder sb = new StringBuilder();
             sb.append("## 可用的团队 Skill（如与本次问题相关，可在输入框用 @skill/<名> 引用其完整内容）\n");
             for (Skill skill : skills) {
+                if (excludeSkillId != null && excludeSkillId.equals(skill.getId())) {
+                    continue;
+                }
                 sb.append("- ").append(skill.getName());
                 if (StrUtil.isNotBlank(skill.getDescription())) {
                     sb.append(" — ").append(skill.getDescription());
@@ -1875,7 +2239,8 @@ public class AiChatServiceImpl implements AiChatService {
      *   <li>未选中表：输出当前 schema 下的表清单（限量）及其列</li>
      * </ul>
      */
-    private String buildSchemaContext(AiChatRequest request, RequestSnapshot snapshot) {
+    private String buildSchemaContext(
+            AiChatRequest request, RequestSnapshot snapshot, List<KbCollectionBrief> visibleCollections) {
         Integer databaseId = request.getDatabaseId();
         String schemaName = StrUtil.nullToEmpty(request.getSchemaName());
         StringBuilder sb = new StringBuilder();
@@ -1885,7 +2250,7 @@ public class AiChatServiceImpl implements AiChatService {
         // 这类问题根本不需要数据源）会完全看不到引用内容与清单——该缺陷自 4a 起即存在，只是当时
         // 多在已绑定数据源的取数场景下使用，未暴露。
         // 阶段 1a（1.4）：@ 显式引用优先级最高，先于表清单注入
-        sb.append(buildMentionContext(request, databaseId, schemaName, snapshot));
+        sb.append(buildMentionContext(request, databaseId, schemaName, snapshot, visibleCollections));
 
         // P3b：项目级语义清单常驻（请求体 semanticProject + 开关 + view 权限三条件，D17）。
         // 位置：@ 引用之后、skill 清单之前 —— 语义口径优先于技能清单，但低于用户显式引用。
@@ -1894,7 +2259,9 @@ public class AiChatServiceImpl implements AiChatService {
         // 阶段 4a：注入「当前用户可见 skill 清单」（name + description，渐进披露）。
         // 只给清单、不给正文——正文由 @skill/<名> 显式引用时才注入（见 appendAssetDetail）；
         // 内容受 llmSkillMaxChars 独立预算约束，且整体仍受末尾 schemaMaxChars 兜底。
-        sb.append(buildSkillListContext());
+        // 批次 F：左侧栏「技能」tab 绑定的那个 skill 单独介绍，并从清单里摘掉（避免重复占预算）。
+        sb.append(buildDefaultSkillContext(request));
+        sb.append(buildSkillListContext(request.getEffectiveSkillDefault()));
 
         if (databaseId == null) {
             // P0：FlinkSQL 作业本就没有数据源，它的库表来自 Flink Catalog —— 该信息由独立的

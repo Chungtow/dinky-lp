@@ -31,14 +31,38 @@ export type FinalizedPathMention = {
 };
 
 /**
+ * 判断下标 {@code atIndex} 处的 {@code @} 是否算「引用触发符」。
+ *
+ * <p><b>判据为什么是"前一个字符不是 ASCII 词字符"而不是"前一个字符是空白"</b>
+ * （UAT 2026-10-29）：中文输入法下用户经常直接写「当前库是@」再选候选，{@code @} 前是汉字而非
+ * 空格。此前<b>触发规则</b>（{@code /@([^\s@]*)$/}，不校验前字符）与<b>定位规则</b>
+ * （要求行首或空白）不一致，导致浮层弹得出来、选中却替换不到，退化成"追加到末尾"——
+ * 每选一级就把完整路径再拼一遍，文本变成
+ * {@code @@source/@source/traccar-mysql/@source/traccar-mysql/traccar/}。
+ *
+ * <p>真正要排除的只有邮箱/标识符场景（{@code foo@bar.com}），因此只对 ASCII 词字符
+ * （字母、数字、{@code . _ % + -}）设防；汉字、标点、空白一律允许触发。
+ */
+export function isMentionTrigger(value: string, atIndex: number): boolean {
+  if (atIndex < 0 || atIndex >= value.length || value[atIndex] !== '@') {
+    return false;
+  }
+  if (atIndex === 0) {
+    return true;
+  }
+  return !/[A-Za-z0-9._%+-]/.test(value[atIndex - 1]);
+}
+
+/**
  * 定位「光标所在的 {@code @} token」区间。
  *
  * <p><b>为什么要按光标而不是按全文末尾</b>（UAT 2026-10-23）：候选选中后会插入
  * {@code @token } （带尾随空格），用户再把光标移回 token 内部补层级时，整串并不在文本末尾；
  * 按末尾解析永远不命中，表现为「补了 {@code /} 也不弹下一级候选」。
  *
- * <p>规则：从光标向左找 {@code @}（且其前必须是行首或空白，避免把邮箱当引用），
- * 一旦先遇到空白即判定光标不在 token 内。
+ * <p>规则：从光标向左找 {@code @}，命中后由 {@link isMentionTrigger} 判定是否算引用
+ * （与输入框的触发规则**必须同源**，否则又会出现"浮层能弹、替换失败"的错位）；
+ * 先遇到空白即判定光标不在 token 内。
  *
  * @returns 命中返回区间，否则返回 {@code null}
  */
@@ -48,8 +72,7 @@ export function findMentionToken(value: string, caret: number): MentionTokenRang
   for (let i = limit - 1; i >= 0; i -= 1) {
     const ch = value[i];
     if (ch === '@') {
-      // @ 前必须是行首或空白（与输入框的触发规则一致）
-      if (i === 0 || /\s/.test(value[i - 1])) {
+      if (isMentionTrigger(value, i)) {
         start = i;
       }
       break;

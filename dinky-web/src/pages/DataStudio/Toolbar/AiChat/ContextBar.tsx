@@ -27,6 +27,7 @@ import {
   Segmented,
   Select,
   Space,
+  Tag,
   Tooltip,
   Typography
 } from 'antd';
@@ -69,6 +70,13 @@ export interface ContextBarProps {
   onResetOverride: () => void;
   /** 是否存在任何手动覆盖（用于展示「恢复自动跟随」） */
   overridden: boolean;
+  /**
+   * 批次 E：解除「默认知识库」绑定（只清本会话的问答范围，不动左侧栏的选中）。
+   *
+   * <p>为什么不做成"恢复自动跟随"那种整体重置：知识库绑定与表上下文是两件事，
+   * 用户可能只想让这一轮不限定库、而保留数据源/表绑定。
+   */
+  onClearKbBinding?: () => void;
 }
 
 /** 详情项标签的 i18n key（结构由 describeBinding 产出，文案由这里决定） */
@@ -105,7 +113,8 @@ const ContextBar = (props: ContextBarProps) => {
     tableOptions,
     onUseTreeProject,
     onResetOverride,
-    overridden
+    overridden,
+    onClearKbBinding
   } = props;
 
   const { items, empty } = describeBinding(binding);
@@ -322,6 +331,24 @@ const ContextBar = (props: ContextBarProps) => {
           {summary}
         </span>
         {conflict ? <WarningOutlined style={{ color: '#faad14', flexShrink: 0 }} /> : null}
+        {/* 批次 E：默认知识库 chip。绑定必须**可见且可解除**——它决定了本轮检索范围，
+            藏起来就会出现"我明明在问答里只是问了个问题，怎么只搜了那一个库"的困惑。
+            点 × 只解绑本会话的默认范围，左侧栏的选中态保持不变（D-K18）。 */}
+        {binding.kbCollection ? (
+          <Tag
+            closable
+            color={'purple'}
+            style={{ flexShrink: 0, marginInlineEnd: 0, cursor: 'default' }}
+            onClose={(event) => {
+              // 阻止冒泡：chip 在 Popover 的触发区内，不拦截会顺手把弹层打开
+              event.preventDefault();
+              event.stopPropagation();
+              onClearKbBinding?.();
+            }}
+          >
+            {l('datastudio.aiChat.kbBound', undefined, { collection: binding.kbCollection })}
+          </Tag>
+        ) : null}
         <DownOutlined style={{ fontSize: 10, color: 'rgba(0,0,0,0.45)', flexShrink: 0 }} />
       </div>
     </Popover>

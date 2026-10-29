@@ -19,6 +19,7 @@
 
 import { ToolbarRoute } from '@/pages/DataStudio/Toolbar/data.d';
 import {
+  BookOutlined,
   CodeOutlined,
   ConsoleSqlOutlined,
   DatabaseOutlined,
@@ -28,6 +29,7 @@ import {
   RobotOutlined,
   SettingOutlined,
   TableOutlined,
+  ThunderboltOutlined,
   ToolOutlined
 } from '@ant-design/icons';
 import React, { lazy, ReactElement, ReactNode, Suspense } from 'react';
@@ -47,6 +49,8 @@ const AiChat = lazy(() => import('@/pages/DataStudio/Toolbar/AiChat'));
 const FlinkSqlClient = lazy(() => import('@/pages/DataStudio/Toolbar/FlinkSqlClient'));
 const Resource = lazy(() => import('@/pages/DataStudio/Toolbar/Resource'));
 const Semantic = lazy(() => import('@/pages/DataStudio/Toolbar/Semantic'));
+const Kb = lazy(() => import('@/pages/DataStudio/Toolbar/Kb'));
+const Skill = lazy(() => import('@/pages/DataStudio/Toolbar/Skill'));
 export const ToolbarRoutes: ToolbarRoute[] = [
   {
     key: 'quick-start',
@@ -125,6 +129,25 @@ export const ToolbarRoutes: ToolbarRoute[] = [
     icon: <FileTextOutlined />,
     position: 'leftTop',
     content: () => lazyComponent(<Semantic />)
+  },
+  {
+    // 批次 B：知识库（@kb）只读浏览。内容在 kb-service，目录与权限在 Dinky；
+    // 不做目录树、不做编辑——要改内容回原 tab 改完再推送（批次 C 提供推送入口）
+    key: 'kb',
+    title: () => l('menu.datastudio.kb'),
+    icon: <BookOutlined />,
+    position: 'leftTop',
+    content: () => lazyComponent(<Kb />)
+  },
+  {
+    // 批次 F：技能（skill）编辑入口。**创建 / 可见性 / 删除整库仍在注册中心**，
+    // 这里只做"挑一个已有 skill → 编辑它的某个文件 → 保存"，
+    // 让 skill 与语义项目、知识库并列成为数据开发期的上下文来源。
+    key: 'skill',
+    title: () => l('menu.datastudio.skill'),
+    icon: <ThunderboltOutlined />,
+    position: 'leftTop',
+    content: () => lazyComponent(<Skill />)
   }
 ];
 

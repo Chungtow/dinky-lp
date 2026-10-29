@@ -107,6 +107,18 @@ public interface SkillService extends ISuperService<Skill> {
      */
     Skill save(Long id, String content);
 
+    /**
+     * 保存 {@code SKILL.md} 正文（批次 F：带乐观锁）。
+     *
+     * <p>批次 F 让 skill 也能在数据开发左侧栏的「技能」tab 里编辑后，同一份 skill 存在两条编辑入口
+     * （注册中心弹窗 + 数据开发编辑器），甚至可能两个浏览器标签页同时开着。<b>不校验版本就是静默
+     * 后写覆盖前写</b>——skill 没有 git 历史、也没有语义层那样的 {@code .trash}，覆盖后无处找回。
+     *
+     * @param baseVersion 编辑起点的 {@code version}；{@code null} = 不校验（AI 工具与旧前端沿用）
+     * @throws org.dinky.data.exception.BusException 版本已前进（存在他人修改）
+     */
+    Skill save(Long id, String content, Integer baseVersion);
+
     /** 删除 skill（<b>仅属主</b>）：删资源目录（含文件） + 删元数据 */
     void removeSkill(Long id, Integer actorId);
 
@@ -146,9 +158,32 @@ public interface SkillService extends ISuperService<Skill> {
      */
     SkillFileNode writeFile(Long id, String relativePath, String content, Integer actorId);
 
+    /**
+     * 写相对路径文件（批次 F：主文件带乐观锁）。
+     *
+     * <p>与 {@link #writeFile(Long, String, String, Integer)} 的唯一差别是校验 {@code baseVersion}，
+     * 且<b>只对主文件生效</b>：附件（{@code references/} 下）不递增 {@code version}，拿它做冲突判定
+     * 只会误报。附件并发覆盖目前靠 {@code SkillPathGuard} 的路径与大小校验兜底，不在此处拦。
+     */
+    SkillFileNode writeFile(Long id, String relativePath, String content, Integer actorId, Integer baseVersion);
+
     /** 新建子目录（<b>仅属主</b>；幂等——已存在则直接返回） */
     SkillFileNode mkdir(Long id, String relativePath, Integer actorId);
 
     /** 删除文件或子目录（<b>仅属主</b>；目录会被<b>递归删除</b>） */
     void removeFile(Long id, String relativePath, Integer actorId);
+
+    /**
+     * 重命名 skill 内的<b>文件</b>（批次 F 补：与语义树右键菜单对齐；<b>仅属主</b>）。
+     *
+     * <p><b>只改文件名，不换目录</b>：{@code newName} 必须是纯文件名（不允许含 {@code /}），
+     * 目标目录沿用原文件的父目录——跨目录移动会牵动父目录的递归建/删，一期不做。
+     *
+     * <p><b>主文件不允许重命名</b>：{@code SKILL.md} / {@code DOC.md} 是资产本体（元数据、版本号、
+     * frontmatter 校验都挂在它上面），改名会让资产变成"没有主文件的孤儿"。
+     *
+     * <p><b>原子性</b>：先写新文件、再删旧文件；删除失败则把新文件删掉并抛出，避免留下两份。
+     * 不是真正的文件系统 rename（资源存储无该原语），但失败路径可控且不产生脏数据。
+     */
+    SkillFileNode renameFile(Long id, String relativePath, String newName, Integer actorId);
 }

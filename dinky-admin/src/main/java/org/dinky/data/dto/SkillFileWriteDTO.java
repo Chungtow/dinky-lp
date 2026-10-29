@@ -46,4 +46,11 @@ public class SkillFileWriteDTO implements Serializable {
 
     @ApiModelProperty(value = "Content", dataType = "String", notes = "文本内容（UTF-8）")
     private String content;
+
+    @ApiModelProperty(
+            value = "Base Version",
+            dataType = "Integer",
+            example = "3",
+            notes = "批次 F 乐观锁：编辑起点的 version，**仅对主文件（SKILL.md / DOC.md）生效**" + "（附件不递增版本，无法用它做冲突判定）。为空表示不校验")
+    private Integer baseVersion;
 }

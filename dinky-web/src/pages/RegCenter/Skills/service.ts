@@ -23,6 +23,7 @@ import {
   SkillCreateParams,
   SkillDetail,
   SkillFileNode,
+  SkillFileRenameParams,
   SkillFileTargetParams,
   SkillFileWriteParams,
   SkillInfo,
@@ -84,6 +85,15 @@ export const writeSkillFile = async (params: SkillFileWriteParams, cb?: () => vo
 /** 新建 skill 内目录（幂等） */
 export const mkdirSkill = async (params: SkillFileTargetParams, cb?: () => void) =>
   handleOption(API_CONSTANTS.SKILL_FILE_MKDIR, l('pages.skill.file.mkdir'), params, cb);
+
+/**
+ * 重命名 skill 内文件（批次 F；仅属主）。
+ *
+ * <p>只改文件名不换目录：{@code newName} 不允许含 `/`；主文件（SKILL.md / DOC.md）后端拒绝。
+ * 服务端实现是"读旧正文 → 写新路径 → 删旧路径"，失败会自动回滚新文件。
+ */
+export const renameSkillFile = async (params: SkillFileRenameParams, cb?: () => void) =>
+  handleOption(API_CONSTANTS.SKILL_FILE_RENAME, l('pages.skill.file.rename'), params, cb);
 
 /** 删除 skill 内文件或目录（目录会被递归删除） */
 export const removeSkillFile = async (params: SkillFileTargetParams, cb?: () => void) =>

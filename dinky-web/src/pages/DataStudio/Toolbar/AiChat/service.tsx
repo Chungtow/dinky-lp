@@ -111,6 +111,12 @@ export type AiChatConfirmFrame = {
   afterContent?: string;
   /** 是否要求手输目标名才能确认（kind=skill_delete，防误删） */
   requireTypedName?: boolean;
+  /**
+   * 该确认框是否支持「仅应用到编辑区」（2026-10-29，后端对 {@code kind=skill_file} 下发）。
+   *
+   * <p>支持时点确认只把 {@code afterContent} 放进编辑器（未保存），不落盘。
+   */
+  applyToEditorSupported?: boolean;
   /** 待执行的写语句原文（kind=sql 时使用） */
   sql: string;
   /** 语句类型：DML / DDL（kind=sql 时使用） */
@@ -188,6 +194,13 @@ export type AiChatConfig = {
   profiles?: AiChatProfileItem[];
   /** 是否开启 Skills 能力（阶段 4a）：决定输入框 @ 候选里是否提供 skill */
   skillEnable?: boolean;
+  /**
+   * 知识库检索能力开关（知识库 @kb 接入 v1.0）。
+   *
+   * <p>只影响「{@code @} 候选里是否提供 {@code @kb/}」；越权拦截始终在服务端，
+   * 前端拿到 kbEnable=true 也不代表能搜任意库。
+   */
+  kbEnable?: boolean;
 };
 
 /**
@@ -219,6 +232,14 @@ export type AiChatMentionItem = {
      * 与后端 {@code MentionType.SEMANTIC} 及 {@code AiChatMention.name} 的存法一致（D19）。
      */
     | 'semantic'
+    /**
+     * 知识库范围引用（{@code @kb/<code>}，知识库 @kb 接入 v1.0）。
+     *
+     * <p><b>它是范围句柄，不是内容句柄</b>：只声明"在哪个库里检索"，正文由 {@code kb_search}
+     * 工具召回。{@code name} 存库<b>编码</b>（{@code c_} + 8 hex），不存显示名
+     * （显示名可改且可能重名）。
+     */
+    | 'kb'
     /**
      * 仅候选面板使用的"一级前缀入口"（`@` → `@source/` 等）：
      * 选中后只把前缀补进输入框并保持浮层打开，不生成 chip、也不进入请求体。
@@ -300,6 +321,21 @@ export type AiChatRequestBody = {
    * 单资产精确引用走 {@code mentions} 里的 {@code type='semantic'}。
    */
   semanticProject?: string;
+  /**
+   * 批次 E：左侧栏「知识库」tab 当前选中的库 = 本轮**默认检索范围**。
+   *
+   * <p>非空时后端校验可见性后，把它写进注入提示词（"默认在本库检索"）并作为
+   * {@code kb_search} 未传 collection 时的默认 filter。显式 {@code @kb/} 永远优先；
+   * 不可见（停用/撤权/换租户）时显式拒绝并留痕 `kb_denied`，**不**降级为"全部可见库"。
+   */
+  defaultCollection?: string;
+  /**
+   * 批次 F：默认绑定技能的 id（左侧技能树选中 / 正在编辑的 skill 文件所属技能）。
+   *
+   * <p>非空时后端把该技能的「名字 + 说明 + 文件路径清单」注入提示词（**不注入正文**，
+   * 正文由模型按需 {@code read_skill}）；不可见时显式拒绝，不降级为"整个可用技能清单"。
+   */
+  defaultSkillId?: number;
   /**
    * P4 一期：上下文指纹（`ctx_` + 8 位十六进制）。
    *
@@ -424,6 +460,31 @@ export const listSkills = async (): Promise<AiChatMentionItem[]> => {
 };
 
 /**
+ * 知识库 @kb 接入 v1.0：{@code @kb/} 候选——当前用户**可见**的知识库。
+ *
+ * <p>{@code name} 必须是库**编码**（{@code c_xxxxxxxx}）而不是显示名：编码系统生成、永不变，
+ * 可直接写进 kb-service 的 {@code filter.collection}；显示名可改且可能重名。
+ * 显示名放在 {@code content} 里供候选浮层做副标题，避免"只能看到一串 c_xxxx"。
+ *
+ * <p>后端 {@code /api/kb/collections} 已按可见性过滤（private/tenant/public + enabled），
+ * 前端<b>不做也不应做</b>二次过滤——越权拦截在服务端，前端过滤只是观感。
+ */
+export const listKbCollections = async (): Promise<AiChatMentionItem[]> => {
+  try {
+    const res: any = await getData(API_CONSTANTS.KB_COLLECTIONS);
+    const rows = res?.data ?? res ?? [];
+    return (rows as any[]).map((c) => ({
+      type: 'kb' as const,
+      name: c.code,
+      content: c.name
+    }));
+  } catch (e) {
+    // 批次 A 的开关默认关闭 / 后端未升级时，候选缺失不应影响其他 @ 功能
+    return [];
+  }
+};
+
+/**
  * P3b：{@code @semantic/} 一级候选——**已发布**的语义项目。
  *
  * <p>只列有 `_published` 版本的项目：AI 只能引用不可变快照（编辑区内容不作为候选，
@@ -457,14 +518,21 @@ export const confirmAiChat = async (
    * 阶段 4b：删除类确认（{@code kind=skill_delete}）要求**手输目标名**才能确认（防误删），
    * 后端会校验其与目标名一致，不一致按拒绝处理。其它确认类型无需传（undefined 不会进 JSON）。
    */
-  confirmName?: string
+  confirmName?: string,
+  /**
+   * 批次 F（2026-10-29）：写 skill 文件时"只应用到编辑区、不落盘"。
+   *
+   * <p>用户口径："AI 的改解放进编辑区就行，保存我自己点"。为 true 时后端跳过持久化，
+   * 前端负责把新正文塞进编辑器并保持未保存状态。仅对 {@code kind=skill_file} 有意义。
+   */
+  applyOnly?: boolean
 ): Promise<boolean> => {
   try {
     const res = await fetch(API_CONSTANTS.AI_CHAT_CONFIRM, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...buildTenantHeader() },
       credentials: 'include',
-      body: JSON.stringify({ runId, approve, confirmName })
+      body: JSON.stringify({ runId, approve, confirmName, applyOnly })
     });
     return res.ok;
   } catch (e) {

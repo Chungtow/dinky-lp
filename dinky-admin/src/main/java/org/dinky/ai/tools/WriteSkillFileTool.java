@@ -20,6 +20,7 @@
 package org.dinky.ai.tools;
 
 import org.dinky.ai.AiChatRunRegistry;
+import org.dinky.ai.AiConfirmDecision;
 import org.dinky.ai.AiTool;
 import org.dinky.ai.AiToolContext;
 import org.dinky.ai.AiToolResult;
@@ -142,7 +143,21 @@ public class WriteSkillFileTool implements AiTool {
                     .build();
         }
         String before = readSilently(fullName);
-        if (!requester.request(ConfirmPayload.ofSkillFile(name, relativePath, before, content))) {
+        AiConfirmDecision decision =
+                requester.requestDecision(ConfirmPayload.ofSkillFile(name, relativePath, before, content));
+        if (decision == AiConfirmDecision.APPLY_ONLY) {
+            // 批次 F（2026-10-29 用户口径）：用户选择"接收进编辑区、但不落盘"。
+            // 前端已把 afterContent 塞进编辑器并保持未保存状态，这里**绝不能**再写一次，
+            // 否则会出现"版本号自己涨了、编辑区却没刷新"。
+            // 工具结果必须如实描述，否则模型会顺口告诉用户"已保存"。
+            return AiToolResult.builder()
+                    .success(true)
+                    .content(
+                            "已把改写后的内容放入用户编辑器（" + name + " / " + relativePath + "），尚未保存到存储：用户会自行核对后点击保存。不要声称已经保存或已写入文件。")
+                    .costMs(System.currentTimeMillis() - start)
+                    .build();
+        }
+        if (!decision.isApproved()) {
             return AiToolResult.builder()
                     .success(false)
                     .errorMessage("用户未确认写入该文件，已取消；请勿重试，可改为把内容直接回复给用户")

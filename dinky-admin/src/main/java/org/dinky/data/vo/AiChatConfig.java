@@ -88,6 +88,16 @@ public class AiChatConfig {
     @ApiModelProperty(value = "是否开启 Skills 能力")
     private Boolean skillEnable;
 
+    /**
+     * 是否开启知识库检索能力（知识库 {@code @kb} 接入 v1.0）。
+     *
+     * <p>前端据此决定「{@code @} 候选里是否提供 {@code @kb/}」；关闭时行为与接入前完全一致
+     * （不注入、不注册工具、候选为空）。<b>注意</b>：这只影响"要不要给候选"，
+     * 真正的越权拦截始终在服务端。
+     */
+    @ApiModelProperty(value = "是否开启知识库检索能力")
+    private Boolean kbEnable;
+
     /** 实例的前端视图（阶段 3）：<b>不含 apiKey</b>，仅暴露 {@link #hasApiKey} 布尔 */
     @Data
     @Builder

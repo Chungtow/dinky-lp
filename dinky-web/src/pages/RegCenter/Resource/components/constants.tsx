@@ -20,6 +20,7 @@
 import { PermissionConstants } from '@/types/Public/constants';
 import { l } from '@/utils/intl';
 import {
+  CloudUploadOutlined,
   CopyOutlined,
   DeleteOutlined,
   EditOutlined,
@@ -36,7 +37,9 @@ export enum ResourceRightMenuKey {
   DELETE = 'delete',
   RENAME = 'rename',
   CREATE_FOLDER = 'createFolder',
-  UPLOAD = 'upload'
+  UPLOAD = 'upload',
+  /** 批次 C：把该资源文件正文推进知识库 */
+  PUSH_TO_KB = 'push_to_kb'
 }
 
 /**
@@ -46,6 +49,14 @@ export enum ResourceRightMenuKey {
  * @constructor
  */
 export const RIGHT_CONTEXT_FILE_MENU = [
+  {
+    // 批次 C：资源文件是 Dinky 里已经在管的文本，推到知识库就能被 AI Chat 检索到。
+    // 只对文本类开放（见 Resource/index.tsx 的 isTextResource），否则 jar/zip 会推成乱码。
+    key: ResourceRightMenuKey.PUSH_TO_KB,
+    icon: <CloudUploadOutlined />,
+    label: l('datastudio.kb.pushFromResource'),
+    path: PermissionConstants.KB_WRITE
+  },
   {
     key: ResourceRightMenuKey.COPY_TO_ADD_CUSTOM_JAR,
     icon: <CopyOutlined />,

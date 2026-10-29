@@ -584,6 +584,54 @@ public class SystemConfiguration {
             .note(Status.SYS_LLM_SETTINGS_SKILLMAXCHARS_NOTE);
 
     /**
+     * 知识库（{@code @kb}）检索开关（2026-10-27 引入；v1.9 起属 {@code sys.kb.settings} 独立分组）。
+     *
+     * <p><b>默认关闭</b>：关闭时 {@code kb_search} 工具不下发、{@code @kb} 不注入任何内容，
+     * 行为与接入前完全一致（等价功能级回滚开关，见实施计划 U-14）。
+     *
+     * <p>开启后仍需 kb-service 可达（{@code /healthz} 的 embedding 分项 up）工具才会出现——
+     * 否则模型会把工具额度浪费在必然失败的调用上。
+     */
+    private final Configuration<Boolean> kbEnable = key(Status.SYS_KB_SETTINGS_ENABLE)
+            .booleanType()
+            .defaultValue(false)
+            .note(Status.SYS_KB_SETTINGS_ENABLE_NOTE);
+
+    /**
+     * 知识库检索结果注入预算（字符，2026-10-27）。
+     *
+     * <p><b>独立预算项</b>：与 {@link #llmSkillMaxChars} 同理，是防爆上限而非省 token 手段。
+     * 注意 kb-service 侧还有自己的 {@code max_expand_chars=2000}，两者各管一层：
+     * 那边管"单次检索返回多长"，这边管"一次对话里知识库内容占多少"。
+     */
+    private final Configuration<Integer> kbMaxChars = key(Status.SYS_KB_SETTINGS_MAXCHARS)
+            .intType()
+            .defaultValue(4000)
+            .note(Status.SYS_KB_SETTINGS_MAXCHARS_NOTE);
+
+    /**
+     * kb-service 基础地址（2026-10-27）。
+     *
+     * <p>形如 {@code http://meta05:58888}；<b>只有 Dinky 服务端使用</b>，浏览器永不直连
+     * （代理层是唯一出口，见实施计划 D-K5）。这是"我们的 Dinky 连的是哪个 RAG"的唯一真相源，
+     * 改配置即生效（{@code /api/sysConfig/modifyConfig} 同时写库与刷新内存），无需重启。
+     */
+    private final Configuration<String> kbBaseUrl =
+            key(Status.SYS_KB_SETTINGS_BASEURL).stringType().defaultValue("").note(Status.SYS_KB_SETTINGS_BASEURL_NOTE);
+
+    /**
+     * kb-service 访问密钥（2026-10-27）。
+     *
+     * <p><b>API_KEY 不下发前端</b>：读接口走脱敏处理器，前端只能看到掩码；
+     * 任何响应与日志都不得回显明文（实施计划 U-16 专项验证）。
+     */
+    private final Configuration<String> kbApiKey = key(Status.SYS_KB_SETTINGS_APIKEY)
+            .stringType()
+            .defaultValue("")
+            .desensitizedHandler(DesensitizedUtil::password)
+            .note(Status.SYS_KB_SETTINGS_APIKEY_NOTE);
+
+    /**
      * skill <b>只读</b>工具开关（阶段 4b）。
      *
      * <p>控制 {@code list_skills} / {@code read_skill} 是否下发给模型。<b>默认开启</b>——它们只读，
@@ -1040,6 +1088,32 @@ public class SystemConfiguration {
         return Asserts.isNull(llmSkillMaxChars.getValue())
                 ? llmSkillMaxChars.getDefaultValue()
                 : llmSkillMaxChars.getValue();
+    }
+
+    /** @return 是否开启知识库检索能力（2026-10-27）：关闭时 {@code kb_search} 不下发、{@code @kb} 不注入 */
+    public boolean isKbEnable() {
+        return Asserts.isNull(kbEnable.getValue()) ? kbEnable.getDefaultValue() : kbEnable.getValue();
+    }
+
+    /** @return 知识库检索结果注入预算（字符，2026-10-27）：一次对话中知识库内容的防爆上限 */
+    public int getKbMaxChars() {
+        return Asserts.isNull(kbMaxChars.getValue()) ? kbMaxChars.getDefaultValue() : kbMaxChars.getValue();
+    }
+
+    /** @return kb-service 基础地址（仅服务端使用，浏览器永不直连） */
+    public String getKbBaseUrl() {
+        String value = kbBaseUrl.getValue();
+        return StrUtil.isBlank(value) ? kbBaseUrl.getDefaultValue() : StrUtil.trim(value);
+    }
+
+    /**
+     * @return kb-service 访问密钥。
+     *
+     * <p>⚠️ 不得写入日志、不得通过任何接口回显；配置页读到的是脱敏值。
+     */
+    public String getKbApiKey() {
+        String value = kbApiKey.getValue();
+        return value == null ? kbApiKey.getDefaultValue() : StrUtil.trim(value);
     }
 
     /** @return 是否向模型下发 skill <b>只读</b>工具（阶段 4b；需 {@link #isLlmSkillEnable()} 同时为真） */

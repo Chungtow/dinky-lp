@@ -196,6 +196,27 @@ export enum API_CONSTANTS {
   /** P1-A：{@code @topic/} 候选（名册版，零连接 Kafka） */
   AI_CHAT_MENTION_TOPICS = '/api/aiChat/mentionTopics',
 
+  /** --------------------------------------------  知识库（@kb 接入 v1.0）  ------------------------------------------------------- */
+  /** 当前用户可见的知识库列表（{@code @kb/} 候选来源；只返回 code / name / description） */
+  KB_COLLECTIONS = '/api/kb/collections',
+  /** kb-service 连通性（只回布尔，不含地址与密钥） */
+  KB_HEALTH = '/api/kb/health',
+  /** 可见库 + 计数（左侧栏「知识库」tab 上半栏；计数来自 kb-service 实时聚合） */
+  KB_COLLECTION_STATS = '/api/kb/collections/stats',
+  /** 库内文档列表（真实地址 `{id}` / `{id}/content` 拼在其后；POST 同址 = 推送入库） */
+  KB_DOCUMENTS = '/api/kb/documents',
+  /** 可推送的库（只含当前用户有写权限的：属主 或 grant(write)） */
+  KB_COLLECTIONS_WRITABLE = '/api/kb/collections/writable',
+
+  /** 管理：我管理的库（属主库；超管为全部）。子路径 `/{id}/grants` 拼在其后 */
+  KB_ADMIN_COLLECTIONS = '/api/kb/admin/collections',
+  /** 管理：kb-service 有、Dinky 未纳管的库（超管） */
+  KB_ADMIN_ORPHANS = '/api/kb/admin/orphans',
+  /** 管理：纳管既有库（code 原样沿用 RAG 标识） */
+  KB_ADMIN_ADOPT = '/api/kb/admin/collections/adopt',
+  /** 管理：撤销授权，子路径 `/{grantId}` */
+  KB_ADMIN_GRANTS = '/api/kb/admin/grants',
+
   /** --------------------------------------------  skill（阶段 4a）  ------------------------------------------------------- */
   SKILL_LIST = '/api/skill/list',
   SKILL_DETAIL = '/api/skill/detail',
@@ -208,6 +229,7 @@ export enum API_CONSTANTS {
   SKILL_FILE_READ = '/api/skill/file/read',
   SKILL_FILE_WRITE = '/api/skill/file/write',
   SKILL_FILE_MKDIR = '/api/skill/file/mkdir',
+  SKILL_FILE_RENAME = '/api/skill/file/rename',
   SKILL_FILE_REMOVE = '/api/skill/file/remove',
 
   // ------------------------------------ system log ------------------------------------

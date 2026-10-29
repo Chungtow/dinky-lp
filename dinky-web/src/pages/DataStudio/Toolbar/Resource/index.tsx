@@ -31,6 +31,7 @@ import {
   queryDataByParams
 } from '@/services/BusinessCrud';
 import { ResourceInfo } from '@/types/RegCenter/data';
+import { message } from 'antd';
 import { SysConfigStateType } from '@/pages/SettingCenter/GlobalSetting/model';
 import { handleCopyToClipboard, unSupportView } from '@/utils/function';
 import {
@@ -39,6 +40,7 @@ import {
   RIGHT_CONTEXT_FOLDER_MENU
 } from '@/pages/RegCenter/Resource/components/constants';
 import { Button, Modal, Result } from 'antd';
+import PushModal, { KbPushPayload } from '@/pages/DataStudio/Toolbar/Kb/PushModal';
 import { l } from '@/utils/intl';
 import { AuthorizedObject, useAccess } from '@/hooks/useAccess';
 import { ProCard } from '@ant-design/pro-components';
@@ -48,6 +50,34 @@ import RightContextMenu from '@/components/RightContextMenu';
 import ResourceModal from '@/pages/RegCenter/Resource/components/ResourceModal';
 import ResourcesUploadModal from '@/pages/RegCenter/Resource/components/ResourcesUploadModal';
 import { MenuInfo } from 'rc-menu/es/interface';
+
+/** 可推送的文本类型（与知识库 tab 的 openable 口径一致；jar/zip/pdf 不在内） */
+const TEXT_EXT = [
+  'md',
+  'markdown',
+  'txt',
+  'sql',
+  'yaml',
+  'yml',
+  'py',
+  'java',
+  'scala',
+  'json',
+  'xml',
+  'sh',
+  'conf',
+  'properties',
+  'csv',
+  'log',
+  'js',
+  'ts'
+];
+
+const isTextResource = (name: string): boolean => {
+  const lower = (name ?? '').toLowerCase();
+  const dot = lower.lastIndexOf('.');
+  return dot >= 0 && TEXT_EXT.includes(lower.slice(dot + 1));
+};
 
 const Resource = (props: {
   enableResource: boolean;
@@ -78,6 +108,8 @@ const Resource = (props: {
   });
 
   const [editModal, setEditModal] = useState<string>('');
+  /** 批次 C：待推送的资源文件载荷（null = 弹窗关闭） */
+  const [pushPayload, setPushPayload] = useState<KbPushPayload | null>(null);
 
   const [uploadValue] = useState({
     url: API_CONSTANTS.BASE_URL + API_CONSTANTS.RESOURCE_UPLOAD,
@@ -212,6 +244,35 @@ const Resource = (props: {
       case ResourceRightMenuKey.RENAME:
         handleRename();
         break;
+      case ResourceRightMenuKey.PUSH_TO_KB: {
+        // 先判类型再读内容：jar/zip 走同一个接口会拿到乱码，推上去只会污染语料
+        const name = String(fullInfo?.name ?? '');
+        if (!isTextResource(name)) {
+          message.warning(l('datastudio.kb.pushNotText'));
+          break;
+        }
+        if (!fullInfo?.id) {
+          break;
+        }
+        try {
+          const content = await queryDataByParams<string>(
+            API_CONSTANTS.RESOURCE_GET_CONTENT_BY_ID,
+            {
+              id: fullInfo.id
+            }
+          );
+          setPushPayload({
+            filename: name,
+            content: content ?? '',
+            source: 'resource',
+            // 资源 id 作为业务主键；资源没有业务表，故不回写 doc_id
+            externalId: String(fullInfo.id)
+          });
+        } catch (e: any) {
+          message.error(e?.message ?? l('datastudio.kb.readFailed'));
+        }
+        break;
+      }
       case ResourceRightMenuKey.COPY_TO_ADD_CUSTOM_JAR:
         if (fullInfo) {
           const fillValue = `ADD CUSTOMJAR 'rs:${fullInfo.fullName}';`;
@@ -389,6 +450,12 @@ const Resource = (props: {
               onNodeClick={(info: any) => handleNodeClick(info)}
               onSync={handleSync}
             />
+            <PushModal
+              open={Boolean(pushPayload)}
+              payload={pushPayload}
+              onClose={() => setPushPayload(null)}
+            />
+
             <RightContextMenu
               contextMenuPosition={resourceState.contextMenuPosition}
               open={resourceState.contextMenuOpen}

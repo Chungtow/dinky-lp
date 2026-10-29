@@ -63,7 +63,16 @@ import { API_CONSTANTS } from '@/services/endpoints';
  *  zh: 中间tab 类型
  *  en: Center tab type
  */
-export type CenterTabType = 'web' | 'task' | 'dataSource' | 'resource' | 'semanticFile';
+export type CenterTabType =
+  | 'web'
+  | 'task'
+  | 'dataSource'
+  | 'resource'
+  | 'semanticFile'
+  /** 批次 B：知识库文档只读查看（正文来自 /api/kb/documents/{id}/content） */
+  | 'kbFile'
+  /** 批次 F：skill 内文件编辑（正文来自 /api/skill/file/read，保存走 /api/skill/file/write） */
+  | 'skillFile';
 
 /**
  * @description:
@@ -105,6 +114,21 @@ export type DataStudioState = {
    * en: Currently selected dbt semantic project in the semantic panel (P3b)
    */
   currentSemanticProject?: string;
+  /**
+   * zh: 左侧栏「知识库」tab 当前选中的库（批次 E，供 AI Chat 默认绑定检索范围）
+   * en: Currently selected knowledge base collection in the KB panel (batch E, default retrieval scope for AI Chat)
+   */
+  currentKbCollection?: string;
+  /**
+   * zh: 左侧栏「技能」tab 当前选中的技能（批次 F，供 AI Chat 默认绑定当前技能）
+   * en: Currently selected skill in the skill panel (batch F, default skill binding for AI Chat)
+   */
+  currentSkillId?: number;
+  /**
+   * zh: 当前选中技能的名字（仅用于 AI Chat 摘要行展示，避免只显示裸 id）
+   * en: Name of the selected skill (display only)
+   */
+  currentSkillName?: string;
   /**
    * zh: 基础布局数据
    * en: Basic layout data
@@ -247,6 +271,15 @@ export type StudioModelType = {
      * P3b：记录语义面板当前选中的项目，供 AI Chat 的项目级注入跟随语义树切换。
      */
     saveCurrentSemanticProject: Reducer<DataStudioState, { project?: string }>;
+    /**
+     * 批次 E：记录知识库面板当前选中的库，供 AI Chat 作默认检索范围
+     * （省去用户手打 `@kb/<8 位随机编码>`）。
+     */
+    saveCurrentKbCollection: Reducer<DataStudioState, { collection?: string }>;
+    /**
+     * 批次 F：记录技能面板当前选中的技能，供 AI Chat 默认绑定「当前正在编辑的技能」。
+     */
+    saveCurrentSkill: Reducer<DataStudioState, { skillId?: number; skillName?: string }>;
     //更新 project
     updateProject: Reducer<DataStudioState, ProjectDTO>;
     // 更新操作
@@ -293,6 +326,11 @@ const StudioModel: StudioModelType = {
     },
     // P3b：语义面板当前项目（未打开过语义面板时为 undefined → AI Chat 不注入项目清单）
     currentSemanticProject: undefined,
+    // 批次 E：知识库面板当前选中的库（仅在用户点选时写入；自动选中首个库不算"绑定"）
+    currentKbCollection: undefined,
+    // 批次 F：技能面板当前选中的技能（仅用户点选时写入 → 才作为 AI Chat 的默认绑定）
+    currentSkillId: undefined,
+    currentSkillName: undefined,
     centerContent: {
       tabs: [],
       activeTab: undefined
@@ -681,6 +719,43 @@ const StudioModel: StudioModelType = {
       return {
         ...state,
         currentSemanticProject: project
+      };
+    },
+    /**
+     * 记录知识库面板当前选中的库（批次 E）。
+     *
+     * <p>与 {@link #saveCurrentSemanticProject} 同构：AI Chat 从这里取"默认检索范围"，
+     * 不必要求用户手打 `@kb/<code>`（一个 8 位随机编码，谁也记不住）。
+     *
+     * <p>同值不触发变更：这个值是上下文指纹的输入之一，无意义的写入会让每次点同一行都
+     * 触发"上下文变了 → 重注入"，白白多花一轮 schema token。
+     */
+    saveCurrentKbCollection(state, { collection }) {
+      if (state.currentKbCollection === collection) {
+        return state;
+      }
+      return {
+        ...state,
+        currentKbCollection: collection
+      };
+    },
+    /**
+     * 记录技能面板当前选中的技能（批次 F）。
+     *
+     * <p>与 {@link #saveCurrentKbCollection} 同构：AI Chat 从这里取「默认绑定技能」，
+     * 顺序是「编辑区 skill 文件所属技能 > 左侧树选中技能」（解析在 aiChatContext.resolveBinding）。
+     *
+     * <p>同值不触发变更：技能 id 进上下文指纹，无意义写入会让每次点同一行都判定
+     * 「上下文变了 → 重注入」，白花一轮 token。
+     */
+    saveCurrentSkill(state, { skillId, skillName }) {
+      if (state.currentSkillId === skillId && state.currentSkillName === skillName) {
+        return state;
+      }
+      return {
+        ...state,
+        currentSkillId: skillId,
+        currentSkillName: skillName
       };
     },
     updateProject(state, { expandKeys, selectedKeys }) {

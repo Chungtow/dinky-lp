@@ -19,6 +19,9 @@
 
 package org.dinky.ai;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import cn.hutool.json.JSONArray;
 import lombok.Data;
 
@@ -66,6 +69,21 @@ public class AiToolRunResult {
 
     /** 20261025：本次工具轮是否异常中止（审计 {@code success} 由此判负） */
     private boolean aborted;
+
+    /**
+     * 知识库审计（批次 D）：本轮<b>实际检索过</b>的库编码（去重、保序）。
+     *
+     * <p>从 {@link AiToolContext} 回带——工具循环跑在异步线程、审计对象却在请求线程里建，
+     * 只能靠返回值把审计事实搬回来。没有这一跳，就只剩 {@code tool_calls} 里的一段自由文本，
+     * 想统计"哪些库被检索过 / 谁在越权试"只能全文 grep。
+     */
+    private List<String> kbSearchedCodes = new ArrayList<>();
+
+    /** 知识库审计：本轮被显式拒绝的库编码 */
+    private List<String> kbDeniedCodes = new ArrayList<>();
+
+    /** 知识库审计：本轮检索累计命中条数 */
+    private int kbHitCount;
 
     public void appendAnswer(String text) {
         if (text != null) {

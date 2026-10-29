@@ -20,13 +20,16 @@
 package org.dinky.ai;
 
 import org.dinky.ai.context.RequestSnapshot;
+import org.dinky.ai.kb.KbCollectionBrief;
 import org.dinky.ai.skill.SkillBrief;
 import org.dinky.data.model.DataBase;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import cn.hutool.core.util.StrUtil;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -69,6 +72,67 @@ public class AiToolContext {
      * <p>默认为<b>空列表</b>而非 {@code null}：工具侧可直接遍历，无需判空。
      */
     private List<SkillBrief> visibleSkills = Collections.emptyList();
+
+    /**
+     * 知识库 {@code @kb} 接入 v1.0：当前用户<b>可见的知识库快照</b>（请求线程预解析后注入）。
+     *
+     * <p>与 {@link #visibleSkills} 完全同理，多一层安全含义：kb-service <b>不认人</b>——
+     * {@code filter.collection} 里放什么就搜什么。因此"这个库能不能搜"必须在请求线程定好，
+     * 工具内只做集合判定；否则模型编造一个编码就能越权检索别的内容。
+     *
+     * <p>默认为<b>空列表</b>而非 {@code null}：工具侧可直接遍历，无需判空。
+     */
+    private List<KbCollectionBrief> visibleCollections = Collections.emptyList();
+
+    /**
+     * 批次 E：本次对话的<b>默认检索范围</b>（左侧栏「知识库」tab 当前选中的库，已通过可见性校验）。
+     *
+     * <p>用途只有一个：模型调 {@code kb_search} 却<b>没传</b> {@code collection} 时，用它代替
+     * "全部可见库"。为空表示未绑定 → 维持原行为（搜全部可见库）。
+     *
+     * <p><b>为什么不能直接用前端传来的值</b>：越权判定只能基于请求线程算好的可见集；
+     * 前端传什么都不能直接进 {@code filter.collection}（kb-service 不认人）。
+     */
+    private String defaultKbCollection;
+
+    /**
+     * 审计：本次对话<b>实际检索过</b>的库编码（去重、保序）。
+     *
+     * <p><b>为什么用 {@link CopyOnWriteArrayList}</b>：工具循环在异步线程里跑，
+     * 同一个 context 可能被并发写；普通 ArrayList 会丢元素甚至抛
+     * {@code ConcurrentModificationException}——审计数据丢一条就等于"看起来没检索过"。
+     *
+     * <p>与 {@link #visibleCollections} 的区别：那个是"能看什么"，这个是"实际搜了什么"。
+     * 排障时要回答的是后者（"用户说答错了，他到底检索了哪几个库"）。
+     */
+    private final List<String> kbSearchedCodes = new CopyOnWriteArrayList<>();
+
+    /** 审计：本次对话被<b>显式拒绝</b>的库编码（越权请求，实施计划 U-05/U-16 的落点） */
+    private final List<String> kbDeniedCodes = new CopyOnWriteArrayList<>();
+
+    /** 审计：本次对话知识库检索的累计命中条数（0 也要记——"检索了但没命中"本身就是结论） */
+    private final AtomicInteger kbHitCount = new AtomicInteger();
+
+    /** 记录一次成功下发的检索（在检索真正返回之后调用） */
+    public void recordKbSearch(List<String> codes, int hits) {
+        if (codes != null) {
+            for (String code : codes) {
+                if (StrUtil.isNotBlank(code) && !kbSearchedCodes.contains(code)) {
+                    kbSearchedCodes.add(code);
+                }
+            }
+        }
+        if (hits > 0) {
+            kbHitCount.addAndGet(hits);
+        }
+    }
+
+    /** 记录一次越权拒绝（库不在可见集内） */
+    public void recordKbDenied(String code) {
+        if (StrUtil.isNotBlank(code) && !kbDeniedCodes.contains(code)) {
+            kbDeniedCodes.add(code);
+        }
+    }
 
     /**
      * P1：请求线程预解析的上下文快照（本租户启用中的数据源索引 + 命名名册）。
@@ -130,6 +194,17 @@ public class AiToolContext {
          */
         default boolean request(ConfirmPayload payload) {
             return request(payload == null ? null : payload.getSql(), payload == null ? null : payload.getRisk());
+        }
+
+        /**
+         * 三态确认入口（2026-10-29）：除"确认落盘 / 拒绝"外，还要能表达"仅应用到编辑区"。
+         *
+         * <p>默认实现降级为二态（{@link #request(ConfirmPayload)}），因此<b>SQL 执行、删除类工具
+         * 一行都不用改</b>；只有 {@code write_skill_file} 会真正走到装配侧的覆盖实现，
+         * 并在拿到 {@link AiConfirmDecision#APPLY_ONLY} 时跳过落盘。
+         */
+        default AiConfirmDecision requestDecision(ConfirmPayload payload) {
+            return request(payload) ? AiConfirmDecision.APPROVE : AiConfirmDecision.REJECT;
         }
     }
 

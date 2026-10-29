@@ -158,6 +158,24 @@ public class AiChatRequest {
     private String semanticProject;
 
     /**
+     * 批次 F：数据开发左侧栏「技能」tab 当前绑定（打开的文件所属 / 选中的目录所属）的 skill id。
+     *
+     * <p>与 {@code semanticProject}、批次 E 的 {@code defaultCollection} 同构：它只是"默认范围"，
+     * 不是命令——显式 {@code @skill/<名>} 永远优先；不可见（被删/撤权/换租户）时**显式拒绝**，
+     * 绝不静默回落成"整个可用清单"，否则用户以为模型读了 A skill、实际读的是别的。
+     */
+    private Long defaultSkillId;
+
+    /**
+     * 校验通过的生效 skill id（{@code @JsonIgnore}，不回传前端）。
+     *
+     * <p>用途：从随后注入的"可用技能清单"里摘掉它，避免同一份 skill 既单独介绍又重复出现；
+     * 同时给审计/排障留一个"本轮绑定生效"的判断依据。
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private Long effectiveSkillDefault;
+
+    /**
      * 上下文指纹（P4 一期）：由前端按「当前绑定来源」计算，形如 {@code ctx_1a2b3c4d5e6f7a8b}。
      *
      * <p>用途：自动绑定后，切换 tab / 换语义项目都会让上下文变化，但 {@code sessionId} 不变。
@@ -175,4 +193,41 @@ public class AiChatRequest {
      * <p><b>不接受前端传入</b>：Controller 会用 Sa-Token 的登录 id 覆盖，防止伪造绕过限流。
      */
     private Integer userId;
+
+    /**
+     * 知识库审计（批次 D）：<b>注入层</b>被拒绝的库编码（{@code @kb} 指到不可见/已停用的库）。
+     *
+     * <p>为什么挂在请求对象上：注入发生在请求线程（{@link org.dinky.ai.mention.KbMentionInjector}），
+     * 而审计对象在另一条链路上构建；两者唯一的共同上下文就是这个请求。用 {@code @JsonIgnore}
+     * 保证它<b>绝不会</b>被序列化回前端——那是内部审计数据，不是响应字段。
+     *
+     * <p>工具层的越权记录走 {@code AiToolContext}（异步线程里攒），二者在审计落库时合并。
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private java.util.List<String> kbDeniedCodes = new java.util.ArrayList<>();
+
+    /**
+     * 批次 E：左侧栏「知识库」tab 当前选中的库（前端绑定，省去手打 {@code @kb/<code>}）。
+     *
+     * <p><b>它只是"默认值"，不是"命令"</b>：显式 {@code @kb/} 永远优先（D-K16）；不可见时
+     * 显式拒绝并写 {@code kb_denied}，<b>绝不</b>降级成"全部可见库"（D-K17）。
+     */
+    private String defaultCollection;
+
+    /**
+     * 注入层算出的<b>生效</b>默认库编码（已通过可见性校验；被拒时为 null）。
+     *
+     * <p>为什么要单独一个字段：审计要区分"用户/前端指定的默认绑定"与"模型自己收窄的范围"（D-K20），
+     * 而校验发生在注入线程、写审计在另一条链路，请求对象是两者唯一的共同上下文。
+     * {@code @JsonIgnore} 保证它不会回传前端。
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private String effectiveKbDefault;
+
+    /** 记录一次注入层拒绝（去重；不抛异常，审计永远不该影响主流程） */
+    public void recordKbDenied(String code) {
+        if (code != null && !code.trim().isEmpty() && !kbDeniedCodes.contains(code.trim())) {
+            kbDeniedCodes.add(code.trim());
+        }
+    }
 }

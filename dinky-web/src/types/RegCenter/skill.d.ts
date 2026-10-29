@@ -70,6 +70,11 @@ export type SkillVisibilityParams = {
 export type SkillSaveParams = {
   id: number;
   content: string;
+  /**
+   * 批次 F 乐观锁：编辑起点的 `version`。非空且与库里不一致时后端拒绝保存
+   * （skill 无 git 历史、无 .trash，覆盖后无从找回）。为空表示不校验。
+   */
+  baseVersion?: number;
 };
 
 /** skill 内文件树节点（阶段 4b；只含相对路径，前端不感知存储绝对路径） */
@@ -89,12 +94,26 @@ export type SkillFileWriteParams = {
   skillId: number;
   relativePath: string;
   content: string;
+  /** 批次 F 乐观锁：**仅主文件**生效（附件不递增 version，后端会忽略） */
+  baseVersion?: number;
 };
 
 /** skill 内路径目标（新建目录 / 删除） */
 export type SkillFileTargetParams = {
   skillId: number;
   relativePath: string;
+};
+
+/**
+ * 重命名 skill 内文件（批次 F）。
+ *
+ * <p>{@code newName} 只能是纯文件名（不含 `/`）：一期只改名不换目录；
+ * 主文件（SKILL.md / DOC.md）后端拒绝改名。
+ */
+export type SkillFileRenameParams = {
+  skillId: number;
+  relativePath: string;
+  newName: string;
 };
 
 /** 资产类型（阶段 4b：skill = 流程知识；doc = 业务背景知识） */

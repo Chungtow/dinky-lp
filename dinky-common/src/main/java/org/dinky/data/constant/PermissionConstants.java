@@ -278,6 +278,28 @@ public class PermissionConstants {
     public static final String REGISTRATION_SKILL_SHARE = "registration:skill:share";
 
     /**
+     * 知识库（{@code @kb}）权限点（知识库 @kb 接入 v1.0）。
+     *
+     * <p>前缀与 Skills 同构（都是「注册中心」下的资产），段数同样**必须 ≥ 3**
+     * —— 理由见 {@link #REGISTRATION_SKILL_SHARE}。
+     *
+     * <ul>
+     *   <li>{@code view}：浏览库列表与库内文档（只读打开）；</li>
+     *   <li>{@code save}：新建 / 改名 / 改描述 / 启停 / 同租户共享；</li>
+     *   <li>{@code share}：设为「全体公开」（组织级动作，单独管控）；</li>
+     *   <li>{@code write}：把文本推送入库。<b>独立授权</b>：A 侧采用「合并归属」后，
+     *       多归属会扩大文档的可见范围，放任任何人都能往公开库或别人的库里塞内容就是越权扩散。</li>
+     * </ul>
+     */
+    public static final String REGISTRATION_KB_VIEW = "registration:kb:view";
+
+    public static final String REGISTRATION_KB_SAVE = "registration:kb:save";
+
+    public static final String REGISTRATION_KB_SHARE = "registration:kb:share";
+
+    public static final String REGISTRATION_KB_WRITE = "registration:kb:write";
+
+    /**
      * AI Chat（分级：使用 / 写操作）
      *
      * <p>aiChat:panel:use → 面板入口、对话、只读工具；aiChat:panel:write → 写审计 / 确认 / 取消（落盘闸门）。

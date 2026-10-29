@@ -573,6 +573,26 @@ public enum Status {
     SYS_LLM_SETTINGS_TOOLRESULTMAXCHARS_NOTE(453, "sys.llm.settings.toolResultMaxChars.note"),
     SYS_LLM_SETTINGS_HISTORYMAXMESSAGES(454, "sys.llm.settings.historyMaxMessages"),
     SYS_LLM_SETTINGS_HISTORYMAXMESSAGES_NOTE(455, "sys.llm.settings.historyMaxMessages.note"),
+    /**
+     * 知识库（{@code @kb}）连接与检索能力（2026-10-27 引入，v1.9 迁出 LLM 命名空间）。
+     *
+     * <p><b>为什么独立成组</b>（{@code sys.kb.settings.*}）：这四项描述的是「Dinky 连哪个 RAG 服务、
+     * 用哪个密钥、检索开不开、注入多少字」，与 LLM 提供商的 baseUrl/apiKey 是<b>两个外部系统</b>。
+     * 早先寄生在 {@code sys.llm.settings.*} 下，结果是配置中心里只能在「LLM」页签的 49 项中翻找，
+     * 且 key 名（{@code kbBaseUrl}）与实际语义（连接 kb-service）不符。配置中心按 key 第二段分组
+     * （{@code SystemConfiguration.getAllConfiguration()}），故改前缀即成为与 LLM、语义层并列的分组。
+     *
+     * <p>⚠️ 改前缀必须有配套数据迁移（{@code V20261028.1.4.18__kb_settings_namespace.sql}）：
+     * 否则库里旧行变孤儿、新键按默认值（空 baseUrl）生效，知识库直接不可用。
+     */
+    SYS_KB_SETTINGS_ENABLE(456, "sys.kb.settings.enable"),
+    SYS_KB_SETTINGS_ENABLE_NOTE(457, "sys.kb.settings.enable.note"),
+    SYS_KB_SETTINGS_MAXCHARS(458, "sys.kb.settings.maxChars"),
+    SYS_KB_SETTINGS_MAXCHARS_NOTE(459, "sys.kb.settings.maxChars.note"),
+    SYS_KB_SETTINGS_BASEURL(460, "sys.kb.settings.baseUrl"),
+    SYS_KB_SETTINGS_BASEURL_NOTE(461, "sys.kb.settings.baseUrl.note"),
+    SYS_KB_SETTINGS_APIKEY(462, "sys.kb.settings.apiKey"),
+    SYS_KB_SETTINGS_APIKEY_NOTE(463, "sys.kb.settings.apiKey.note"),
     SYS_METRICS_SETTINGS_SYS_ENABLE(148, "sys.metrics.settings.sys.enable"),
     SYS_METRICS_SETTINGS_SYS_ENABLE_NOTE(149, "sys.metrics.settings.sys.enable.note"),
     SYS_METRICS_SETTINGS_SYS_GATHERTIMING(150, "sys.metrics.settings.sys.gatherTiming"),

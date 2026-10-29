@@ -92,6 +92,24 @@ export const mapDispatchToProps = (dispatch: Dispatch) => {
         project,
         type: STUDIO_MODEL.saveCurrentSemanticProject
       }),
+    /**
+     * 批次 E：记录知识库面板当前选中的库。AI Chat 把它当作默认检索范围，
+     * 用户因此不必手打 `@kb/<8 位随机编码>`（与语义项目同一套绑定链路）。
+     */
+    saveCurrentKbCollection: (collection?: string) =>
+      dispatch({
+        collection,
+        type: STUDIO_MODEL.saveCurrentKbCollection
+      }),
+    /**
+     * 批次 F：记录技能面板当前选中的技能（目录/文件都算）。AI Chat 的
+     * 「当前正在编辑的技能」区块据此跟随左侧技能树切换（与语义项目/知识库同一套绑定链路）。
+     */
+    saveCurrentSkill: (payload: { skillId?: number; skillName?: string }) =>
+      dispatch({
+        ...payload,
+        type: STUDIO_MODEL.saveCurrentSkill
+      }),
     updateProject: (payload: ProjectDTO) =>
       dispatch({
         ...payload,
