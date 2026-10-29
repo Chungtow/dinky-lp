@@ -56,7 +56,7 @@ export const ErrorNotification = (
    * if the error message is longer than 40 characters, click it will create a Modal to show more information detail
    */
   const moreBtn =
-    description.length > 40 ? (
+    (description ?? '').length > 40 ? (
       <Button type='primary' danger onClick={() => ErrorModelWithCode(title, description)}>
         {l('global.notification.full-error')}
       </Button>

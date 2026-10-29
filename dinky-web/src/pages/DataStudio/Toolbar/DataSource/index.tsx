@@ -119,7 +119,7 @@ const DataSource = memo((props: any) => {
   useAsyncEffect(async () => {
     const typeGroup: Record<string, DataSources.DataSource[]> = {};
     // 根据 type分组，做级联
-    (dataSourceDataList as DataSources.DataSource[]).forEach((item) => {
+    ((dataSourceDataList ?? []) as DataSources.DataSource[]).forEach((item) => {
       if (!typeGroup[item.type]) {
         typeGroup[item.type] = [];
       }
@@ -168,6 +168,9 @@ const DataSource = memo((props: any) => {
       isUpdate: false,
       params: {
         selectDatabaseId,
+        // P4 一期：同时给出 databaseId 别名——AI Chat 侧统一按 params.databaseId 取上下文，
+        // 此前只有 selectDatabaseId，导致「数据源 tab 打开也判定为未绑定数据源」。
+        databaseId: selectDatabaseId,
         schemaName,
         tableName,
         type: selectDbType

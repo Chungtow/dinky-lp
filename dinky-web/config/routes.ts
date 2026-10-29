@@ -200,6 +200,19 @@ export default [
         name: 'resource',
         icon: 'FileZipOutlined',
         component: './RegCenter/Resource'
+      },
+      {
+        path: '/registration/skill',
+        name: 'skill',
+        icon: 'ThunderboltOutlined',
+        component: './RegCenter/Skills'
+      },
+      {
+        // 批次 D：知识库管理（库列表/未纳管发现/授权）。菜单 191 在迁移 .1.4.17 里打开 display
+        path: '/registration/kb',
+        name: 'kb',
+        icon: 'BookOutlined',
+        component: './RegCenter/Kb'
       }
     ]
   },
@@ -286,6 +299,36 @@ export default [
         name: 'classloaderjars',
         icon: 'CodepenOutlined',
         component: './SettingCenter/ClassLoaderJars'
+      }
+    ]
+  },
+
+  // 2026-10-14 菜单与权限登记缺口修复（F6）：补监控模块路由段。
+  // 此前 routes.ts 整段缺 /metrics，菜单里的监控页面全部不可达
+  // （menuList 不注册路由，patch 只调默认跳转）——仅改菜单 type 无法修复可达性。
+  // 注意：/metrics/server（Dinky 服务监控）的**前端页面从未实现**
+  //       （src/pages/Metrics/Server/ 下只有 constants/data/function/GlobalFilter，无组件入口），
+  //       故不注册该路由（注册会因 Cannot find module './Metrics/Server' 导致构建失败），
+  //       菜单 id=120 亦保持 F 类不在导航中展示。
+  {
+    path: '/metrics',
+    name: 'metrics',
+    icon: 'AreaChartOutlined',
+    routes: [
+      {
+        path: '/metrics',
+        redirect: '/metrics/job'
+      },
+      {
+        path: '/metrics/job',
+        name: 'job',
+        hideInMenu: true,
+        // 2026-10-14 修复（P4）：此前直接挂子组件 JobMetricsList，而 Umi 渲染路由组件时不传任何 props
+        // （React.createElement(Component, null)）→ 组件内 timeRange 为 undefined → useEffect 里读
+        // timeRange.isReal 抛 TypeError，React 18 下未捕获错误会卸载整棵根树 → 表现为「监控页报错，
+        // 其它页面也一起报错，必须硬刷新」。改挂容器页：它持有 timeRange state、提供时间筛选，
+        // 并在 Dinky 服务未开启时给出降级提示。
+        component: './Metrics'
       }
     ]
   },

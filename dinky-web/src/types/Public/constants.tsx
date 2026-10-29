@@ -174,6 +174,47 @@ export enum PermissionConstants {
   REGISTRATION_RESOURCE_UPLOAD = '/registration/resource/upload',
 
   /**
+   * 2026-10-14 菜单与权限登记缺口修复新增
+   *
+   * 说明：常量值必须与 dinky_sys_menu 中对应 F 项的 path **完全一致**
+   * （useAccess 的匹配是精确相等，见 src/hooks/useAccess.tsx）。
+   */
+  // Skills（页面 + 5 个按钮）
+  REGISTRATION_SKILL = '/registration/skill',
+  REGISTRATION_SKILL_VIEW = '/registration/skill/view',
+  REGISTRATION_SKILL_ADD = '/registration/skill/add',
+  REGISTRATION_SKILL_SAVE = '/registration/skill/save',
+  REGISTRATION_SKILL_DELETE = '/registration/skill/delete',
+  REGISTRATION_SKILL_FILE = '/registration/skill/file',
+  /**
+   * 2026-10-14 三档可见性：把 skill/doc 设为「全体公开」。
+   * 值必须等于菜单 F 项的 path（V20261014.1.4.6__skill_visibility.sql）。
+   */
+  REGISTRATION_SKILL_SHARE = '/registration/skill/share',
+  // 集群实例回收（后端已有权限点，此前菜单缺失）
+  REGISTRATION_CLUSTER_INSTANCE_RECYCLE = '/registration/cluster/instance/recycle',
+  // AI Chat（分级：使用 / 写操作）
+  // 注意：保持 3 段式（与后端的 aiChat:panel:use / aiChat:panel:write 自洽）——
+  //       超管通配符 *:*:* 按冒号分段匹配，2 段串会导致连超管都无法通过校验。
+  DATASTUDIO_AI_CHAT = '/aiChat/panel/use',
+  DATASTUDIO_AI_CHAT_WRITE = '/aiChat/panel/write',
+  // dbt 语义项目在线编辑（P2）：3 段式，与后端 datastudio:semantic:view / edit 自洽
+  /** 知识库（@kb）浏览：左侧栏「知识库」tab 的可见性判定（F 类权限点，见迁移 .1.4.13） */
+  KB_VIEW = '/registration/kb/view',
+  /** 推送到知识库（F 类权限点 194）。⚠️ 有它只代表"能调接口"，能不能推某个库还看该库的 grant(write) */
+  KB_WRITE = '/registration/kb/write',
+  /** 知识库管理：建库/改名/启停（F 类权限点 192） */
+  KB_SAVE = '/registration/kb/save',
+  /** 知识库授权：增删 grant（F 类权限点 193） */
+  KB_SHARE = '/registration/kb/share',
+  DATASTUDIO_SEMANTIC_VIEW = '/datastudio/semantic/view',
+  DATASTUDIO_SEMANTIC_EDIT = '/datastudio/semantic/edit',
+  // P4 一期：处理语义反馈（提交反馈沿用 VIEW——能看的人都能提，否则收不到反馈）
+  DATASTUDIO_SEMANTIC_FEEDBACK = '/datastudio/semantic/feedback',
+  // 类加载器 Jars
+  SETTINGS_CLASSLOADERJARS_VIEW = '/settings/classloaderjars/view',
+
+  /**
    * auth menu
    */
   AUTH_MENU_ADD_ROOT = '/auth/menu/createRoot',
@@ -239,6 +280,10 @@ export enum PermissionConstants {
   SETTING_GLOBAL_DS_EDIT = '/settings/globalsetting/ds/edit',
   SETTING_GLOBAL_LDAP = '/settings/globalsetting/ldap',
   SETTING_GLOBAL_LDAP_EDIT = '/settings/globalsetting/ldap/edit',
+  SETTING_GLOBAL_LLM = '/settings/globalsetting/llm',
+  SETTING_GLOBAL_LLM_EDIT = '/settings/globalsetting/llm/edit',
+  SETTING_GLOBAL_KAFKA = '/settings/globalsetting/kafka',
+  SETTING_GLOBAL_KAFKA_EDIT = '/settings/globalsetting/kafka/edit',
   SETTING_GLOBAL_METRICS = '/settings/globalsetting/metrics',
   SETTING_GLOBAL_METRICS_EDIT = '/settings/globalsetting/metrics/edit',
   SETTING_GLOBAL_RESOURCE = '/settings/globalsetting/resource',

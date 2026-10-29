@@ -134,6 +134,14 @@ export const JOB_TYPE: DefaultOptionType[] = [
       {
         value: 'Python',
         label: 'Python'
+      },
+      {
+        value: 'Shell',
+        label: 'Shell'
+      },
+      {
+        value: 'DataX',
+        label: 'DataX'
       }
     ]
   }

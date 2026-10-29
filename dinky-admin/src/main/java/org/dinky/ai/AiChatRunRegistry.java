@@ -1,0 +1,216 @@
+/*
+ *
+ *  Licensed to the Apache Software Foundation (ASF) under one or more
+ *  contributor license agreements.  See the NOTICE file distributed with
+ *  this work for additional information regarding copyright ownership.
+ *  The ASF licenses this file to You under the Apache License, Version 2.0
+ *  (the "License"); you may not use this file except in compliance with
+ *  the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ *
+ */
+
+package org.dinky.ai;
+
+import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+
+import org.springframework.stereotype.Component;
+
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+
+/**
+ * AI Chat 运行态注册表（阶段 2c-0）。
+ *
+ * <p>承载「执行前二次确认」与「服务端中断」所需的<b>跨请求状态</b>：一次对话（SSE 流）在服务端生成
+ * 唯一 {@code runId}，确认与取消两个独立 HTTP 请求凭 {@code runId} 找到对应运行并投递结果。
+ *
+ * <p><b>安全</b>：所有操作校验 {@code userId} 与创建者一致，避免他人凭 runId 越权确认/取消。
+ *
+ * <p><b>生命周期</b>：由 {@code doChat} 在 finally 中 {@link #remove(String)}；不依赖 GC，
+ * 避免长期驻留。
+ *
+ * @since 2026/10/02
+ */
+@Slf4j
+@Component
+public class AiChatRunRegistry {
+
+    /** 单次运行的上下文 */
+    @Getter
+    public static class RunContext {
+        /** 发起用户（鉴权用） */
+        private final Integer userId;
+        /**
+         * 待确认结果的投递队列（容量 1）：{@link AiConfirmDecision} 三态
+         * （拒绝 / 落盘确认 / 仅应用到编辑区）。
+         */
+        private final BlockingQueue<AiConfirmDecision> confirmQueue = new LinkedBlockingQueue<>(1);
+        /** 是否已被请求取消（volatile，供循环线程读取） */
+        private volatile boolean cancelled = false;
+
+        /**
+         * 阶段 4b：<b>强化确认</b>时用户手动输入的名称（删除 skill / doc 等破坏性操作用）。
+         *
+         * <p>由 {@link #setConfirmTypedName} 在投递结果<b>之前</b>写入；写操作侧在拿到「确认」后
+         * 再做一次比对，不匹配即视为拒绝——因此即使绕开前端 UI 直接调接口，也过不了这道闸。
+         */
+        private volatile String confirmTypedName;
+
+        /** 阶段 4b：记录用户手输的名称（仅供强化确认比对，不参与其他判定） */
+        void setConfirmTypedName(String confirmTypedName) {
+            this.confirmTypedName = confirmTypedName;
+        }
+
+        RunContext(Integer userId) {
+            this.userId = userId;
+        }
+
+        /** 等待一个确认结果；返回 null 表示超时未确认 */
+        public AiConfirmDecision awaitConfirm(long timeoutSeconds) {
+            try {
+                return confirmQueue.poll(Math.max(timeoutSeconds, 1), TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
+        }
+
+        /** 投递确认结果（重复投递由队列容量保证只接受首个） */
+        boolean offer(AiConfirmDecision decision) {
+            return confirmQueue.offer(decision);
+        }
+
+        /**
+         * 清空尚未被消费的确认值（阶段 2c-2）。
+         *
+         * <p>用于实现「取消优先」：取消发生时，若队列里已有一个<b>尚未被 {@link #awaitConfirm} 取走</b>
+         * 的 TRUE（用户刚点确认、后端还没来得及消费），直接投递 FALSE 会因容量已满而失败被丢弃，
+         * 导致阻塞中的写操作消费到旧的 TRUE、**照常执行**。先清空再投递可消除该窗口。
+         */
+        void clearConfirm() {
+            confirmQueue.clear();
+        }
+    }
+
+    private final Map<String, RunContext> runs = new ConcurrentHashMap<>();
+
+    /**
+     * 二次确认的等待超时（秒）：写语句确认与工具内确认共用（阶段 2c-0 引入，2c-1 提取为公共常量）。
+     */
+    public static final int CONFIRM_TIMEOUT_SECONDS = 300;
+
+    /**
+     * 阶段 2c-1：写类工具超时相对确认等待的缓冲（秒）。
+     *
+     * <p>工具执行被 {@code AiToolExecutor#execute} 的 {@code future.get(timeout)} 包裹，而工具内
+     * 「等用户确认」是阻塞行为——若工具超时 &lt; 确认等待，等待中的工具会在用户还没拍板时就被执行器
+     * 掐断。因此写类工具的执行超时必须 ≥ {@link #CONFIRM_TIMEOUT_SECONDS}，这里再加一点执行余量。
+     */
+    private static final int WRITE_TOOL_TIMEOUT_BUFFER_SECONDS = 30;
+
+    /**
+     * 把配置的写工具超时抬到「不短于确认等待 + 缓冲」。
+     *
+     * @param configured 配置项 {@code sys.llm.settings.toolWriteTimeoutSeconds} 的值
+     */
+    public static int writeToolTimeoutSeconds(int configured) {
+        return Math.max(configured, CONFIRM_TIMEOUT_SECONDS + WRITE_TOOL_TIMEOUT_BUFFER_SECONDS);
+    }
+
+    /** 创建一次运行的上下文 */
+    public RunContext create(String runId, Integer userId) {
+        RunContext context = new RunContext(userId);
+        runs.put(runId, context);
+        return context;
+    }
+
+    /** 取运行上下文；不存在返回 null */
+    public RunContext get(String runId) {
+        return runId == null ? null : runs.get(runId);
+    }
+
+    /** 结束运行并清理 */
+    public void remove(String runId) {
+        if (runId != null) {
+            runs.remove(runId);
+        }
+    }
+
+    /**
+     * 投递「确认 / 拒绝」结果。
+     *
+     * @return 是否成功投递（false：runId 不存在、用户不匹配、或已投递过）
+     */
+    public boolean submitConfirm(String runId, Integer userId, boolean approve) {
+        return submitConfirm(runId, userId, approve, null);
+    }
+
+    /**
+     * 阶段 4b：携带「用户手输名称」的确认投递（删除类破坏性操作的强化确认）。
+     *
+     * <p>名称在投递结果<b>之前</b>写入 {@link RunContext}，等待侧拿到结果后可比对——
+     * 顺序很重要：先写名称再投递，否则等待线程可能先被唤醒而读不到名称。
+     *
+     * @param confirmName 用户手输的目标名称；非强化确认场景传 {@code null}
+     */
+    public boolean submitConfirm(String runId, Integer userId, boolean approve, String confirmName) {
+        return submitConfirm(
+                runId, userId, approve ? AiConfirmDecision.APPROVE : AiConfirmDecision.REJECT, confirmName);
+    }
+
+    /**
+     * 三态确认投递（2026-10-29）：在"确认 / 拒绝"之外额外支持 {@link AiConfirmDecision#APPLY_ONLY}
+     * ——用户把 AI 的改写"接收进编辑区"，但<b>不落盘</b>。
+     *
+     * <p>名称同样在投递结果<b>之前</b>写入上下文，保证等待线程读到的是同一次确认的输入。
+     */
+    public boolean submitConfirm(String runId, Integer userId, AiConfirmDecision decision, String confirmName) {
+        RunContext context = get(runId);
+        if (context == null || !Objects.equals(context.getUserId(), userId)) {
+            return false;
+        }
+        context.setConfirmTypedName(confirmName);
+        boolean accepted = context.offer(decision == null ? AiConfirmDecision.REJECT : decision);
+        if (!accepted) {
+            log.debug("Duplicate confirm ignored, runId: {}", runId);
+        }
+        return accepted;
+    }
+
+    /**
+     * 请求取消运行。
+     *
+     * @return 是否成功置位（false：runId 不存在或用户不匹配）
+     */
+    public boolean cancel(String runId, Integer userId) {
+        RunContext context = get(runId);
+        if (context == null || !Objects.equals(context.getUserId(), userId)) {
+            return false;
+        }
+        context.cancelled = true;
+        // 若正卡在「等待确认」上，投递拒绝让其尽快退出（拒绝 = 不执行）。
+        // 阶段 2c-2 修复：必须先清空可能残留的确认值——队列容量为 1，若已有一个尚未被消费的 TRUE，
+        // 直接 offer(FALSE) 会失败被丢弃，阻塞中的写操作将消费到旧值而照常执行。
+        context.clearConfirm();
+        context.offer(AiConfirmDecision.REJECT);
+        return true;
+    }
+
+    /** 是否已被取消 */
+    public boolean isCancelled(RunContext context) {
+        return context != null && context.cancelled;
+    }
+}

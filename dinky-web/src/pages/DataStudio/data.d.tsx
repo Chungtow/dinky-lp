@@ -60,5 +60,7 @@ export enum DataStudioActionType {
   TASK_PREVIEW_RESULT = 'task-preview-result',
   TASK_RUN_DEBUG = 'task-run-debug',
   TASK_RUN_LOCATION = 'task-run-location',
-  TASK_TAB_CHANGE = 'task-tab-change'
+  TASK_TAB_CHANGE = 'task-tab-change',
+  /** AI Chat：把生成的 SQL 插入到当前编辑器光标处，params: { sql: string } */
+  TASK_INSERT_SQL = 'task-insert-sql'
 }

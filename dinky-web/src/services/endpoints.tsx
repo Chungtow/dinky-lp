@@ -111,8 +111,12 @@ export enum API_CONSTANTS {
   DATASOURCE_LIST_ENABLE_ALL = '/api/database/listEnabledAll',
   DATASOURCE_GET_COLUMNS_BY_TABLE = '/api/database/listColumns',
   DATASOURCE_GET_TABLE = '/api/database/getTable',
+  DATASOURCE_GET_TABLE_DETAIL = '/api/database/getTableDetail',
+  DATASOURCE_GET_TABLE_RELATIONS = '/api/database/getTableRelations',
+  DATASOURCE_HADOOP_CONFIG = '/api/database/hadoopConfig',
   DATASOURCE_GET_GEN_SQL = '/api/database/getSqlGeneration',
   DATASOURCE_QUERY_DATA = '/api/database/queryData',
+  DATASOURCE_EXEC_SQL = '/api/database/execSql',
 
   // ------------------------------------ document ------------------------------------
   DOCUMENT = '/api/document',
@@ -182,6 +186,51 @@ export enum API_CONSTANTS {
   SYSTEM_GET_ALL_CONFIG = '/api/sysConfig/getAll',
   SYSTEM_GET_ONE_TYPE_CONFIG = '/api/sysConfig/getConfigByType',
   SYSTEM_MODIFY_CONFIG = '/api/sysConfig/modifyConfig',
+
+  /** --------------------------------------------  ai chat  ------------------------------------------------------- */
+  AI_CHAT_CHAT = '/api/aiChat/chat',
+  AI_CHAT_CONFIG = '/api/aiChat/config',
+  AI_CHAT_WRITE_AUDIT = '/api/aiChat/write-audit',
+  AI_CHAT_CONFIRM = '/api/aiChat/confirm',
+  AI_CHAT_CANCEL = '/api/aiChat/cancel',
+  /** P1-A：{@code @topic/} 候选（名册版，零连接 Kafka） */
+  AI_CHAT_MENTION_TOPICS = '/api/aiChat/mentionTopics',
+
+  /** --------------------------------------------  知识库（@kb 接入 v1.0）  ------------------------------------------------------- */
+  /** 当前用户可见的知识库列表（{@code @kb/} 候选来源；只返回 code / name / description） */
+  KB_COLLECTIONS = '/api/kb/collections',
+  /** kb-service 连通性（只回布尔，不含地址与密钥） */
+  KB_HEALTH = '/api/kb/health',
+  /** 可见库 + 计数（左侧栏「知识库」tab 上半栏；计数来自 kb-service 实时聚合） */
+  KB_COLLECTION_STATS = '/api/kb/collections/stats',
+  /** 库内文档列表（真实地址 `{id}` / `{id}/content` 拼在其后；POST 同址 = 推送入库） */
+  KB_DOCUMENTS = '/api/kb/documents',
+  /** 可推送的库（只含当前用户有写权限的：属主 或 grant(write)） */
+  KB_COLLECTIONS_WRITABLE = '/api/kb/collections/writable',
+
+  /** 管理：我管理的库（属主库；超管为全部）。子路径 `/{id}/grants` 拼在其后 */
+  KB_ADMIN_COLLECTIONS = '/api/kb/admin/collections',
+  /** 管理：kb-service 有、Dinky 未纳管的库（超管） */
+  KB_ADMIN_ORPHANS = '/api/kb/admin/orphans',
+  /** 管理：纳管既有库（code 原样沿用 RAG 标识） */
+  KB_ADMIN_ADOPT = '/api/kb/admin/collections/adopt',
+  /** 管理：撤销授权，子路径 `/{grantId}` */
+  KB_ADMIN_GRANTS = '/api/kb/admin/grants',
+
+  /** --------------------------------------------  skill（阶段 4a）  ------------------------------------------------------- */
+  SKILL_LIST = '/api/skill/list',
+  SKILL_DETAIL = '/api/skill/detail',
+  SKILL_CREATE = '/api/skill/create',
+  SKILL_SAVE = '/api/skill/save',
+  SKILL_REMOVE = '/api/skill/remove',
+  // 2026-10-14 三档可见性：修改 skill/doc 可见性（private / tenant / public）
+  SKILL_VISIBILITY = '/api/skill/visibility',
+  SKILL_FILES = '/api/skill/files',
+  SKILL_FILE_READ = '/api/skill/file/read',
+  SKILL_FILE_WRITE = '/api/skill/file/write',
+  SKILL_FILE_MKDIR = '/api/skill/file/mkdir',
+  SKILL_FILE_RENAME = '/api/skill/file/rename',
+  SKILL_FILE_REMOVE = '/api/skill/file/remove',
 
   // ------------------------------------ system log ------------------------------------
   SYSTEM_ROOT_LOG = '/api/system/getRootLog',
@@ -305,5 +354,23 @@ export enum API_CONSTANTS {
   FLINK_CONF_CONFIG_OPTIONS = '/api/flinkConf/configOptions',
 
   // ------------------------------------ suggestion ------------------------------------
-  SUGGESTION_QUERY_ALL_SUGGESTIONS = '/api/suggestion/queryAllSuggestions'
+  SUGGESTION_QUERY_ALL_SUGGESTIONS = '/api/suggestion/queryAllSuggestions',
+
+  // ------------------------------- semantic (dbt on HDFS, P2) -------------------------------
+  SEMANTIC_PROJECTS = '/api/semantic/projects',
+  SEMANTIC_FILES = '/api/semantic/files',
+  SEMANTIC_FILE = '/api/semantic/file',
+  SEMANTIC_FILE_SAVE = '/api/semantic/file',
+  SEMANTIC_DIR_CREATE = '/api/semantic/dir',
+  SEMANTIC_RENAME = '/api/semantic/rename',
+  SEMANTIC_DELETE = '/api/semantic/delete',
+  // P3b：AI Chat 的 @semantic/ 候选（只读，读 _published 不可变快照）
+  SEMANTIC_PUBLISHED_PROJECTS = '/api/semantic/published/projects',
+  SEMANTIC_PUBLISHED_ASSETS = '/api/semantic/published/assets',
+  // P4 一期：语义资产反馈（口径错了有地方说、有人处理）
+  SEMANTIC_FEEDBACK = '/api/semantic/feedback',
+  SEMANTIC_FEEDBACK_LIST = '/api/semantic/feedback/list',
+  /** 处理反馈：真实地址是 `{SEMANTIC_FEEDBACK_RESOLVE}/{id}/resolve`（id 在路径里，故此处只存前缀） */
+  SEMANTIC_FEEDBACK_RESOLVE = '/api/semantic/feedback',
+  SEMANTIC_FEEDBACK_SUMMARY = '/api/semantic/feedback/summary'
 }

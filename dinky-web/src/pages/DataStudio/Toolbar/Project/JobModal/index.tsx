@@ -74,7 +74,8 @@ const JobModal: React.FC<JobModalProps> = (props) => {
     const newValues = {
       ...values,
       configJson: values.task?.configJson,
-      firstLevelOwner: values.task?.firstLevelOwner,
+      // 新建作业时 values.task 为空 → 责任人默认取当前登录用户；编辑态保留原值
+      firstLevelOwner: values.task?.firstLevelOwner ?? initialState?.currentUser?.user.id,
       secondLevelOwners: values.task?.secondLevelOwners
     };
     if (!modalVisible) {
@@ -82,7 +83,8 @@ const JobModal: React.FC<JobModalProps> = (props) => {
       form.setFieldsValue(newValues);
     }
     form.setFieldsValue(newValues);
-  }, [open, values, form]);
+    // initialState 参与依赖：登录用户变化（或首帧用户信息到位）时需要重算默认责任人
+  }, [open, values, form, initialState]);
 
   const queryUdfTemplate = () => {
     queryDataByParams<DefaultOptionType[]>(API_CONSTANTS.UDF_TEMPLATE_TREE).then((res) => {

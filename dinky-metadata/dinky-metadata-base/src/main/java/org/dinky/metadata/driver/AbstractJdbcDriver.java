@@ -28,9 +28,11 @@ import org.dinky.data.constant.CommonConstant;
 import org.dinky.data.enums.TableType;
 import org.dinky.data.exception.BusException;
 import org.dinky.data.model.Column;
+import org.dinky.data.model.ForeignKey;
 import org.dinky.data.model.QueryData;
 import org.dinky.data.model.Schema;
 import org.dinky.data.model.Table;
+import org.dinky.data.model.TableRelations;
 import org.dinky.data.result.SqlExplainResult;
 import org.dinky.metadata.config.AbstractJdbcConfig;
 import org.dinky.metadata.config.DriverConfig;
@@ -40,6 +42,7 @@ import org.dinky.utils.JsonUtils;
 import org.dinky.utils.LogUtil;
 
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -461,6 +464,81 @@ public abstract class AbstractJdbcDriver extends AbstractDriver<AbstractJdbcConf
         return columnList;
     }
 
+    /**
+     * 获取表的外键关系（ER 图数据源）。
+     *
+     * <p>基于 JDBC 标准 {@link DatabaseMetaData} 实现，跨数据库统一，无需编写方言 SQL：
+     * <ul>
+     *     <li>{@code getImportedKeys} -&gt; 上游（本表引用的外键，本表为子表）
+     *     <li>{@code getExportedKeys} -&gt; 下游（引用本表的外键，本表为父表）
+     * </ul>
+     *
+     * @param schemaName schema 名
+     * @param tableName  表名
+     * @return {@link TableRelations}
+     */
+    @Override
+    public TableRelations getTableRelations(String schemaName, String tableName) {
+        TableRelations relations = TableRelations.builder()
+                .schemaName(schemaName)
+                .tableName(tableName)
+                .build();
+        try {
+            Connection connection = conn.get();
+            DatabaseMetaData metaData = connection.getMetaData();
+            String catalog = connection.getCatalog();
+            relations.setForeignKeys(queryForeignKeys(metaData, catalog, schemaName, tableName, false));
+            relations.setReferencedBy(queryForeignKeys(metaData, catalog, schemaName, tableName, true));
+        } catch (Exception e) {
+            log.error("GetTableRelations error, schema={}, table={}", schemaName, tableName, e);
+            throw new BusException("获取表外键关系失败: " + e.getMessage());
+        }
+        return relations;
+    }
+
+    /**
+     * 查询并按外键约束名聚合外键（复合外键：同一约束的多列按驱动返回的 KEY_SEQ 顺序聚合）。
+     *
+     * @param metaData   JDBC 元数据
+     * @param catalog    连接 catalog
+     * @param schemaName schema 名
+     * @param tableName  表名
+     * @param exported   false=上游（getImportedKeys）；true=下游（getExportedKeys）
+     * @return 外键列表
+     */
+    private List<ForeignKey> queryForeignKeys(
+            DatabaseMetaData metaData, String catalog, String schemaName, String tableName, boolean exported)
+            throws SQLException {
+        Map<String, ForeignKey> grouped = new LinkedHashMap<>();
+        try (ResultSet rs = exported
+                ? metaData.getExportedKeys(catalog, schemaName, tableName)
+                : metaData.getImportedKeys(catalog, schemaName, tableName)) {
+            while (rs != null && rs.next()) {
+                String fkName = rs.getString("FK_NAME");
+                String childTable = rs.getString("FKTABLE_NAME");
+                String childColumn = rs.getString("FKCOLUMN_NAME");
+                String childSchema = rs.getString("FKTABLE_SCHEM");
+                String parentTable = rs.getString("PKTABLE_NAME");
+                String parentColumn = rs.getString("PKCOLUMN_NAME");
+                String parentSchema = rs.getString("PKTABLE_SCHEM");
+                // 部分数据源 FK_NAME 为空，退化为「子表->父表」作为聚合键
+                String groupKey = Asserts.isNotNullString(fkName) ? fkName : childTable + "->" + parentTable;
+                ForeignKey foreignKey = grouped.computeIfAbsent(groupKey, k -> ForeignKey.builder()
+                        .name(fkName)
+                        .schemaName(Asserts.isNullString(childSchema) ? schemaName : childSchema)
+                        .tableName(childTable)
+                        .columns(new ArrayList<>())
+                        .refSchemaName(Asserts.isNullString(parentSchema) ? schemaName : parentSchema)
+                        .refTableName(parentTable)
+                        .refColumns(new ArrayList<>())
+                        .build());
+                foreignKey.getColumns().add(childColumn);
+                foreignKey.getRefColumns().add(parentColumn);
+            }
+        }
+        return new ArrayList<>(grouped.values());
+    }
+
     @Override
     public boolean createTable(Table table) throws Exception {
         String sql = getCreateTableSql(table).replaceAll("\r\n", " ");
@@ -567,7 +645,12 @@ public abstract class AbstractJdbcDriver extends AbstractDriver<AbstractJdbcConf
         try (Statement statement = conn.get().createStatement()) {
             // logger.info("执行sql的连接id：" + ((DruidPooledConnection)
             // conn).getTransactionInfo().getId());
-            statement.execute(sql);
+            RunningSqlRegistry.bindStatement(statement, sql);
+            try {
+                statement.execute(sql);
+            } finally {
+                RunningSqlRegistry.unbindStatement();
+            }
         }
         return true;
     }
@@ -577,7 +660,12 @@ public abstract class AbstractJdbcDriver extends AbstractDriver<AbstractJdbcConf
         Asserts.checkNullString(sql, "Sql 语句为空");
         int res = 0;
         try (Statement statement = conn.get().createStatement()) {
-            res = statement.executeUpdate(sql);
+            RunningSqlRegistry.bindStatement(statement, sql);
+            try {
+                res = statement.executeUpdate(sql);
+            } finally {
+                RunningSqlRegistry.unbindStatement();
+            }
         }
         return res;
     }
@@ -626,6 +714,7 @@ public abstract class AbstractJdbcDriver extends AbstractDriver<AbstractJdbcConf
         int count = 0;
         try {
             preparedStatement = conn.get().prepareStatement(sql);
+            RunningSqlRegistry.bindStatement(preparedStatement, sql);
             results = preparedStatement.executeQuery();
             if (Asserts.isNull(results)) {
                 result.setSuccess(true);
@@ -667,6 +756,7 @@ public abstract class AbstractJdbcDriver extends AbstractDriver<AbstractJdbcConf
             result.error(LogUtil.getError(e));
             log.error("Query failed", e);
         } finally {
+            RunningSqlRegistry.unbindStatement();
             close(preparedStatement, results);
         }
         result.setRowData(datas);
@@ -679,6 +769,15 @@ public abstract class AbstractJdbcDriver extends AbstractDriver<AbstractJdbcConf
      */
     @Override
     public JdbcSelectResult executeSql(String sql, Integer limit) {
+        RunningSqlRegistry.begin(conn.get(), config == null ? null : config.getName());
+        try {
+            return doExecuteSql(sql, limit);
+        } finally {
+            RunningSqlRegistry.end();
+        }
+    }
+
+    private JdbcSelectResult doExecuteSql(String sql, Integer limit) {
         // TODO 改为ProcessStep注释
         log.info("Start parse sql...");
         List<SQLStatement> stmtList;
@@ -697,6 +796,12 @@ public abstract class AbstractJdbcDriver extends AbstractDriver<AbstractJdbcConf
         log.info("Start execute sql...");
         for (SQLStatement item : stmtList) {
             item.setAfterSemi(false);
+            if (RunningSqlRegistry.isCancelRequested()) {
+                // 已收到取消请求：不再执行剩余语句，直接返回（由上层映射为 CANCEL 状态）
+                log.warn("Cancel requested, skip the remaining statements.");
+                result.error("SQL execution canceled by user");
+                return result;
+            }
             String type = item.getClass().getSimpleName();
             if (type.toUpperCase().contains("SELECT")
                     || type.toUpperCase().contains("SHOW")

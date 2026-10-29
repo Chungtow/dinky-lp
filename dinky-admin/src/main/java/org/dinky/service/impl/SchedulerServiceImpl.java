@@ -19,15 +19,19 @@
 
 package org.dinky.service.impl;
 
+import org.dinky.config.Dialect;
+import org.dinky.context.TenantContextHolder;
 import org.dinky.data.enums.Status;
 import org.dinky.data.exception.BusException;
 import org.dinky.data.model.Catalogue;
 import org.dinky.data.model.SystemConfiguration;
 import org.dinky.data.model.Task;
 import org.dinky.data.model.ext.TaskExtConfig;
+import org.dinky.data.model.rbac.Tenant;
 import org.dinky.init.SystemInit;
 import org.dinky.mapper.TaskMapper;
 import org.dinky.scheduler.client.ProcessClient;
+import org.dinky.scheduler.client.ResourceClient;
 import org.dinky.scheduler.client.TaskClient;
 import org.dinky.scheduler.enums.ReleaseState;
 import org.dinky.scheduler.exception.SchedulerException;
@@ -39,26 +43,37 @@ import org.dinky.scheduler.model.ProcessDefinition;
 import org.dinky.scheduler.model.ProcessTaskRelation;
 import org.dinky.scheduler.model.Project;
 import org.dinky.scheduler.model.Property;
+import org.dinky.scheduler.model.ShellTaskParams;
 import org.dinky.scheduler.model.TaskDefinition;
 import org.dinky.scheduler.model.TaskGroup;
 import org.dinky.scheduler.model.TaskMainInfo;
 import org.dinky.scheduler.model.TaskRequest;
 import org.dinky.service.SchedulerService;
+import org.dinky.service.TenantService;
 import org.dinky.service.catalogue.CatalogueService;
 import org.dinky.utils.JsonUtils;
 
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.google.common.base.Strings;
 
 import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.RandomUtil;
+import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import lombok.RequiredArgsConstructor;
@@ -70,10 +85,18 @@ import lombok.extern.slf4j.Slf4j;
 public class SchedulerServiceImpl implements SchedulerService {
 
     public static final String TASK_TYPE = "DINKY";
+    public static final String SHELL_TASK_TYPE = "SHELL";
+
+    /** DS 服务端 checkDescriptionLength 上限 255，这里留 15 字符余量 */
+    private static final int PROCESS_DESCRIPTION_MAX_LENGTH = 240;
+
     private final ProcessClient processClient;
+    private final ResourceClient resourceClient;
     private final TaskClient taskClient;
     private final CatalogueService catalogueService;
     private final TaskMapper taskMapper;
+    /** 用于把 Dinky 租户编码作为 DS 工作流的命名前缀，实现多租户发布隔离 */
+    private final TenantService tenantService;
 
     /**
      * Pushes the specified DinkyTaskRequest to the task queue.
@@ -91,6 +114,13 @@ public class SchedulerServiceImpl implements SchedulerService {
             throw new BusException(Status.DS_GET_NODE_LIST_ERROR);
         }
 
+        // DataX tasks are pushed as native DS SHELL tasks (executed on DS workers
+        // via the resource center), instead of DINKY callback tasks.
+        Task task = taskMapper.selectById(Integer.valueOf(dinkyTaskRequest.getTaskId()));
+        if (task != null && Dialect.DATAX.name().equalsIgnoreCase(task.getDialect())) {
+            return pushDataXTask(catalogue, task, dinkyTaskRequest);
+        }
+
         DinkyTaskParams dinkyTaskParams = new DinkyTaskParams();
         dinkyTaskParams.setTaskId(dinkyTaskRequest.getTaskId());
         dinkyTaskParams.setAddress(
@@ -100,8 +130,25 @@ public class SchedulerServiceImpl implements SchedulerService {
         // (e.g. pt=$[yyyyMMdd-1], tag=${system.biz.curdate})
         injectTaskLocalParams(dinkyTaskRequest.getTaskId(), dinkyTaskParams);
 
-        dinkyTaskRequest.setTaskParams(JsonUtils.toJsonString(dinkyTaskParams));
-        dinkyTaskRequest.setTaskType(TASK_TYPE);
+        return pushTaskToDs(catalogue, dinkyTaskRequest, TASK_TYPE, JsonUtils.toJsonString(dinkyTaskParams));
+    }
+
+    /**
+     * Push a DataX task to DolphinScheduler as a native SHELL task.
+     */
+    private boolean pushDataXTask(Catalogue catalogue, Task task, DinkyTaskRequest dinkyTaskRequest) {
+        ShellTaskParams shellTaskParams = prepareDataXShellParams(catalogue, task);
+        return pushTaskToDs(catalogue, dinkyTaskRequest, SHELL_TASK_TYPE, JsonUtils.toJsonString(shellTaskParams));
+    }
+
+    /**
+     * Push the given Dinky task to DolphinScheduler with the given task type and params.
+     */
+    private boolean pushTaskToDs(
+            Catalogue catalogue, DinkyTaskRequest dinkyTaskRequest, String taskType, String taskParamsJson) {
+        dinkyTaskRequest.setTaskParams(taskParamsJson);
+        dinkyTaskRequest.setTaskType(taskType);
+        dinkyTaskRequest.setProcessDescription(buildProcessDescription(catalogue));
 
         String processName = getDinkyNames(catalogue, 0);
         long projectCode = SystemInit.getProject().getCode();
@@ -143,6 +190,7 @@ public class SchedulerServiceImpl implements SchedulerService {
                     projectCode,
                     null,
                     processName,
+                    dinkyTaskRequest.getProcessDescription(),
                     taskCode,
                     taskRelationArray.toString(),
                     taskArray.toString(),
@@ -156,7 +204,7 @@ public class SchedulerServiceImpl implements SchedulerService {
             log.error(Status.DS_WORK_FLOW_DEFINITION_ONLINE.getMessage(), processName);
         }
 
-        TaskMainInfo taskMainInfo = taskClient.getTaskMainInfo(projectCode, processName, taskName, TASK_TYPE);
+        TaskMainInfo taskMainInfo = taskClient.getTaskMainInfo(projectCode, processName, taskName, taskType);
         // If task name exist, update task definition.
         if (taskMainInfo != null) {
             log.warn(Status.DS_WORK_FLOW_DEFINITION_TASK_NAME_EXIST.getMessage(), processName, taskName);
@@ -176,13 +224,262 @@ public class SchedulerServiceImpl implements SchedulerService {
         taskClient.createTaskDefinition(
                 projectCode, process.getCode(), dinkyTaskRequest.getUpstreamCodes(), taskDefinitionJsonObj);
         // update the location of process
-        updateProcessDefinition(process, taskCode, taskRequest, projectCode);
+        updateProcessDefinition(
+                process,
+                taskCode,
+                taskRequest,
+                dinkyTaskRequest.getUpstreamCodes(),
+                projectCode,
+                dinkyTaskRequest.getProcessDescription());
 
         log.info(Status.DS_ADD_TASK_DEFINITION_SUCCESS.getMessage());
         return true;
     }
 
-    private void updateProcessDefinition(ProcessDefinition process, Long taskCode, TaskRequest task, long projectCode) {
+    /**
+     * Prepare the DS SHELL task params for a DataX task: generate the wrapper script,
+     * upload the json + script to the DS resource center, and build the resource list.
+     */
+    private ShellTaskParams prepareDataXShellParams(Catalogue catalogue, Task task) {
+        String taskName = catalogue.getName();
+        String dataxJson = task.getStatement();
+        if (dataxJson == null || dataxJson.trim().isEmpty()) {
+            log.error("DataX task statement (datax json) is empty: {}", taskName);
+            throw new BusException("DataX task statement (datax json) is empty");
+        }
+
+        String jsonFileName = taskName + ".json";
+        String pyFileName = "run_" + taskName + ".py";
+
+        // 从 json 提取参数名（按出现顺序去重），从 taskParams 匹配参数值
+        List<String> paramNames = extractParamNames(dataxJson);
+        Map<String, String> paramValues = buildParamValueMap(task);
+        // 资源目录路径（远→近，与工作流名一致）
+        String dirPath = getDinkyNames(catalogue, 0);
+
+        File jsonFile = null;
+        File pyFile = null;
+        try {
+            jsonFile = writeTempFile(jsonFileName, dataxJson);
+            pyFile = writeTempFile(pyFileName, buildDataXRunScript(taskName, jsonFileName, paramNames));
+
+            Integer jsonResourceId = uploadDataXResource(dirPath, jsonFileName, jsonFile);
+            Integer pyResourceId = uploadDataXResource(dirPath, pyFileName, pyFile);
+
+            ShellTaskParams params = new ShellTaskParams();
+            params.setRawScript(buildRawScript(dirPath, pyFileName, paramNames));
+            params.setLocalParams(buildDataXLocalParams(paramNames, paramValues));
+            params.setResourceList(Arrays.asList(
+                    buildResourceInfo(jsonResourceId, dirPath, jsonFileName),
+                    buildResourceInfo(pyResourceId, dirPath, pyFileName)));
+            return params;
+        } finally {
+            if (jsonFile != null && jsonFile.exists()) {
+                jsonFile.delete();
+            }
+            if (pyFile != null && pyFile.exists()) {
+                pyFile.delete();
+            }
+        }
+    }
+
+    /**
+     * Build the DataX wrapper python script (relative-path edition).
+     */
+    private String buildDataXRunScript(String taskName, String jsonFileName, List<String> paramNames) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("#!/usr/bin/env python3\n");
+        sb.append("\"\"\"DataX runtime wrapper generated by Dinky (task: ")
+                .append(taskName)
+                .append(")\"\"\"\n");
+        sb.append("import os, sys, json, subprocess, time\n\n");
+        sb.append("CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))\n");
+        sb.append("JSON_FILE = \"").append(jsonFileName).append("\"\n");
+        sb.append("PARAM_NAMES = ")
+                .append(paramNames.stream().map(n -> "\"" + n + "\"").collect(Collectors.joining(", ", "[", "]")))
+                .append("\n\n");
+        sb.append("def main():\n");
+        sb.append("    if len(sys.argv) < len(PARAM_NAMES) + 1:\n");
+        sb.append("        print('Error: missing params, expect ' + str(len(PARAM_NAMES)), file=sys.stderr)\n");
+        sb.append("        sys.exit(1)\n");
+        sb.append("    params = dict(zip(PARAM_NAMES, sys.argv[1:]))\n");
+        sb.append("    template_file = os.path.join(CONFIG_DIR, JSON_FILE)\n");
+        sb.append("    with open(template_file, 'r') as f:\n");
+        sb.append("        text = f.read()\n");
+        sb.append("    for name, value in params.items():\n");
+        sb.append("        text = text.replace('${' + name + '}', value)\n");
+        sb.append("    config = json.loads(text)\n");
+        sb.append("    content = config['job']['content'][0]\n");
+        // 仅正向（MySQL→Hive）需要预建 HDFS 分区目录：
+        // DataX 的 HdfsWriter$Job.prepare 要求 writer path 事先存在且不会自建（否则 HdfsWriter-02）；
+        // 反向（Hive/Spark→MySQL）的 writer 是 mysqlwriter，**没有 path 字段**（path 在 reader 上），
+        // 也无需建目录；若不判断而直接取 writer.parameter['path']，会抛 KeyError 导致作业失败。
+        sb.append("    writer_name = content['writer']['name']\n");
+        sb.append("    if writer_name == 'hdfswriter':\n");
+        sb.append("        writer_params = content['writer']['parameter']\n");
+        sb.append("        hdfs_path = writer_params['path']\n");
+        sb.append("        last_seg = hdfs_path.rstrip('/').rsplit('/', 1)[-1]\n");
+        sb.append("        table_dir = hdfs_path.rsplit('/', 1)[0] if '=' in last_seg else hdfs_path\n");
+        sb.append("        hadoop_home = os.environ.get('HADOOP_HOME', '/opt/bigdata/hadoop/latest')\n");
+        sb.append("        hdfs = os.path.join(hadoop_home, 'bin', 'hdfs')\n");
+        sb.append("        subprocess.run([hdfs, 'dfs', '-mkdir', '-p', table_dir], check=True)\n");
+        sb.append(
+                "        subprocess.run([hdfs, 'dfs', '-chown', 'hadoop-user:hadoop-user', table_dir], check=True)\n");
+        sb.append("        subprocess.run([hdfs, 'dfs', '-mkdir', '-p', hdfs_path], check=True)\n");
+        sb.append(
+                "        subprocess.run([hdfs, 'dfs', '-chown', 'hadoop-user:hadoop-user', hdfs_path], check=True)\n");
+        sb.append("    temp_file = '/tmp/datax_' + str(int(time.time())) + '.json'\n");
+        sb.append("    with open(temp_file, 'w') as f:\n");
+        sb.append("        json.dump(config, f, indent=2)\n");
+        sb.append("    datax_home = os.environ.get('DATAX_HOME', '/opt/bigdata/dolphinscheduler/datax')\n");
+        sb.append("    datax_py = os.path.join(datax_home, 'bin', 'datax.py')\n");
+        sb.append("    result = subprocess.run(['python3', datax_py, temp_file])\n");
+        sb.append("    sys.exit(result.returncode)\n\n");
+        sb.append("if __name__ == '__main__':\n");
+        sb.append("    main()\n");
+        return sb.toString();
+    }
+
+    /**
+     * Write the given content to a temporary file (used only for uploading to DS).
+     */
+    private File writeTempFile(String fileName, String content) {
+        try {
+            // 直接以目标文件名创建临时文件，不能用 File.createTempFile：
+            // 后者会生成「dinky-datax-<随机数>-<fileName>」这种名字，hutool 上传时 multipart 的
+            // filename 取 file.getName()，导致 DS 的 t_ds_resources.file_name (varchar 64) 超长，
+            // 触发 "Data too long"，并被 DS 的 catch(Exception) 误包装成 "resource already exists"。
+            File file = new File(System.getProperty("java.io.tmpdir"), fileName);
+            try (FileWriter writer = new FileWriter(file)) {
+                writer.write(content);
+                writer.flush();
+            }
+            return file;
+        } catch (IOException e) {
+            log.error("Failed to write DataX temp file {}", fileName, e);
+            throw new SchedulerException("Failed to write DataX temp file " + fileName);
+        }
+    }
+
+    /**
+     * Build a DS {@code resourceList} entry for an uploaded resource.
+     */
+    private ShellTaskParams.ResourceInfo buildResourceInfo(Integer id, String dirPath, String fileName) {
+        ShellTaskParams.ResourceInfo info = new ShellTaskParams.ResourceInfo();
+        info.setId(id);
+        String fullName = dirPath == null || dirPath.isEmpty() ? "/" + fileName : "/" + dirPath + "/" + fileName;
+        info.setResourceName(fullName);
+        info.setRes(fileName);
+        return info;
+    }
+
+    /**
+     * Extract {@code ${param}} placeholder names from the datax json (dedup, keep order).
+     */
+    private List<String> extractParamNames(String json) {
+        List<String> names = new ArrayList<>();
+        Matcher m = Pattern.compile("\\$\\{(\\w+)\\}").matcher(json);
+        while (m.find()) {
+            String name = m.group(1);
+            if (!names.contains(name)) {
+                names.add(name);
+            }
+        }
+        return names;
+    }
+
+    /**
+     * Build a prop→value map from the task's {@code config_json.taskParams}.
+     */
+    private Map<String, String> buildParamValueMap(Task task) {
+        Map<String, String> map = new HashMap<>();
+        if (task.getConfigJson() == null || task.getConfigJson().getTaskParams() == null) {
+            return map;
+        }
+        for (TaskExtConfig.TaskParam p : task.getConfigJson().getTaskParams()) {
+            map.put(p.getProp(), p.getValue());
+        }
+        return map;
+    }
+
+    /**
+     * Build DS localParams from the extracted param names and user-configured values.
+     */
+    private List<Property> buildDataXLocalParams(List<String> paramNames, Map<String, String> paramValues) {
+        List<Property> localParams = new ArrayList<>();
+        for (String name : paramNames) {
+            Property property = new Property();
+            property.setProp(name);
+            property.setValue(paramValues.getOrDefault(name, ""));
+            property.setDirect(org.dinky.scheduler.enums.Direct.IN);
+            property.setType(org.dinky.scheduler.enums.DataType.VARCHAR);
+            localParams.add(property);
+        }
+        return localParams;
+    }
+
+    /**
+     * Build the rawScript: {@code python3 run_<task>.py ${param1} ${param2} ...}.
+     */
+    private String buildRawScript(String dirPath, String pyFileName, List<String> paramNames) {
+        String pyPath = dirPath == null || dirPath.isEmpty() ? pyFileName : dirPath + "/" + pyFileName;
+        StringBuilder sb = new StringBuilder("python3 ").append(pyPath);
+        for (String name : paramNames) {
+            sb.append(" ${").append(name).append("}");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Ensure the directory path exists (idempotent), then upload the file into that directory.
+     *
+     * <p>覆盖策略：文件已存在时走 DS updateResource（原地覆盖 HDFS + 元数据），而非「删除再上传」，
+     * 因为后者在资源被已发布流程定义引用时会被 DS 以 {@code RESOURCE_IS_USED} 拒绝。</p>
+     */
+    private Integer uploadDataXResource(String dirPath, String fileName, File file) {
+        int pid = ensureDirectoryPath(dirPath);
+        String currentDir = dirPath == null || dirPath.isEmpty() ? "/" : "/" + dirPath;
+        String fullName = "/".equals(currentDir) ? "/" + fileName : currentDir + "/" + fileName;
+        Integer existingId = resourceClient.queryResourceId(fullName);
+        if (existingId != null) {
+            // 文件已存在 → 原地覆盖（避免 delete 时被「资源被引用」拒绝）
+            return resourceClient.updateFile(existingId, fileName, file, currentDir);
+        }
+        return resourceClient.uploadFile(fileName, file, pid, currentDir);
+    }
+
+    /**
+     * Ensure the directory path exists (create level by level, idempotent), return the leaf directory id.
+     */
+    private int ensureDirectoryPath(String dirPath) {
+        int pid = -1;
+        if (dirPath == null || dirPath.isEmpty()) {
+            return pid;
+        }
+        String currentDir = "/";
+        for (String part : dirPath.split("/")) {
+            if (part.isEmpty()) {
+                continue;
+            }
+            String fullName = "/".equals(currentDir) ? "/" + part : currentDir + "/" + part;
+            Integer existingId = resourceClient.queryResourceId(fullName);
+            if (existingId != null) {
+                pid = existingId;
+            } else {
+                pid = resourceClient.createDirectory(part, pid, currentDir);
+            }
+            currentDir = fullName;
+        }
+        return pid;
+    }
+
+    private void updateProcessDefinition(
+            ProcessDefinition process,
+            Long taskCode,
+            TaskRequest task,
+            List<String> upstreamCodes,
+            long projectCode,
+            String description) {
 
         DagData dagData = processClient.getProcessDefinitionInfo(projectCode, process.getCode());
         if (dagData == null) {
@@ -226,12 +523,39 @@ public class SchedulerServiceImpl implements SchedulerService {
 
         taskArray.addAll(taskDefinitionList);
         taskArray.add(task);
+
+        // 重建当前任务（taskCode）的上游关系：每个上游生成一条关系，支持多上游。
+        // 否则 updateTaskWithUpstream / save-single 刚设置的多上游会被这里的旧关系覆盖，
+        // 导致多选的前置任务全部变成第一个。
+        List<ProcessTaskRelation> rebuiltRelations = new ArrayList<>();
+        for (ProcessTaskRelation relation : processTaskRelationList) {
+            if (relation.getPostTaskCode() != taskCode) {
+                rebuiltRelations.add(relation);
+            }
+        }
+        if (CollUtil.isNotEmpty(upstreamCodes)) {
+            for (String upstreamCode : upstreamCodes) {
+                long upstreamCodeVal = Long.parseLong(upstreamCode);
+                ProcessTaskRelation newRelation = ProcessTaskRelation.generateProcessTaskRelation(taskCode);
+                newRelation.setPreTaskCode(upstreamCodeVal);
+                taskDefinitionList.stream()
+                        .filter(td -> td.getCode() == upstreamCodeVal)
+                        .findFirst()
+                        .ifPresent(td -> newRelation.setPreTaskVersion(td.getVersion()));
+                rebuiltRelations.add(newRelation);
+            }
+        } else {
+            rebuiltRelations.add(ProcessTaskRelation.generateProcessTaskRelation(taskCode));
+        }
+        processTaskRelationList = rebuiltRelations;
+
         String processTaskRelationListJson = JsonUtils.toJsonString(processTaskRelationList);
 
         processClient.createOrUpdateProcessDefinition(
                 projectCode,
                 process.getCode(),
                 process.getName(),
+                description,
                 taskCode,
                 processTaskRelationListJson,
                 taskArray.toString(),
@@ -256,6 +580,12 @@ public class SchedulerServiceImpl implements SchedulerService {
         if (taskDefinition == null) {
             log.error(Status.DS_TASK_NOT_EXIST.getMessage());
             throw new BusException(Status.DS_TASK_NOT_EXIST);
+        }
+
+        // DataX tasks are pushed as DS SHELL tasks: re-prepare and update as SHELL.
+        Task task = taskMapper.selectById(Integer.valueOf(dinkyTaskRequest.getTaskId()));
+        if (task != null && Dialect.DATAX.name().equalsIgnoreCase(task.getDialect())) {
+            return pushUpdateDataXTask(projectCode, processCode, taskCode, taskDefinition, task, dinkyTaskRequest);
         }
 
         if (!TASK_TYPE.equals(taskDefinition.getTaskType())) {
@@ -289,6 +619,8 @@ public class SchedulerServiceImpl implements SchedulerService {
         injectTaskLocalParams(dinkyTaskRequest.getTaskId(), existingParams);
         dinkyTaskRequest.setTaskParams(JsonUtils.toJsonString(existingParams));
         BeanUtil.copyProperties(dinkyTaskRequest, taskRequest);
+        // 回填既有任务的 taskCode，避免 updateProcessDefinition 时任务关系与任务定义 code 对不上
+        taskRequest.setCode(taskCode);
         taskRequest.setTimeoutFlag(dinkyTaskRequest.getTimeoutFlag());
         taskRequest.setFlag(dinkyTaskRequest.getFlag());
         taskRequest.setIsCache(dinkyTaskRequest.getIsCache());
@@ -297,7 +629,81 @@ public class SchedulerServiceImpl implements SchedulerService {
         Long updatedTaskDefinition = taskClient.updateTaskDefinition(
                 projectCode, taskCode, dinkyTaskRequest.getUpstreamCodes(), taskDefinitionJsonObj);
 
-        updateProcessDefinition(process, taskCode, taskRequest, projectCode);
+        updateProcessDefinition(
+                process,
+                taskCode,
+                taskRequest,
+                dinkyTaskRequest.getUpstreamCodes(),
+                projectCode,
+                resolveProcessDescription(dinkyTaskRequest));
+        if (updatedTaskDefinition != null && updatedTaskDefinition > 0) {
+            log.info(Status.MODIFY_SUCCESS.getMessage());
+            return true;
+        }
+        log.error(Status.MODIFY_FAILED.getMessage());
+        return false;
+    }
+
+    /**
+     * Update a DataX task in DolphinScheduler (re-prepare SHELL params and re-upload resources).
+     */
+    private boolean pushUpdateDataXTask(
+            long projectCode,
+            long processCode,
+            long taskCode,
+            TaskDefinition taskDefinition,
+            Task task,
+            DinkyTaskRequest dinkyTaskRequest) {
+        if (!SHELL_TASK_TYPE.equals(taskDefinition.getTaskType())) {
+            log.error(Status.DS_TASK_TYPE_NOT_SUPPORT.getMessage(), taskDefinition.getTaskType());
+            throw new BusException(Status.DS_TASK_TYPE_NOT_SUPPORT, taskDefinition.getTaskType());
+        }
+
+        Catalogue catalogue = catalogueService.getOne(
+                new LambdaQueryWrapper<Catalogue>().eq(Catalogue::getTaskId, dinkyTaskRequest.getTaskId()));
+        if (catalogue == null) {
+            log.error(Status.DS_GET_NODE_LIST_ERROR.getMessage());
+            throw new BusException(Status.DS_GET_NODE_LIST_ERROR);
+        }
+
+        DagData dagData = processClient.getProcessDefinitionInfo(projectCode, processCode);
+        if (dagData == null) {
+            throw new BusException(Status.DS_WORK_FLOW_DEFINITION_NOT_EXIST);
+        }
+        ProcessDefinition process = dagData.getProcessDefinition();
+        if (process == null) {
+            throw new BusException(Status.DS_WORK_FLOW_DEFINITION_NOT_EXIST);
+        }
+        if (process.getReleaseState() == ReleaseState.ONLINE) {
+            log.error(Status.DS_WORK_FLOW_DEFINITION_ONLINE.getMessage(), process.getName());
+            throw new BusException(Status.DS_WORK_FLOW_DEFINITION_ONLINE, process.getName());
+        }
+
+        ShellTaskParams shellTaskParams = prepareDataXShellParams(catalogue, task);
+
+        TaskRequest taskRequest = new TaskRequest();
+        dinkyTaskRequest.setName(taskDefinition.getName());
+        dinkyTaskRequest.setTaskType(SHELL_TASK_TYPE);
+        dinkyTaskRequest.setTaskParams(JsonUtils.toJsonString(shellTaskParams));
+        BeanUtil.copyProperties(dinkyTaskRequest, taskRequest);
+        // 关键：把既有任务的 taskCode 回填到任务定义，否则 updateProcessDefinition 时
+        // taskRelationJson 里的 postTaskCode 与 taskDefinitionJson 里的 code 对不上，
+        // DS 会报 "task definition [xxx] does not exist"。
+        taskRequest.setCode(taskCode);
+        taskRequest.setTimeoutFlag(dinkyTaskRequest.getTimeoutFlag());
+        taskRequest.setFlag(dinkyTaskRequest.getFlag());
+        taskRequest.setIsCache(dinkyTaskRequest.getIsCache());
+
+        String taskDefinitionJsonObj = JsonUtils.toJsonString(taskRequest);
+        Long updatedTaskDefinition = taskClient.updateTaskDefinition(
+                projectCode, taskCode, dinkyTaskRequest.getUpstreamCodes(), taskDefinitionJsonObj);
+        updateProcessDefinition(
+                process,
+                taskCode,
+                taskRequest,
+                dinkyTaskRequest.getUpstreamCodes(),
+                projectCode,
+                buildProcessDescription(catalogue));
         if (updatedTaskDefinition != null && updatedTaskDefinition > 0) {
             log.info(Status.MODIFY_SUCCESS.getMessage());
             return true;
@@ -324,6 +730,18 @@ public class SchedulerServiceImpl implements SchedulerService {
         List<TaskMainInfo> taskMainInfos = taskClient.getTaskMainInfos(projectCode, "", "", "");
         // 去掉本身
         taskMainInfos.removeIf(taskMainInfo -> (catalogue.getName()).equalsIgnoreCase(taskMainInfo.getTaskName()));
+        // 候选前置任务按「修改时间倒序」排序（时间相同或缺失时按任务名升序）：
+        // 直接沿用 DS 返回顺序毫无规律，任务一多就只能靠肉眼找。
+        taskMainInfos.sort((a, b) -> {
+            long ta = a.getTaskUpdateTime() != null
+                    ? a.getTaskUpdateTime().getTime()
+                    : (a.getTaskCreateTime() != null ? a.getTaskCreateTime().getTime() : 0L);
+            long tb = b.getTaskUpdateTime() != null
+                    ? b.getTaskUpdateTime().getTime()
+                    : (b.getTaskCreateTime() != null ? b.getTaskCreateTime().getTime() : 0L);
+            int cmp = Long.compare(tb, ta);
+            return cmp != 0 ? cmp : String.valueOf(a.getTaskName()).compareTo(String.valueOf(b.getTaskName()));
+        });
         return taskMainInfos;
     }
 
@@ -383,23 +801,166 @@ public class SchedulerServiceImpl implements SchedulerService {
      * @param  i            the index to start retrieving the names from
      * @return              the dinky names retrieved from the catalogue
      */
+    /** DS 工作流名最大长度（DS 字段 varchar(255)，留余量） */
+    private static final int PROCESS_NAME_MAX_LENGTH = 200;
+
+    /** 目录遍历层数上限，仅用于防止脏数据 parent 成环导致死循环，不参与业务截断 */
+    private static final int CATALOGUE_MAX_DEPTH = 20;
+
     private String getDinkyNames(Catalogue catalogue, int i) {
-        if (i == 3 || catalogue.getParentId().equals(0)) {
-            return "";
+        // 前置租户编码：不同 Dinky 租户的同名目录/同名作业在 DS 上落到不同工作流，避免合流与静默覆盖。
+        // 前缀取 catalogue 自身 tenantId 反查，不依赖 TenantContextHolder（回调线程可能无租户上下文）。
+        String prefix = resolveTenantPrefix(catalogue.getTenantId());
+        // 前缀与分隔符占用的预算，剩余部分才是目录路径可用的字符数
+        int budget = PROCESS_NAME_MAX_LENGTH - prefix.length() - 1;
+        // 收集从任务向上的父目录名（近→远），反转得到远→近的工作流名
+        List<String> names = new ArrayList<>();
+        Catalogue current = catalogue;
+        int depth = 0;
+        // dinky_catalogue 参与 MyBatis 租户过滤；推送可能发生在无租户上下文的线程（DS 回调、后台任务），
+        // 此时父目录查询返回 null 并提前 break，路径会被截断成空串。这里临时忽略租户过滤，结束后恢复原状态。
+        boolean origin = TenantContextHolder.isIgnoreTenant();
+        try {
+            TenantContextHolder.ignoreTenant();
+            while (depth < CATALOGUE_MAX_DEPTH
+                    && current != null
+                    && !current.getParentId().equals(0)) {
+                current = catalogueService.getById(current.getParentId());
+                if (current == null) {
+                    break;
+                }
+                names.add(current.getName());
+                depth++;
+            }
+        } finally {
+            if (!origin) {
+                TenantContextHolder.clearIgnoreTenant();
+            }
         }
-
-        catalogue = catalogueService.getById(catalogue.getParentId());
-        if (catalogue == null) {
-            throw new SchedulerException("Get Node List Error");
+        Collections.reverse(names);
+        // 按长度预算拼接：保留顶级目录，超长时从末端（最接近任务的层级）丢弃并告警
+        StringBuilder path = new StringBuilder();
+        for (String name : names) {
+            if (StrUtil.isBlank(name)) {
+                continue;
+            }
+            int extra = (path.length() == 0 ? 0 : 1) + name.length();
+            if (path.length() + extra > budget) {
+                log.warn(
+                        "DS 工作流名将超过 {} 字符，丢弃目录层级 [{}]（catalogueId={}）",
+                        PROCESS_NAME_MAX_LENGTH,
+                        name,
+                        catalogue.getId());
+                break;
+            }
+            if (path.length() > 0) {
+                path.append('/');
+            }
+            path.append(name);
         }
+        String catalogPath = path.toString();
+        return StrUtil.isBlank(catalogPath) ? prefix : prefix + "/" + catalogPath;
+    }
 
-        String name = i == 0 ? catalogue.getName() : catalogue.getName();
-        String next = getDinkyNames(catalogue, ++i);
-
-        if (Strings.isNullOrEmpty(next)) {
-            return name;
+    /**
+     * 构造 DS 工作流描述：租户、目录路径与目录下作业清单。
+     *
+     * <p>DS 侧工作流名只体现目录，作业名在工作流内部，控制台列表上无法看出归属；
+     * 把三者写入 description（DS 字段类型为 text）后可直接辨识，且不影响任何按名称查找的逻辑。
+     */
+    private String buildProcessDescription(Catalogue catalogue) {
+        String prefix = resolveTenantPrefix(catalogue.getTenantId());
+        String fullName = getDinkyNames(catalogue, 0);
+        String dirPath = fullName.startsWith(prefix + "/") ? fullName.substring(prefix.length() + 1) : fullName;
+        String head = StrUtil.format("Dinky | 租户={} | 目录={} | 作业=", prefix, dirPath);
+        // 目录路径本身已顶到上限时直接放弃作业清单，避免尾部再出现第二个省略号
+        if (head.length() >= PROCESS_DESCRIPTION_MAX_LENGTH) {
+            return StrUtil.subPre(head, PROCESS_DESCRIPTION_MAX_LENGTH - 1) + "…";
         }
-        return name + "/" + next;
+        List<String> taskNames = listTaskNamesOfSibling(catalogue);
+        if (taskNames.isEmpty()) {
+            taskNames = Collections.singletonList(catalogue.getName());
+        }
+        StringBuilder description = new StringBuilder(head);
+        for (String name : taskNames) {
+            if (StrUtil.isBlank(name)) {
+                continue;
+            }
+            String separator = description.length() > head.length() ? ", " : "";
+            // 预留省略号位置；description 只是辅助识别信息，绝不能因超长让 DS 校验失败阻断推送
+            if (description.length() + separator.length() + name.length() > PROCESS_DESCRIPTION_MAX_LENGTH - 1) {
+                description.append('…');
+                break;
+            }
+            description.append(separator).append(name);
+        }
+        return description.toString();
+    }
+
+    /**
+     * 取 DS 工作流描述：优先用调用链已构造的值；缺失时（如前端直接触发"更新任务"）按 Dinky 任务 id
+     * 反查其目录节点后即时生成，保证 description 始终反映当前目录下的作业清单。
+     */
+    private String resolveProcessDescription(DinkyTaskRequest dinkyTaskRequest) {
+        if (StrUtil.isNotBlank(dinkyTaskRequest.getProcessDescription())) {
+            return dinkyTaskRequest.getProcessDescription();
+        }
+        String taskId = dinkyTaskRequest.getTaskId();
+        if (StrUtil.isBlank(taskId)) {
+            return null;
+        }
+        Integer dinkyTaskId;
+        try {
+            dinkyTaskId = Integer.valueOf(taskId);
+        } catch (NumberFormatException e) {
+            log.warn("无法解析 Dinky 任务 id，跳过工作流描述构造: {}", taskId);
+            return null;
+        }
+        Catalogue catalogue = catalogueService.getOne(
+                new LambdaQueryWrapper<Catalogue>().eq(Catalogue::getTaskId, dinkyTaskId), false);
+        return catalogue == null ? null : buildProcessDescription(catalogue);
+    }
+
+    /** 查询与当前任务同目录（同一个 DS 工作流）下的全部作业名，按 id 升序 */
+    private List<String> listTaskNamesOfSibling(Catalogue catalogue) {
+        Integer dirId = catalogue.getParentId();
+        if (dirId == null || dirId == 0) {
+            return Collections.singletonList(catalogue.getName());
+        }
+        boolean origin = TenantContextHolder.isIgnoreTenant();
+        try {
+            TenantContextHolder.ignoreTenant();
+            return catalogueService
+                    .list(new LambdaQueryWrapper<Catalogue>()
+                            .eq(Catalogue::getParentId, dirId)
+                            .eq(Catalogue::getIsLeaf, true)
+                            .orderByAsc(Catalogue::getId))
+                    .stream()
+                    .map(Catalogue::getName)
+                    .filter(StrUtil::isNotBlank)
+                    .collect(Collectors.toList());
+        } finally {
+            if (!origin) {
+                TenantContextHolder.clearIgnoreTenant();
+            }
+        }
+    }
+
+    /**
+     * 解析 DS 工作流的租户前缀。
+     *
+     * <p>优先取 {@code dinky_tenant.tenant_code}；租户记录缺失或编码为空时兜底 {@code tenant_<id>}，
+     * 保证历史作业在租户数据不完整时仍可发布，而不是抛异常中断调度链路。
+     */
+    private String resolveTenantPrefix(Integer tenantId) {
+        if (tenantId == null) {
+            return "tenant_unknown";
+        }
+        Tenant tenant = tenantService.getById(tenantId);
+        if (tenant != null && StrUtil.isNotBlank(tenant.getTenantCode())) {
+            return tenant.getTenantCode();
+        }
+        return "tenant_" + tenantId;
     }
 
     /**
@@ -411,12 +972,24 @@ public class SchedulerServiceImpl implements SchedulerService {
      */
     private void injectTaskLocalParams(String taskId, DinkyTaskParams dinkyTaskParams) {
         Task task = taskMapper.selectById(Integer.valueOf(taskId));
+        dinkyTaskParams.setLocalParams(buildLocalParams(task));
+        if (!dinkyTaskParams.getLocalParams().isEmpty()) {
+            log.info(
+                    "Injected {} localParams from config_json.taskParams into DinkyTaskParams",
+                    dinkyTaskParams.getLocalParams().size());
+        }
+    }
+
+    /**
+     * Build DS localParams ({@link Property}) from {@code config_json.taskParams}.
+     */
+    private List<Property> buildLocalParams(Task task) {
         if (task == null || task.getConfigJson() == null) {
-            return;
+            return Collections.emptyList();
         }
         TaskExtConfig extConfig = task.getConfigJson();
         if (extConfig.getTaskParams() == null || extConfig.getTaskParams().isEmpty()) {
-            return;
+            return Collections.emptyList();
         }
         List<Property> localParams = new ArrayList<>();
         for (TaskExtConfig.TaskParam p : extConfig.getTaskParams()) {
@@ -427,7 +1000,6 @@ public class SchedulerServiceImpl implements SchedulerService {
             property.setValue(p.getValue());
             localParams.add(property);
         }
-        dinkyTaskParams.setLocalParams(localParams);
-        log.info("Injected {} localParams from config_json.taskParams into DinkyTaskParams", localParams.size());
+        return localParams;
     }
 }

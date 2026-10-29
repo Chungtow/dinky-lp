@@ -45,7 +45,7 @@ import {
 import { InitPushDolphinParams } from '@/types/Studio/init.d';
 import { Button, Form, Tag } from 'antd';
 import { DefaultOptionType } from 'antd/es/select';
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { TaskState } from '@/pages/DataStudio/type';
 
 type PushDolphinProps = {
@@ -151,32 +151,61 @@ export const PushDolphin: React.FC<PushDolphinProps> = (props) => {
   };
 
   const buildUpstreamTaskOptions = (
-    data: DolphinTaskMinInfo[] | undefined
+    data: DolphinTaskMinInfo[] | undefined,
+    keyword = ''
   ): DefaultOptionType[] => {
-    if (data && data.length > 0) {
-      return data.map((item) => {
-        const label = (
-          <>
-            <Tag color={'purple'}>
-              {l('datastudio.header.pushdolphin.taskName', '', { name: item.taskName })}
-            </Tag>
-            <span style={{ color: '#8a8a8a' }}>
-              {l('datastudio.header.pushdolphin.taskNameExt', '', {
-                type: item.taskType,
-                processDefinitionName: item.processDefinitionName
-              })}
-            </span>
-          </>
-        );
-        return {
-          label: label,
-          value: item.taskCode.toString(),
-          key: item.taskCode
-        };
-      });
+    if (!data || data.length === 0) {
+      return [];
     }
-    return [];
+    // 默认按「修改时间倒序」排列（时间缺失或相同时按任务名升序兜底）：
+    // 前置任务候选直接沿用接口返回顺序时毫无规律，任务一多就无法定位。
+    // 时间字段是 'yyyy-MM-dd HH:mm:ss' 字符串，字典序即时间序（用 new Date 解析该格式不可靠，
+    // 解析失败会退化成按名称排序）。
+    const timeKey = (item: DolphinTaskMinInfo) =>
+      String(item.taskUpdateTime ?? item.taskCreateTime ?? '');
+    const sorted = [...data].sort((a, b) => {
+      const ta = timeKey(a);
+      const tb = timeKey(b);
+      if (tb !== ta) {
+        return tb.localeCompare(ta);
+      }
+      return (a.taskName ?? '').localeCompare(b.taskName ?? '');
+    });
+    // 关键字模糊匹配（任务名/任务类型/所属工作流），大小写不敏感。
+    // 这里自行过滤而不是交给 antd：options 的 label 是 ReactNode，
+    // antd 只能按 value（任务编码）匹配，输入任务名必然「暂无数据」。
+    const kw = keyword.trim().toLowerCase();
+    const matched = kw
+      ? sorted.filter((item) =>
+          `${item.taskName ?? ''} ${item.taskType ?? ''} ${item.processDefinitionName ?? ''}`
+            .toLowerCase()
+            .includes(kw)
+        )
+      : sorted;
+    return matched.map((item) => {
+      const label = (
+        <>
+          <Tag color={'purple'}>
+            {l('datastudio.header.pushdolphin.taskName', '', { name: item.taskName })}
+          </Tag>
+          <span style={{ color: '#8a8a8a' }}>
+            {l('datastudio.header.pushdolphin.taskNameExt', '', {
+              type: item.taskType,
+              processDefinitionName: item.processDefinitionName
+            })}
+          </span>
+        </>
+      );
+      return {
+        label: label,
+        value: item.taskCode.toString(),
+        key: item.taskCode
+      };
+    });
   };
+
+  /** 前置任务下拉的搜索关键字（外部过滤，见 buildUpstreamTaskOptions 注释） */
+  const [upstreamKeyword, setUpstreamKeyword] = useState<string>('');
 
   const handleValueChange = (changedValues: any, allValues: any) => {
     if (allValues) {
@@ -193,8 +222,15 @@ export const PushDolphin: React.FC<PushDolphinProps> = (props) => {
           name={'upstreamCodes'}
           showSearch
           mode={'multiple'}
+          placeholder={'可按任务名/类型/工作流模糊搜索；列表默认按修改时间倒序'}
           extra={l('datastudio.header.pushdolphin.upstreamCodesTip')}
-          options={buildUpstreamTaskOptions(dolphinTaskList)}
+          options={buildUpstreamTaskOptions(dolphinTaskList, upstreamKeyword) as any}
+          fieldProps={{
+            // 关闭 antd 内置过滤（label 是 ReactNode，内置过滤只能按 value=任务编码匹配，
+            // 输入任务名必然“暂无数据”），改为在 options 里按关键字自行过滤。
+            filterOption: false,
+            onSearch: (value: string) => setUpstreamKeyword(value)
+          }}
         />
 
         <ProFormGroup>

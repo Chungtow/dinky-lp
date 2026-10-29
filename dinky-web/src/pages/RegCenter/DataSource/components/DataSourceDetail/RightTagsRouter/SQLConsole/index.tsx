@@ -18,52 +18,65 @@
  */
 
 import { Height80VHDiv } from '@/components/StyledComponents';
-import {
-  tempColumns,
-  tempData
-} from '@/pages/RegCenter/DataSource/components/DataSourceDetail/RightTagsRouter/SQLConsole/data';
+import { QueryParams } from '@/pages/RegCenter/DataSource/components/DataSourceDetail/RightTagsRouter/data';
 import DataList from '@/pages/RegCenter/DataSource/components/DataSourceDetail/RightTagsRouter/SQLConsole/DataList';
 import Editor from '@/pages/RegCenter/DataSource/components/DataSourceDetail/RightTagsRouter/SQLConsole/Editor';
+import { postAll } from '@/services/api';
+import { API_CONSTANTS } from '@/services/endpoints';
 import { l } from '@/utils/intl';
 import { PageLoading } from '@ant-design/pro-components';
-import { Alert, Result } from 'antd';
+import { ProColumns } from '@ant-design/pro-table';
+import { Alert, message, Result } from 'antd';
 import React, { useState } from 'react';
 
-const SQLConsole: React.FC = () => {
+type SQLConsoleProps = {
+  queryParams: QueryParams;
+};
+
+const SQLConsole: React.FC<SQLConsoleProps> = (props) => {
+  const { queryParams } = props;
   const [inputValue, setInputValue] = useState('');
   const [loading, setLoading] = useState<boolean>(false);
+  const [columns, setColumns] = useState<ProColumns[]>([]);
+  const [data, setData] = useState<any[]>([]);
+  const [errorMsg, setErrorMsg] = useState('');
 
   const handleInputChange = (value: string) => {
     setInputValue(value);
   };
 
   const execSql = async () => {
+    if (!inputValue?.trim()) {
+      message.warning('请输入要执行的 SQL');
+      return;
+    }
     setLoading(true);
-    // todo: exec sql callback
-    setTimeout(() => {
+    setErrorMsg('');
+    try {
+      const result: any = await postAll(API_CONSTANTS.DATASOURCE_EXEC_SQL, {
+        id: queryParams.id,
+        schemaName: queryParams.schemaName,
+        tableName: queryParams.tableName,
+        sql: inputValue
+      });
+      const inner = result?.data;
+      const tableColumns: ProColumns[] = (inner?.columns ?? []).map((item: string) => ({
+        title: item,
+        dataIndex: item,
+        key: item,
+        ellipsis: true,
+        tooltip: item,
+        width: '8%'
+      }));
+      setColumns(tableColumns);
+      setData(inner?.rowData ?? []);
+    } catch (e: any) {
+      // 后端 SQL 执行失败：BizError.info.data 为 JdbcSelectResult（含 error 详情）
+      setErrorMsg(e?.info?.data?.error ?? e?.message ?? 'execute failed');
+      setColumns([]);
+      setData([]);
+    } finally {
       setLoading(false);
-    }, 3000);
-  };
-
-  const renderAlertMsg = (flag: boolean, msg: string) => {
-    if (!flag) {
-      return (
-        <Alert
-          style={{ margin: 0, height: '2vw', alignItems: 'center' }}
-          message={msg}
-          type='error'
-          showIcon
-        />
-      );
-    } else {
-      return (
-        <Alert
-          style={{ margin: 0, height: '2vw', alignItems: 'center' }}
-          message={msg}
-          type='success'
-          showIcon
-        />
-      );
     }
   };
 
@@ -75,11 +88,19 @@ const SQLConsole: React.FC = () => {
         execCallback={execSql}
         handleInputChange={handleInputChange}
       />
-      {/*{renderAlertMsg(false, '执行成功')}*/}
+      {errorMsg && (
+        <Alert
+          style={{ margin: '8px 0' }}
+          message='Error'
+          description={<pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{errorMsg}</pre>}
+          type='error'
+          showIcon
+        />
+      )}
       {loading ? (
         <Result icon={<PageLoading spin={loading} />} title={l('rc.ds.console.running')} />
       ) : (
-        <DataList columns={tempColumns} data={tempData} />
+        <DataList columns={columns} data={data} />
       )}
     </Height80VHDiv>
   );

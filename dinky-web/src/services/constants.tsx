@@ -209,6 +209,7 @@ export const DIALECT = {
   BASH: 'bash',
   CMD: 'cmd',
   SHELL: 'shell',
+  DATAX: 'datax',
   JSON: 'json',
   SQL: 'sql',
   JAVASCRIPT: 'javascript',

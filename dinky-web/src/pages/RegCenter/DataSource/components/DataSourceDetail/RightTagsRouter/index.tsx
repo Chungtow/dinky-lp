@@ -19,6 +19,7 @@
 
 import { AuthorizedObject, useAccess } from '@/hooks/useAccess';
 import { QueryParams } from '@/pages/RegCenter/DataSource/components/DataSourceDetail/RightTagsRouter/data';
+import ERDiagram from '@/pages/RegCenter/DataSource/components/DataSourceDetail/RightTagsRouter/ERDiagram';
 import GenSQL from '@/pages/RegCenter/DataSource/components/DataSourceDetail/RightTagsRouter/GenSQL';
 import SchemaDesc from '@/pages/RegCenter/DataSource/components/DataSourceDetail/RightTagsRouter/SchemaDesc';
 import SQLConsole from '@/pages/RegCenter/DataSource/components/DataSourceDetail/RightTagsRouter/SQLConsole';
@@ -29,6 +30,7 @@ import { PermissionConstants } from '@/types/Public/constants';
 import { DataSources } from '@/types/RegCenter/data';
 import { l } from '@/utils/intl';
 import {
+  ApartmentOutlined,
   BookOutlined,
   ConsoleSqlOutlined,
   HighlightOutlined,
@@ -113,9 +115,21 @@ const RightTagsRouter: React.FC<RightTagsRouterProps> = (props) => {
           {l('rc.ds.detail.tag.console')}
         </Space>
       ),
-      disabled: true,
-      children: <SQLConsole />,
+      disabled: tagDisabled,
+      children: <SQLConsole queryParams={queryParams} />,
       auth: PermissionConstants.REGISTRATION_DATA_SOURCE_DETAIL_CONSOLE
+    },
+    {
+      key: 'erdiagram',
+      label: (
+        <Space>
+          <ApartmentOutlined />
+          {l('rc.ds.detail.tag.erdiagram')}
+        </Space>
+      ),
+      disabled: tagDisabled,
+      children: <ERDiagram queryParams={queryParams} tableInfo={tableInfo} />,
+      auth: PermissionConstants.REGISTRATION_DATA_SOURCE_DETAIL_DESC
     }
   ];
 

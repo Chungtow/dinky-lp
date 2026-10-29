@@ -44,7 +44,7 @@ const FileTree: React.FC<FileTreeProps> = (props) => {
         <LoadingBtn props={{ type: 'link' }} click={onSync} title={l('rc.resource.sync')} />
       </Flex>
       <Divider style={{ margin: '8px' }} />
-      {treeData.length > 0 ? (
+      {(treeData ?? []).length > 0 ? (
         <DirectoryTree
           className={'treeList'}
           selectedKeys={selectedKeys}

@@ -52,7 +52,7 @@ const Email = (props: EmailProps) => {
           return Promise.reject(nullTips);
         }
         const fieldValue = form.getFieldValue(namePath);
-        const filterField = fieldValue.filter((item: string) => item === value);
+        const filterField = (fieldValue ?? []).filter((item: string) => item === value);
         if (filterField.length > 1) {
           return Promise.reject(repeatTips);
         }

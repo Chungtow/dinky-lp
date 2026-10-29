@@ -125,6 +125,12 @@ public enum Status {
     TOKEN_FREEZED(10025, "token.freezed"),
     NO_PREFIX(10026, "no.prefix"),
     USER_SUPERADMIN_CANNOT_DELETE(10027, "user.superadmin.cannot.delete"),
+    /**
+     * 预期内的权限拒绝（Sa-Token @SaCheckPermission / 角色校验未通过）。
+     *
+     * <p>这是"配置没开通"而不是系统故障：不打印堆栈、不回传权限码与异常详情，只给用户一句可读提示。
+     */
+    PERMISSION_DENIED(10028, "permission.denied"),
 
     // role
     ROLE_ALREADY_EXISTS(10101, "role.already.exists"),
@@ -408,6 +414,185 @@ public enum Status {
     SYS_LDAP_SETTINGS_CASTNICKNAME_NOTE(145, "sys.ldap.settings.castNickname.note"),
     SYS_LDAP_SETTINGS_ENABLE(146, "sys.ldap.settings.enable"),
     SYS_LDAP_SETTINGS_ENABLE_NOTE(147, "sys.ldap.settings.enable.note"),
+    SYS_LLM_SETTINGS_ENABLE(208, "sys.llm.settings.enable"),
+    SYS_LLM_SETTINGS_ENABLE_NOTE(209, "sys.llm.settings.enable.note"),
+    SYS_LLM_SETTINGS_BASEURL(210, "sys.llm.settings.baseUrl"),
+    SYS_LLM_SETTINGS_BASEURL_NOTE(211, "sys.llm.settings.baseUrl.note"),
+    SYS_LLM_SETTINGS_COMPLETIONSPATH(212, "sys.llm.settings.completionsPath"),
+    SYS_LLM_SETTINGS_COMPLETIONSPATH_NOTE(213, "sys.llm.settings.completionsPath.note"),
+    SYS_LLM_SETTINGS_APIKEY(214, "sys.llm.settings.apiKey"),
+    SYS_LLM_SETTINGS_APIKEY_NOTE(215, "sys.llm.settings.apiKey.note"),
+    SYS_LLM_SETTINGS_MODEL(216, "sys.llm.settings.model"),
+    SYS_LLM_SETTINGS_MODEL_NOTE(217, "sys.llm.settings.model.note"),
+    SYS_LLM_SETTINGS_TIMEOUT(218, "sys.llm.settings.timeout"),
+    SYS_LLM_SETTINGS_TIMEOUT_NOTE(219, "sys.llm.settings.timeout.note"),
+    SYS_LLM_SETTINGS_MAXTOKENS(220, "sys.llm.settings.maxTokens"),
+    SYS_LLM_SETTINGS_MAXTOKENS_NOTE(221, "sys.llm.settings.maxTokens.note"),
+    SYS_LLM_SETTINGS_SQLVERIFYENABLE(222, "sys.llm.settings.sqlVerifyEnable"),
+    SYS_LLM_SETTINGS_SQLVERIFYENABLE_NOTE(223, "sys.llm.settings.sqlVerifyEnable.note"),
+    SYS_LLM_SETTINGS_SQLVERIFYMAXRETRY(224, "sys.llm.settings.sqlVerifyMaxRetry"),
+    SYS_LLM_SETTINGS_SQLVERIFYMAXRETRY_NOTE(225, "sys.llm.settings.sqlVerifyMaxRetry.note"),
+    SYS_LLM_SETTINGS_SQLEXECTIMEOUT(226, "sys.llm.settings.sqlExecTimeout"),
+    SYS_LLM_SETTINGS_SQLEXECTIMEOUT_NOTE(227, "sys.llm.settings.sqlExecTimeout.note"),
+    SYS_LLM_SETTINGS_SQLEXECALLOWMETADATA(228, "sys.llm.settings.sqlExecAllowMetadata"),
+    SYS_LLM_SETTINGS_SQLEXECALLOWMETADATA_NOTE(229, "sys.llm.settings.sqlExecAllowMetadata.note"),
+    SYS_LLM_SETTINGS_SQLEXECALLOWDML(230, "sys.llm.settings.sqlExecAllowDml"),
+    SYS_LLM_SETTINGS_SQLEXECALLOWDML_NOTE(231, "sys.llm.settings.sqlExecAllowDml.note"),
+    SYS_LLM_SETTINGS_SQLEXECALLOWDDL(232, "sys.llm.settings.sqlExecAllowDdl"),
+    SYS_LLM_SETTINGS_SQLEXECALLOWDDL_NOTE(233, "sys.llm.settings.sqlExecAllowDdl.note"),
+    SYS_LLM_SETTINGS_SCHEMATABLEDETAILTHRESHOLD(234, "sys.llm.settings.schemaTableDetailThreshold"),
+    SYS_LLM_SETTINGS_SCHEMATABLEDETAILTHRESHOLD_NOTE(235, "sys.llm.settings.schemaTableDetailThreshold.note"),
+    SYS_LLM_SETTINGS_SCHEMARECALLTOPN(236, "sys.llm.settings.schemaRecallTopN"),
+    SYS_LLM_SETTINGS_SCHEMARECALLTOPN_NOTE(237, "sys.llm.settings.schemaRecallTopN.note"),
+    SYS_LLM_SETTINGS_RATELIMITPERMINUTE(238, "sys.llm.settings.rateLimitPerMinute"),
+    SYS_LLM_SETTINGS_RATELIMITPERMINUTE_NOTE(239, "sys.llm.settings.rateLimitPerMinute.note"),
+    SYS_LLM_SETTINGS_MAXREQUESTSPERDAY(240, "sys.llm.settings.maxRequestsPerDay"),
+    SYS_LLM_SETTINGS_MAXREQUESTSPERDAY_NOTE(241, "sys.llm.settings.maxRequestsPerDay.note"),
+    SYS_LLM_SETTINGS_MAXTOKENSPERDAY(242, "sys.llm.settings.maxTokensPerDay"),
+    SYS_LLM_SETTINGS_MAXTOKENSPERDAY_NOTE(243, "sys.llm.settings.maxTokensPerDay.note"),
+    SYS_LLM_SETTINGS_AUDITENABLE(244, "sys.llm.settings.auditEnable"),
+    SYS_LLM_SETTINGS_AUDITENABLE_NOTE(245, "sys.llm.settings.auditEnable.note"),
+    SYS_LLM_SETTINGS_STREAM(246, "sys.llm.settings.stream"),
+    SYS_LLM_SETTINGS_STREAM_NOTE(247, "sys.llm.settings.stream.note"),
+    /** 阶段 1a：上下文预算参数化（原硬编码常量，改为可配置，便于按模型窗口与实测效果调档） */
+    SYS_LLM_SETTINGS_SCHEMAMAXCHARS(248, "sys.llm.settings.schemaMaxChars"),
+    SYS_LLM_SETTINGS_SCHEMAMAXCHARS_NOTE(249, "sys.llm.settings.schemaMaxChars.note"),
+    SYS_LLM_SETTINGS_COLUMNBUDGETCHARS(250, "sys.llm.settings.columnBudgetChars"),
+    SYS_LLM_SETTINGS_COLUMNBUDGETCHARS_NOTE(251, "sys.llm.settings.columnBudgetChars.note"),
+    SYS_LLM_SETTINGS_EDITORSQLMAXCHARS(252, "sys.llm.settings.editorSqlMaxChars"),
+    SYS_LLM_SETTINGS_EDITORSQLMAXCHARS_NOTE(253, "sys.llm.settings.editorSqlMaxChars.note"),
+    /** 阶段 1b：只读工具 / Agent Loop（自研 tool loop，见执行层选型调研报告） */
+    SYS_LLM_SETTINGS_TOOLCALLENABLE(254, "sys.llm.settings.toolCallEnable"),
+    SYS_LLM_SETTINGS_TOOLCALLENABLE_NOTE(255, "sys.llm.settings.toolCallEnable.note"),
+    SYS_LLM_SETTINGS_TOOLSAMPLEROWSENABLE(256, "sys.llm.settings.toolSampleRowsEnable"),
+    SYS_LLM_SETTINGS_TOOLSAMPLEROWSENABLE_NOTE(257, "sys.llm.settings.toolSampleRowsEnable.note"),
+    SYS_LLM_SETTINGS_TOOLCALLMAXROUNDS(258, "sys.llm.settings.toolCallMaxRounds"),
+    SYS_LLM_SETTINGS_TOOLCALLMAXROUNDS_NOTE(259, "sys.llm.settings.toolCallMaxRounds.note"),
+    SYS_LLM_SETTINGS_TOOLTIMEOUTSECONDS(260, "sys.llm.settings.toolTimeoutSeconds"),
+    SYS_LLM_SETTINGS_TOOLTIMEOUTSECONDS_NOTE(261, "sys.llm.settings.toolTimeoutSeconds.note"),
+    SYS_LLM_SETTINGS_TOOLTHINKINGENABLED(262, "sys.llm.settings.toolThinkingEnabled"),
+    SYS_LLM_SETTINGS_TOOLTHINKINGENABLED_NOTE(263, "sys.llm.settings.toolThinkingEnabled.note"),
+    SYS_LLM_SETTINGS_CRAFTMODEENABLE(264, "sys.llm.settings.craftModeEnable"),
+    SYS_LLM_SETTINGS_CRAFTMODEENABLE_NOTE(265, "sys.llm.settings.craftModeEnable.note"),
+    SYS_LLM_SETTINGS_TOOLWRITETIMEOUTSECONDS(266, "sys.llm.settings.toolWriteTimeoutSeconds"),
+    SYS_LLM_SETTINGS_TOOLWRITETIMEOUTSECONDS_NOTE(267, "sys.llm.settings.toolWriteTimeoutSeconds.note"),
+    /** 阶段 2c-1：执行类工具（exec_sql）开关 */
+    SYS_LLM_SETTINGS_TOOLEXECSQLENABLE(268, "sys.llm.settings.toolExecSqlEnable"),
+    SYS_LLM_SETTINGS_TOOLEXECSQLENABLE_NOTE(269, "sys.llm.settings.toolExecSqlEnable.note"),
+    /** 阶段 2c-2：自动纠错最大尝试次数 */
+    SYS_LLM_SETTINGS_TOOLAUTOREPAIRMAXATTEMPTS(270, "sys.llm.settings.toolAutoRepairMaxAttempts"),
+    SYS_LLM_SETTINGS_TOOLAUTOREPAIRMAXATTEMPTS_NOTE(271, "sys.llm.settings.toolAutoRepairMaxAttempts.note"),
+    /** 阶段 3：多 LLM 实例（profile 列表，JSON 串） */
+    SYS_LLM_SETTINGS_PROFILES(272, "sys.llm.settings.profiles"),
+    SYS_LLM_SETTINGS_PROFILES_NOTE(273, "sys.llm.settings.profiles.note"),
+    /** 阶段 4a：Skills 能力开关 */
+    SYS_LLM_SETTINGS_SKILLENABLE(274, "sys.llm.settings.skillEnable"),
+    SYS_LLM_SETTINGS_SKILLENABLE_NOTE(275, "sys.llm.settings.skillEnable.note"),
+    /** 阶段 4a：skill 注入预算（字符） */
+    SYS_LLM_SETTINGS_SKILLMAXCHARS(276, "sys.llm.settings.skillMaxChars"),
+    SYS_LLM_SETTINGS_SKILLMAXCHARS_NOTE(277, "sys.llm.settings.skillMaxChars.note"),
+    /** 阶段 4b：skill 只读工具开关（list_skills / read_skill） */
+    SYS_LLM_SETTINGS_TOOLSKILLENABLE(278, "sys.llm.settings.toolSkillEnable"),
+    SYS_LLM_SETTINGS_TOOLSKILLENABLE_NOTE(279, "sys.llm.settings.toolSkillEnable.note"),
+    /** 阶段 4b：skill 写工具开关（create_skill / write_skill_file / delete_skill） */
+    SYS_LLM_SETTINGS_TOOLSKILLWRITEENABLE(280, "sys.llm.settings.toolSkillWriteEnable"),
+    SYS_LLM_SETTINGS_TOOLSKILLWRITEENABLE_NOTE(281, "sys.llm.settings.toolSkillWriteEnable.note"),
+    /** P0：FlinkSQL 上下文注入预算（字符） */
+    SYS_LLM_SETTINGS_FLINKCONTEXTMAXCHARS(401, "sys.llm.settings.flinkContextMaxChars"),
+    SYS_LLM_SETTINGS_FLINKCONTEXTMAXCHARS_NOTE(402, "sys.llm.settings.flinkContextMaxChars.note"),
+    /** P0：Kafka 配置分组（AI Chat 取权威 bootstrap 地址；作业 DDL 仍显式写值） */
+    SYS_KAFKA_SETTINGS_BOOTSTRAPSERVERS(403, "sys.kafka.settings.bootstrapServers"),
+    SYS_KAFKA_SETTINGS_BOOTSTRAPSERVERS_NOTE(404, "sys.kafka.settings.bootstrapServers.note"),
+    SYS_KAFKA_SETTINGS_SECURITYPROTOCOL(405, "sys.kafka.settings.securityProtocol"),
+    SYS_KAFKA_SETTINGS_SECURITYPROTOCOL_NOTE(406, "sys.kafka.settings.securityProtocol.note"),
+    SYS_KAFKA_SETTINGS_SASLMECHANISM(407, "sys.kafka.settings.saslMechanism"),
+    SYS_KAFKA_SETTINGS_SASLMECHANISM_NOTE(408, "sys.kafka.settings.saslMechanism.note"),
+    SYS_KAFKA_SETTINGS_SASLUSERNAME(409, "sys.kafka.settings.saslUsername"),
+    SYS_KAFKA_SETTINGS_SASLUSERNAME_NOTE(410, "sys.kafka.settings.saslUsername.note"),
+    SYS_KAFKA_SETTINGS_SASLPASSWORD(411, "sys.kafka.settings.saslPassword"),
+    SYS_KAFKA_SETTINGS_SASLPASSWORD_NOTE(412, "sys.kafka.settings.saslPassword.note"),
+    SYS_KAFKA_SETTINGS_DEFAULTSCANSTARTUPMODE(413, "sys.kafka.settings.defaultScanStartupMode"),
+    SYS_KAFKA_SETTINGS_DEFAULTSCANSTARTUPMODE_NOTE(414, "sys.kafka.settings.defaultScanStartupMode.note"),
+    SYS_KAFKA_SETTINGS_CONSUMERGROUPPREFIX(415, "sys.kafka.settings.consumerGroupPrefix"),
+    SYS_KAFKA_SETTINGS_CONSUMERGROUPPREFIX_NOTE(416, "sys.kafka.settings.consumerGroupPrefix.note"),
+    SYS_KAFKA_SETTINGS_TOPICMETADATAENABLE(417, "sys.kafka.settings.topicMetadataEnable"),
+    SYS_KAFKA_SETTINGS_TOPICMETADATAENABLE_NOTE(418, "sys.kafka.settings.topicMetadataEnable.note"),
+    SYS_LLM_SETTINGS_MENTIONSOURCEENABLE(419, "sys.llm.settings.mentionSourceEnable"),
+    SYS_LLM_SETTINGS_MENTIONSOURCEENABLE_NOTE(420, "sys.llm.settings.mentionSourceEnable.note"),
+    SYS_LLM_SETTINGS_MENTIONSOURCEMAXEXPANSIONS(421, "sys.llm.settings.mentionSourceMaxExpansions"),
+    SYS_LLM_SETTINGS_MENTIONSOURCEMAXEXPANSIONS_NOTE(422, "sys.llm.settings.mentionSourceMaxExpansions.note"),
+    SYS_LLM_SETTINGS_SOURCEEXPANDMAXCHARS(423, "sys.llm.settings.sourceExpandMaxChars"),
+    SYS_LLM_SETTINGS_SOURCEEXPANDMAXCHARS_NOTE(424, "sys.llm.settings.sourceExpandMaxChars.note"),
+    /** 语义层（P2）：语义项目在线编辑开关 + 语义根。分组名取 key 第 2 段（semantic） */
+    SYS_SEMANTIC_SETTINGS_ENABLE(425, "sys.semantic.settings.enable"),
+    SYS_SEMANTIC_SETTINGS_ENABLE_NOTE(426, "sys.semantic.settings.enable.note"),
+    SYS_SEMANTIC_SETTINGS_HDFS_BASE_PATH(427, "sys.semantic.settings.hdfs.base.path"),
+    SYS_SEMANTIC_SETTINGS_HDFS_BASE_PATH_NOTE(428, "sys.semantic.settings.hdfs.base.path.note"),
+    /** 语义层（P2）：错误码，五类可读错误 + 两类 IO 失败 */
+    SEMANTIC_DISABLED(429, "semantic.disabled"),
+    SEMANTIC_PATH_ILLEGAL(430, "semantic.path.illegal"),
+    SEMANTIC_FILE_NOT_FOUND(431, "semantic.file.not.found"),
+    SEMANTIC_FILE_TOO_LARGE(432, "semantic.file.too.large"),
+    SEMANTIC_TOO_MANY_FILES(433, "semantic.too.many.files"),
+    SEMANTIC_WRITE_CONFLICT(434, "semantic.write.conflict"),
+    SEMANTIC_READ_FAILED(435, "semantic.read.failed"),
+    SEMANTIC_WRITE_FAILED(436, "semantic.write.failed"),
+    /** 语义层（P2.5）：文件 CRUD 错误码 */
+    SEMANTIC_TARGET_EXISTS(437, "semantic.target.exists"),
+    SEMANTIC_NOT_EMPTY(438, "semantic.not.empty"),
+    SEMANTIC_PARENT_NOT_FOUND(439, "semantic.parent.not.found"),
+    SEMANTIC_MOVE_INTO_SELF(440, "semantic.move.into.self"),
+
+    /** P3b：`@semantic/<p>/<name>` 同名（TABLE 与 METRIC 都有）→ 报歧义，不猜 */
+    SEMANTIC_HANDLE_AMBIGUOUS(441, "semantic.handle.ambiguous"),
+
+    /** P3b：项目没有任何 `_published/<p>/<ver>/` → 明确提示"尚未发布" */
+    SEMANTIC_PUBLISHED_NOT_FOUND(442, "semantic.published.not.found"),
+
+    /** P3b：索引未就绪（index_state != ready）→ 降级直读 YAML，通常只作提示不抛错 */
+    SEMANTIC_INDEX_PENDING_INFO(443, "semantic.index.pending.info"),
+
+    /** P4：语义资产反馈（提交 / 处理过程中的可读错误） */
+    SEMANTIC_FEEDBACK_ASSET_REQUIRED(444, "semantic.feedback.asset.required"),
+    SEMANTIC_FEEDBACK_RATING_ILLEGAL(445, "semantic.feedback.rating.illegal"),
+    SEMANTIC_FEEDBACK_STATUS_ILLEGAL(446, "semantic.feedback.status.illegal"),
+    SEMANTIC_FEEDBACK_NOT_FOUND(447, "semantic.feedback.not.found"),
+
+    /**
+     * 20261025：工具循环守卫参数化。
+     *
+     * <p>此前四项均为代码常量（6 / 40 / 8000 / 10），大规模调研场景下频繁触顶，
+     * 且触顶时曾因"截断执行但不裁剪回灌消息"导致协议不一致、静默无输出。改为可配置后，
+     * 既可按模型与场景调档，也让"触顶"表现为可读提示而非失败。
+     */
+    SYS_LLM_SETTINGS_TOOLCALLMAXPERROUND(448, "sys.llm.settings.toolCallMaxPerRound"),
+    SYS_LLM_SETTINGS_TOOLCALLMAXPERROUND_NOTE(449, "sys.llm.settings.toolCallMaxPerRound.note"),
+    SYS_LLM_SETTINGS_TOOLCALLMAXTOTAL(450, "sys.llm.settings.toolCallMaxTotal"),
+    SYS_LLM_SETTINGS_TOOLCALLMAXTOTAL_NOTE(451, "sys.llm.settings.toolCallMaxTotal.note"),
+    SYS_LLM_SETTINGS_TOOLRESULTMAXCHARS(452, "sys.llm.settings.toolResultMaxChars"),
+    SYS_LLM_SETTINGS_TOOLRESULTMAXCHARS_NOTE(453, "sys.llm.settings.toolResultMaxChars.note"),
+    SYS_LLM_SETTINGS_HISTORYMAXMESSAGES(454, "sys.llm.settings.historyMaxMessages"),
+    SYS_LLM_SETTINGS_HISTORYMAXMESSAGES_NOTE(455, "sys.llm.settings.historyMaxMessages.note"),
+    /**
+     * 知识库（{@code @kb}）连接与检索能力（2026-10-27 引入，v1.9 迁出 LLM 命名空间）。
+     *
+     * <p><b>为什么独立成组</b>（{@code sys.kb.settings.*}）：这四项描述的是「Dinky 连哪个 RAG 服务、
+     * 用哪个密钥、检索开不开、注入多少字」，与 LLM 提供商的 baseUrl/apiKey 是<b>两个外部系统</b>。
+     * 早先寄生在 {@code sys.llm.settings.*} 下，结果是配置中心里只能在「LLM」页签的 49 项中翻找，
+     * 且 key 名（{@code kbBaseUrl}）与实际语义（连接 kb-service）不符。配置中心按 key 第二段分组
+     * （{@code SystemConfiguration.getAllConfiguration()}），故改前缀即成为与 LLM、语义层并列的分组。
+     *
+     * <p>⚠️ 改前缀必须有配套数据迁移（{@code V20261028.1.4.18__kb_settings_namespace.sql}）：
+     * 否则库里旧行变孤儿、新键按默认值（空 baseUrl）生效，知识库直接不可用。
+     */
+    SYS_KB_SETTINGS_ENABLE(456, "sys.kb.settings.enable"),
+    SYS_KB_SETTINGS_ENABLE_NOTE(457, "sys.kb.settings.enable.note"),
+    SYS_KB_SETTINGS_MAXCHARS(458, "sys.kb.settings.maxChars"),
+    SYS_KB_SETTINGS_MAXCHARS_NOTE(459, "sys.kb.settings.maxChars.note"),
+    SYS_KB_SETTINGS_BASEURL(460, "sys.kb.settings.baseUrl"),
+    SYS_KB_SETTINGS_BASEURL_NOTE(461, "sys.kb.settings.baseUrl.note"),
+    SYS_KB_SETTINGS_APIKEY(462, "sys.kb.settings.apiKey"),
+    SYS_KB_SETTINGS_APIKEY_NOTE(463, "sys.kb.settings.apiKey.note"),
     SYS_METRICS_SETTINGS_SYS_ENABLE(148, "sys.metrics.settings.sys.enable"),
     SYS_METRICS_SETTINGS_SYS_ENABLE_NOTE(149, "sys.metrics.settings.sys.enable.note"),
     SYS_METRICS_SETTINGS_SYS_GATHERTIMING(150, "sys.metrics.settings.sys.gatherTiming"),

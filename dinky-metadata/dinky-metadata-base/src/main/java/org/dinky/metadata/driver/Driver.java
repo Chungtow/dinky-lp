@@ -23,9 +23,11 @@ import org.dinky.assertion.Asserts;
 import org.dinky.data.exception.MetaDataException;
 import org.dinky.data.exception.SplitTableException;
 import org.dinky.data.model.Column;
+import org.dinky.data.model.HiveTableDetail;
 import org.dinky.data.model.QueryData;
 import org.dinky.data.model.Schema;
 import org.dinky.data.model.Table;
+import org.dinky.data.model.TableRelations;
 import org.dinky.data.result.SqlExplainResult;
 import org.dinky.metadata.config.AbstractJdbcConfig;
 import org.dinky.metadata.config.DriverConfig;
@@ -191,6 +193,26 @@ public interface Driver extends AutoCloseable {
     List<Table> getTablesAndColumns(String schemaName);
 
     Table getTable(String schemaName, String tableName);
+
+    /**
+     * 获取表详情（location / fileType / 分区字段 / 普通字段），仅 Hive 等支持。
+     * 默认不支持，抛异常。
+     */
+    default HiveTableDetail getTableDetail(String schemaName, String tableName) {
+        throw new MetaDataException("当前数据源类型不支持获取表详情，仅支持 Hive 数据源");
+    }
+
+    /**
+     * 获取表的外键关系（ER 图数据源）：上游（本表引用的外键）+ 下游（引用本表的外键）。
+     * 默认不支持，抛异常；具备 JDBC 元数据能力的数据源在 {@link AbstractJdbcDriver} 中统一实现。
+     *
+     * @param schemaName schema 名
+     * @param tableName  表名
+     * @return {@link TableRelations}
+     */
+    default TableRelations getTableRelations(String schemaName, String tableName) {
+        throw new MetaDataException("当前数据源类型不支持获取表外键关系");
+    }
 
     boolean existTable(Table table);
 

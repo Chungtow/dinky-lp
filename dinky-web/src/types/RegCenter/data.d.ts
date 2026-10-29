@@ -229,6 +229,8 @@ declare namespace DataSources {
   export type DataSource = BaseBeanColumns & {
     groupName: string;
     type: string;
+    /** 连接配置（后端 dinky_database.connect_config），url/username/password 实际存于此处 */
+    connectConfig?: { url?: string; username?: string; password?: string; ip?: string; port?: number };
     url: string;
     username: string;
     password: string;
@@ -278,6 +280,29 @@ declare namespace DataSources {
     scale: number;
     characterSet: string;
     collation: string;
+  };
+
+  /**
+   * foreign key relation (constraint level, support composite key)
+   */
+  export type ForeignKey = {
+    name: string;
+    schemaName: string;
+    tableName: string;
+    columns: string[];
+    refSchemaName: string;
+    refTableName: string;
+    refColumns: string[];
+  };
+
+  /**
+   * table relations for ER diagram (upstream foreignKeys / downstream referencedBy)
+   */
+  export type TableRelations = {
+    schemaName: string;
+    tableName: string;
+    foreignKeys: ForeignKey[];
+    referencedBy: ForeignKey[];
   };
 
   /**

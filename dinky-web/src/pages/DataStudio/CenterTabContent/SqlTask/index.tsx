@@ -20,7 +20,7 @@
 import { CenterTab, DataStudioState } from '@/pages/DataStudio/model';
 import { Button, Col, Divider, Flex, Row, Skeleton, TabsProps } from 'antd';
 import '../index.less';
-import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
+import React, { memo, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { registerEditorKeyBindingAndAction } from '@/utils/function';
 import { Monaco } from '@monaco-editor/react';
 import { Panel, PanelGroup } from 'react-resizable-panels';
@@ -80,6 +80,7 @@ import {
 } from '@/pages/DataStudio/service';
 import { l } from '@/utils/intl';
 import { editor } from 'monaco-editor';
+import { DataStudioContext } from '@/pages/DataStudio/DataStudioContext';
 import { DataStudioActionType } from '@/pages/DataStudio/data.d';
 import {
   getDataByParams,
@@ -109,6 +110,7 @@ import {
   DolphinTaskMinInfo
 } from '@/types/Studio/data';
 import PushDolphin from '@/pages/DataStudio/CenterTabContent/SqlTask/PushDolphin';
+import DataXVisualEditor from '@/pages/DataStudio/CenterTabContent/SqlTask/DataXVisualEditor';
 
 export type FlinkSqlProps = {
   showDesc: boolean;
@@ -142,6 +144,8 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
   const { params, title, id } = props.tabData as CenterTab;
   const containerRef = useRef<HTMLDivElement>(null);
   const editorInstance = useRef<editor.IStandaloneCodeEditor>(null);
+  // 阶段 1a：全局编辑器注册表（AI Chat 读取选中片段用）
+  const { editorRegistry } = useContext(DataStudioContext);
   const [codeEditorWidth, setCodeEditorWidth] = useState(0);
 
   const [selectRightToolbar, setSelectRightToolbar] = useState<string | undefined>(undefined);
@@ -323,6 +327,8 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
     editorInstance.current = editor;
     // @ts-ignore
     editor['id'] = currentState.taskId;
+    // 阶段 1a：登记到全局编辑器注册表，供 AI Chat 读取编辑区选中片段（1.0.4）
+    editorRegistry?.register(String(currentState.taskId), editor);
     registerEditorKeyBindingAndAction(editor);
   };
 
@@ -354,6 +360,30 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
     }
     return [currentState.type, currentState.clusterConfigurationId];
   };
+  /** 阶段 1a：组件卸载时注销编辑器实例，避免 AI Chat 读到已 dispose 的 monaco 实例 */
+  useEffect(() => {
+    const taskId = String(currentState?.taskId);
+    return () => editorRegistry?.unregister(taskId);
+  }, [currentState?.taskId]);
+  /**
+   * AI Chat：把生成的 SQL 插入到当前编辑器的光标处。
+   * 仅对当前激活的 tab 生效；处理完成后立即清空 action，避免被其它 tab 重复消费。
+   */
+  useEffect(() => {
+    const currentAction = props?.action;
+    if (currentAction?.actionType !== DataStudioActionType.TASK_INSERT_SQL) {
+      return;
+    }
+    const sql: string | undefined = currentAction?.params?.sql;
+    updateAction({ actionType: null, params: null });
+    if (!sql || activeTab !== id || !editorInstance.current) {
+      return;
+    }
+    const editor = editorInstance.current;
+    editor.focus();
+    editor.trigger('ai-chat', 'type', { text: sql });
+  }, [props?.action?.actionType, props?.action?.params]);
+
   const onEditorChange = (value: string | undefined, ev: editor.IModelContentChangedEvent) => {
     updateCenterTab({
       ...props.tabData,
@@ -448,7 +478,7 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
   const rightToolbarItem: TabsProps['items'] = [];
   if (
     isSql(currentState.dialect) ||
-    assert(currentState.dialect, [DIALECT.FLINK_SQL, DIALECT.FLINKJAR], true, 'includes')
+    assert(currentState.dialect, [DIALECT.FLINK_SQL, DIALECT.FLINKJAR, DIALECT.DATAX], true, 'includes')
   ) {
     rightToolbarItem.push({
       label: l('button.config'),
@@ -663,13 +693,16 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
   }, [currentState, updateAction]);
 
   const handleStop = useCallback(async () => {
-    await cancelTask('', currentState.taskId, false);
-    setCurrentState((prevState) => {
-      return {
-        ...prevState,
-        status: 'CANCEL'
-      };
-    });
+    // 只有后端受理取消（返回成功）才把本地状态置为 CANCEL，避免"假停止"
+    const stopAccepted = await cancelTask('', currentState.taskId, false);
+    if (stopAccepted) {
+      setCurrentState((prevState) => {
+        return {
+          ...prevState,
+          status: 'CANCEL'
+        };
+      });
+    }
     setIsRunning(false);
   }, [currentState.taskId]);
 
@@ -779,15 +812,19 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
   };
 
   const handlePushDolphinSubmit = async (value: DolphinTaskDefinition) => {
-    setPushDolphinState((prevState) => ({ ...prevState, loading: true }));
-    await handleOption(
+    setPushDolphinState((prevState) => ({ ...prevState, confirmLoading: true }));
+    const result = await handleOption(
       API_CONSTANTS.SCHEDULER_CREATE_OR_UPDATE_TASK_DEFINITION,
       l('datastudio.header.pushdolphin.title', '', {
         name: currentState?.name ?? ''
       }),
       value
     );
-    await handlePushDolphinCancel();
+    setPushDolphinState((prevState) => ({ ...prevState, confirmLoading: false }));
+    // 推送成功才关闭弹窗；失败时保留弹窗，错误提示由 handleOption 内的 WarningMessage 展示
+    if (result) {
+      await handlePushDolphinCancel();
+    }
   };
 
   return (
@@ -1060,24 +1097,40 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
             <Col style={{ width: codeEditorWidth - toolbarSize, height: '100%' }}>
               <PanelGroup direction={'horizontal'}>
                 <Panel>
-                  <CodeEdit
-                    monacoRef={editorInstance}
-                    code={originStatementValue}
-                    language={matchLanguage(currentState.dialect)}
-                    editorDidMount={editorDidMount}
-                    onChange={debounce(onEditorChange, 50)}
-                    enableSuggestions={true}
-                    options={{
-                      readOnlyMessage: {
-                        value: isLockTask
-                          ? l('pages.datastudio.editor.onlyread.lock')
-                          : l('pages.datastudio.editor.onlyread')
-                      },
-                      readOnly: currentState?.step == JOB_LIFE_CYCLE.PUBLISH || isLockTask,
-                      scrollBeyondLastLine: false,
-                      wordWrap: 'on'
-                    }}
-                  />
+                  {currentState.dialect?.toLowerCase() === DIALECT.DATAX ? (
+                    <DataXVisualEditor
+                      statement={currentState.statement}
+                      onChange={(value) => {
+                        updateCenterTab({
+                          ...props.tabData,
+                          isUpdate: originStatementValue !== value,
+                          params: { ...currentState, statement: value }
+                        });
+                        setCurrentState((prevState) => ({ ...prevState, statement: value }));
+                      }}
+                      databaseDataList={tempData.dataSourceDataList}
+                      readOnly={currentState?.step == JOB_LIFE_CYCLE.PUBLISH || isLockTask}
+                    />
+                  ) : (
+                    <CodeEdit
+                      monacoRef={editorInstance}
+                      code={originStatementValue}
+                      language={matchLanguage(currentState.dialect)}
+                      editorDidMount={editorDidMount}
+                      onChange={debounce(onEditorChange, 50)}
+                      enableSuggestions={true}
+                      options={{
+                        readOnlyMessage: {
+                          value: isLockTask
+                            ? l('pages.datastudio.editor.onlyread.lock')
+                            : l('pages.datastudio.editor.onlyread')
+                        },
+                        readOnly: currentState?.step == JOB_LIFE_CYCLE.PUBLISH || isLockTask,
+                        scrollBeyondLastLine: false,
+                        wordWrap: 'on'
+                      }}
+                    />
+                  )}
                 </Panel>
                 {sqlForm.enable && (
                   <>
@@ -1245,7 +1298,8 @@ export default connect(
     enabledDs: SysConfig.enabledDs,
     taskOwnerLockingStrategy: SysConfig.taskOwnerLockingStrategy,
     users: DataStudio.users,
-    tabs: DataStudio.centerContent.tabs
+    tabs: DataStudio.centerContent.tabs,
+    action: DataStudio.action
   }),
   mapDispatchToProps
 )(SqlTask);

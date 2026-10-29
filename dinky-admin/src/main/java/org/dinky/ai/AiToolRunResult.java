@@ -1,0 +1,93 @@
+/*
+ *
+ *  Licensed to the Apache Software Foundation (ASF) under one or more
+ *  contributor license agreements.  See the NOTICE file distributed with
+ *  this work for additional information regarding copyright ownership.
+ *  The ASF licenses this file to You under the Apache License, Version 2.0
+ *  (the "License"); you may not use this file except in compliance with
+ *  the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ *
+ */
+
+package org.dinky.ai;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import cn.hutool.json.JSONArray;
+import lombok.Data;
+
+/**
+ * 一次工具循环的产出。
+ *
+ * @since 2026/09/28
+ */
+@Data
+public class AiToolRunResult {
+
+    /** 全部轮次累计的 token 用量（现有修复重试链路的 usage 另行累加） */
+    private TokenUsage usage = new TokenUsage();
+
+    /** 累计正文（供后续 SQL 校验与审计使用） */
+    private String answer = "";
+
+    /** 工具调用总次数（进入审计列 tool_call_count） */
+    private int toolCallCount;
+
+    /** 工具调用明细（进入审计列 tool_calls，已做字符限制） */
+    private JSONArray toolCallLogs = new JSONArray();
+
+    /** 是否有工具调用失败（用于前端提示与回归观察） */
+    private boolean toolFailed;
+
+    /**
+     * 阶段 2c-2：本次对话是否已由工具走过「写操作」路径。
+     *
+     * <p>供 {@code doChat} 做<b>闭环收敛</b>：已走过则不再对同一回答走 SQL 校验的自动执行 / 二次确认，
+     * 避免同一条写语句被执行两次。
+     */
+    private boolean writeAttempted;
+
+    /** 阶段 2c-2：最近一次由工具尝试执行的语句原文（供审计落 `sql_text`） */
+    private String lastExecutedSql;
+
+    /**
+     * 20261025：工具轮异常中止的原因（脱敏后）。
+     *
+     * <p>不再把单轮失败吞成 null——那会让整个循环静默返回空正文。此前审计只能看到
+     * {@code success=1 / exec_status=none}，掩盖了"崩了但没答"的事实。
+     */
+    private String failureReason;
+
+    /** 20261025：本次工具轮是否异常中止（审计 {@code success} 由此判负） */
+    private boolean aborted;
+
+    /**
+     * 知识库审计（批次 D）：本轮<b>实际检索过</b>的库编码（去重、保序）。
+     *
+     * <p>从 {@link AiToolContext} 回带——工具循环跑在异步线程、审计对象却在请求线程里建，
+     * 只能靠返回值把审计事实搬回来。没有这一跳，就只剩 {@code tool_calls} 里的一段自由文本，
+     * 想统计"哪些库被检索过 / 谁在越权试"只能全文 grep。
+     */
+    private List<String> kbSearchedCodes = new ArrayList<>();
+
+    /** 知识库审计：本轮被显式拒绝的库编码 */
+    private List<String> kbDeniedCodes = new ArrayList<>();
+
+    /** 知识库审计：本轮检索累计命中条数 */
+    private int kbHitCount;
+
+    public void appendAnswer(String text) {
+        if (text != null) {
+            answer = answer + text;
+        }
+    }
+}

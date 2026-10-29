@@ -20,15 +20,18 @@
 import { EditBtn } from '@/components/CallBackButton/EditBtn';
 import { BackIcon } from '@/components/Icons/CustomIcons';
 import { HasAuthority } from '@/hooks/useAccess';
-import { ButtonFrontendType } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/constants';
+import {
+  ButtonFrontendType,
+  CONFIG_KEY_HELP
+} from '@/pages/SettingCenter/GlobalSetting/SettingOverView/constants';
 import { SWITCH_OPTIONS } from '@/services/constants';
 import { BaseConfigProperties } from '@/types/SettingCenter/data';
 import { l } from '@/utils/intl';
-import { SaveTwoTone, SettingTwoTone } from '@ant-design/icons';
+import { QuestionCircleOutlined, SaveTwoTone, SettingTwoTone } from '@ant-design/icons';
 import { ProList } from '@ant-design/pro-components';
 import { ProListMetas, ProListProps } from '@ant-design/pro-list';
 import { ActionType } from '@ant-design/pro-table';
-import { Descriptions, Input, Radio, RadioChangeEvent, Space, Switch } from 'antd';
+import { Descriptions, Input, Radio, RadioChangeEvent, Space, Switch, Tooltip } from 'antd';
 import React, { useRef } from 'react';
 import MoreInfo from '@/components/Typography/MoreInfo';
 
@@ -77,9 +80,26 @@ const GeneralConfig: React.FC<GeneralConfigProps> = (props) => {
    * @param entity
    */
   const renderTitle = (entity: BaseConfigProperties) => {
+    // 部分配置项（如 LLM 多实例 profiles）值本身是 JSON，单行 note 说不清；
+    // 这里给它们挂一个问号，hover 展示等宽、保留换行的完整示例（内容见 constants.ts）
+    const help = CONFIG_KEY_HELP[entity.key];
     return (
       <>
         <Descriptions.Item>{entity.name}</Descriptions.Item>
+        {help && (
+          <Tooltip
+            styles={{ root: { maxWidth: 560 } }}
+            title={
+              <pre style={{ margin: 0, fontSize: 12, lineHeight: '18px', whiteSpace: 'pre' }}>
+                {help}
+              </pre>
+            }
+          >
+            <QuestionCircleOutlined
+              style={{ marginLeft: 6, color: 'rgba(0, 0, 0, 0.45)', cursor: 'help' }}
+            />
+          </Tooltip>
+        )}
         <Space style={{ marginLeft: 15 }} size={0}>
           {tag}
         </Space>

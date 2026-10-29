@@ -95,6 +95,22 @@ export const isSql = (dialect: string = '', includedFlinkSQL: boolean = false) =
 };
 
 /**
+ * 判断该方言是否由「FlinkSQL 上下文」提供上下文（P0）。
+ *
+ * <p><b>为什么必须单独判断</b>：{@link isSql} 判断的是「能否绑定 JDBC 数据源并读取其 schema」；
+ * FlinkSQL 作业没有数据源，它的库表来自 Flink Catalog，上下文由后端 `{{flinkContext}}` 区块提供
+ * （作业绑定 / Flink Catalog / 外部资源 / 规则红线 / 命名名册）。因此不能通过给 isSql 传
+ * `includedFlinkSQL=true` 来实现——那会连带把「数据源 schema」链路错误地打开（FlinkSQL 无
+ * databaseId，取不到任何东西，只会把「未绑定数据源」的误导文案重新引出来）。
+ *
+ * @param dialect 作业方言
+ * @returns true 表示该方言由 FlinkSQL 上下文链路服务
+ */
+export const hasFlinkContext = (dialect: string = '') => {
+  return !!dialect && dialect.toLowerCase() === DIALECT.FLINK_SQL;
+};
+
+/**
  * 判断 不为空或者不为 undefined | determine whether it is not empty or not undefined
  * @param value
  */

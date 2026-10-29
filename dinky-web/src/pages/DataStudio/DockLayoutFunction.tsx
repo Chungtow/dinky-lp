@@ -54,6 +54,29 @@ export const activeTab = (
   dockLayout.loadLayout(layoutData);
 };
 
+/**
+ * 判断 dock 的某个子项是否属于「右侧列」（AI Chat 等 group = right 的面板）。
+ *
+ * <p>子项有两种形态：{@link PanelData}（自身带 group）/ {@link BoxData}（group 挂在首个 tab 上），
+ * 两种都要识别，否则右侧列会被误判为「左侧 + 中间」的一部分。
+ */
+const isRightDocked = (child: BoxData | PanelData): boolean => {
+  if ('group' in child && (child as PanelData).group === 'right') {
+    return true;
+  }
+  const first = (child as BoxData).children?.[0] as PanelData | undefined;
+  return !!first && 'group' in first && first.group === 'right';
+};
+
+/** 同 isRightDocked：识别「服务面板」（group = leftBottom，含输出 / 结果两栏） */
+const isLeftBottomDocked = (child: BoxData | PanelData): boolean => {
+  if ('group' in child && (child as PanelData).group === 'leftBottom') {
+    return true;
+  }
+  const first = (child as BoxData).children?.[0] as PanelData | undefined;
+  return !!first && 'group' in first && first.group === 'leftBottom';
+};
+
 export const createNewPanel = (
   layoutData: LayoutData,
   route: ToolbarRoute,
@@ -85,16 +108,43 @@ export const createNewPanel = (
     } else if (route.position === 'leftTop') {
       dockbox.children = [boxData, ...dockbox.children];
     } else if (route.position === 'leftBottom') {
+      // 服务面板只挂在「左侧 + 中间内容区」下方；右侧列（AI Chat 等）保持整列全高，
+      // 否则服务面板会横跨整个 dock（含 AI Chat 下方），把 AI Chat 压到上面去。
+      const children = [...(dockbox.children as BoxData[])];
+      const rightChildren = children.filter(isRightDocked);
+      if (rightChildren.length === 0) {
+        // 没有右侧列：保持原有行为（整行下方）
+        return {
+          ...layoutData,
+          dockbox: {
+            mode: 'vertical',
+            children: [
+              {
+                mode: 'horizontal',
+                children
+              },
+              boxData
+            ]
+          }
+        };
+      }
+      const restChildren = children.filter((child) => !isRightDocked(child));
       return {
         ...layoutData,
         dockbox: {
-          mode: 'vertical',
+          mode: 'horizontal',
           children: [
             {
-              mode: 'horizontal',
-              children: [...dockbox.children]
+              mode: 'vertical',
+              children: [
+                {
+                  mode: 'horizontal',
+                  children: restChildren
+                },
+                boxData
+              ]
             },
-            boxData
+            ...rightChildren
           ]
         }
       };
@@ -113,8 +163,67 @@ export const createNewPanel = (
     if (dockbox.children.length === 0) {
       dockbox.children.push(boxData);
     } else {
+      if (route.position === 'right') {
+        // AI Chat 优先级最高：若此前（无右侧列时）服务面板被 fallback 挂到顶层底部、
+        // 横跨全宽，会把本次要加的右侧列压成「右上角」。这里先把服务面板收纳进
+        // 主区行内部，再让自己作为顶层右侧列加入，保证任何时候 AI Chat 都占满整列高度。
+        const svcIdx = dockbox.children.findIndex((child) =>
+          isLeftBottomDocked(child as BoxData)
+        );
+        if (svcIdx >= 0) {
+          const svc = dockbox.children[svcIdx];
+          const others = dockbox.children.filter(
+            (child, i) => i !== svcIdx && !isRightDocked(child as BoxData)
+          );
+          const rights = dockbox.children.filter((child) => isRightDocked(child as BoxData));
+          dockbox.mode = 'horizontal';
+          dockbox.children = [
+            {
+              mode: 'vertical',
+              children: [...others, svc]
+            } as BoxData,
+            ...rights,
+            boxData
+          ];
+          return layoutData;
+        }
+      }
       if (route.position === 'leftBottom') {
-        dockbox.children.push(boxData);
+        // 同 horizontal 分支：服务面板只挂在「左侧 + 中间」下方，右侧列（AI Chat）保持全高。
+        // 找出那一 row（horizontal）里含右侧列的子项，把服务面板塞进它内部的非右侧区下方。
+        const rowIndex = dockbox.children.findIndex(
+          (child) =>
+            (child as BoxData).mode === 'horizontal' &&
+            ((child as BoxData).children as (BoxData | PanelData)[])?.some(isRightDocked)
+        );
+        if (rowIndex < 0) {
+          // 没有右侧列：保持原有行为
+          dockbox.children.push(boxData);
+        } else {
+          const row = dockbox.children[rowIndex] as BoxData;
+          const kids = [...((row.children ?? []) as (BoxData | PanelData)[])];
+          const rightKids = kids.filter(isRightDocked);
+          const restKids = kids.filter((child) => !isRightDocked(child));
+          const mainWithService: BoxData = {
+            mode: 'vertical',
+            children: [
+              {
+                mode: 'horizontal',
+                children: restKids
+              },
+              boxData
+            ]
+          };
+          if (dockbox.children.length === 1) {
+            // dockbox 里只有这一 row：直接摊平成 horizontal（右侧列与主区左右并排）
+            dockbox.mode = 'horizontal';
+            dockbox.children = [mainWithService, ...rightKids];
+          } else {
+            dockbox.children[rowIndex] = rightKids.length
+              ? { mode: 'horizontal', children: [mainWithService, ...rightKids] }
+              : mainWithService;
+          }
+        }
       } else {
         for (let i = 0; i < dockbox.children.length; i++) {
           if ((dockbox.children[i] as PanelData).group !== 'leftBottom') {

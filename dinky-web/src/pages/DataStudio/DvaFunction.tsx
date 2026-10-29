@@ -55,6 +55,10 @@ export const mapDispatchToProps = (dispatch: Dispatch) => {
         ...payload,
         type: STUDIO_MODEL.saveToolbarLayout
       }),
+    syncToolbarTabs: () =>
+      dispatch({
+        type: STUDIO_MODEL.syncToolbarTabs
+      }),
     addCenterTab: (payload: CenterTabDTO) =>
       dispatch({
         ...payload,
@@ -69,6 +73,42 @@ export const mapDispatchToProps = (dispatch: Dispatch) => {
       dispatch({
         id,
         type: STUDIO_MODEL.removeCenterTab
+      }),
+    /**
+     * 激活已存在的中间 tab（P3c / BUG-1）：只切 activeTab，不重写 tabs 内容，
+     * 因此不会冲掉编辑区里未保存的修改。见 model.tsx 的同名 reducer 注释。
+     */
+    activateCenterTab: (id: string) =>
+      dispatch({
+        id,
+        type: STUDIO_MODEL.activateCenterTab
+      }),
+    /**
+     * P3b：记录语义面板当前项目。AI Chat 的项目级注入据此跟随语义树切换
+     * （切换项目不会切 tab，所以不能只看 tabParams.project）。
+     */
+    saveCurrentSemanticProject: (project?: string) =>
+      dispatch({
+        project,
+        type: STUDIO_MODEL.saveCurrentSemanticProject
+      }),
+    /**
+     * 批次 E：记录知识库面板当前选中的库。AI Chat 把它当作默认检索范围，
+     * 用户因此不必手打 `@kb/<8 位随机编码>`（与语义项目同一套绑定链路）。
+     */
+    saveCurrentKbCollection: (collection?: string) =>
+      dispatch({
+        collection,
+        type: STUDIO_MODEL.saveCurrentKbCollection
+      }),
+    /**
+     * 批次 F：记录技能面板当前选中的技能（目录/文件都算）。AI Chat 的
+     * 「当前正在编辑的技能」区块据此跟随左侧技能树切换（与语义项目/知识库同一套绑定链路）。
+     */
+    saveCurrentSkill: (payload: { skillId?: number; skillName?: string }) =>
+      dispatch({
+        ...payload,
+        type: STUDIO_MODEL.saveCurrentSkill
       }),
     updateProject: (payload: ProjectDTO) =>
       dispatch({

@@ -20,7 +20,7 @@
 import TenantCard from '@/pages/Other/Login/ChooseModal/TenantCard';
 import { NORMAL_MODAL_OPTIONS } from '@/services/constants';
 import { UserBaseInfo } from '@/types/AuthCenter/data';
-import { setTenantStorageAndCookie } from '@/utils/function';
+import { setCurrentTenant } from '@/utils/function';
 import { l } from '@/utils/intl';
 import { CheckGroupValueType } from '@ant-design/pro-card/es/components/CheckCard/Group';
 import { Modal } from 'antd';
@@ -44,7 +44,7 @@ const ChooseModal: React.FC<ChooseModalProps> = (props) => {
       //  if no tenant is selected, the confirm button is disabled
       setChecked(false);
       setCheckedTenantId(value);
-      setTenantStorageAndCookie(value as number);
+      setCurrentTenant(value as number);
       // setTenantIdParams(value as number);
     } else {
       setChecked(true);

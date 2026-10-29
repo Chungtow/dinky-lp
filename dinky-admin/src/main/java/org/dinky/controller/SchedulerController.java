@@ -42,12 +42,14 @@ import io.swagger.annotations.ApiImplicitParam;
 import io.swagger.annotations.ApiOperation;
 import io.swagger.annotations.ApiParam;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 @RestController
 @RequestMapping("/api/scheduler")
 @Api(tags = "DolphinScheduler Controller")
 @SaCheckLogin
 @RequiredArgsConstructor
+@Slf4j
 public class SchedulerController {
 
     private final SchedulerService schedulerService;
@@ -92,10 +94,14 @@ public class SchedulerController {
     @PostMapping("/createOrUpdateTaskDefinition")
     @ApiOperation("Create or Update Task Definition")
     public Result<String> createOrUpdateTaskDefinition(@RequestBody DinkyTaskRequest dinkyTaskRequest) {
-        if (schedulerService.pushAddTask(dinkyTaskRequest)) {
+        try {
+            schedulerService.pushAddTask(dinkyTaskRequest);
             return Result.succeed(Status.DS_ADD_TASK_DEFINITION_SUCCESS);
+        } catch (Exception e) {
+            // 推送失败时返回具体错误原因，供前端展示，而非交给全局异常处理器返回笼统的 Internal Server Error
+            log.error("Push task to DolphinScheduler failed: {}", e.getMessage(), e);
+            return Result.failed(e.getMessage());
         }
-        return Result.succeed(Status.DS_ADD_TASK_DEFINITION_SUCCESS);
     }
 
     /**

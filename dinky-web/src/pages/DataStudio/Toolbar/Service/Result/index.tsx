@@ -198,21 +198,23 @@ export default (props: {
       <SearchOutlined style={{ color: filtered ? '#1677ff' : undefined }} />
     ),
     onFilter: (value, record) =>
-      record[dataIndex]
-        .toString()
+      String(record[dataIndex] ?? '')
         .toLowerCase()
-        .includes((value as string).toLowerCase()),
+        .includes(String(value ?? '').toLowerCase()),
     onFilterDropdownOpenChange: (visible) => {
       if (visible) {
         setTimeout(() => searchInput.current?.select(), 100);
       }
     },
-    render: (text) =>
-      searchedColumn === dataIndex ? (
-        <Highlight label={text ? text.toString() : ''} words={[searchText]} />
+    render: (text) => {
+      // 统一字符串化：React 对 JS 原生 boolean/null/undefined 渲染为空，需显式转字符串展示
+      const displayText = text == null ? '' : String(text);
+      return searchedColumn === dataIndex ? (
+        <Highlight label={displayText} words={[searchText]} />
       ) : (
-        text
-      )
+        displayText
+      );
+    }
   });
 
   const loadData = async () => {
@@ -256,7 +258,10 @@ export default (props: {
       return {
         title: item,
         dataIndex: item,
-        sorter: (a, b) => a[item] - b[item],
+        sorter: (a, b) =>
+          String(a[item] ?? '').localeCompare(String(b[item] ?? ''), undefined, {
+            numeric: true
+          }),
         ...getColumnSearchProps(item)
       };
     }) as ProColumns[];

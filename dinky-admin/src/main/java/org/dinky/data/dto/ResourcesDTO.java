@@ -58,4 +58,7 @@ public class ResourcesDTO implements Serializable {
             example = "A sample resource file",
             notes = "A brief description of the resource")
     private String description;
+
+    @ApiModelProperty(value = "Content", dataType = "String", notes = "文本内容（仅 /api/resource/writeContent 使用）")
+    private String content;
 }

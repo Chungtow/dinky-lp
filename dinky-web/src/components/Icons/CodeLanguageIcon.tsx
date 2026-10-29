@@ -339,6 +339,36 @@ export const ShellSvg = (props: { size?: number }) => {
 };
 
 /**
+ * datax icon
+ * @constructor
+ */
+export const DataXSvg = (props: { size?: number }) => {
+  const { size = 16 } = props;
+
+  return (
+    <>
+      <Icon
+        component={() => (
+          <svg viewBox='0 0 1024 1024' width={size} height={size} xmlns='http://www.w3.org/2000/svg'>
+            <text
+              x='512'
+              y='512'
+              textAnchor='middle'
+              dominantBaseline='central'
+              fontSize='260'
+              fontWeight='bold'
+              fill='#3b82f6'
+            >
+              DataX
+            </text>
+          </svg>
+        )}
+      />
+    </>
+  );
+};
+
+/**
  * xml icon
  * @constructor
  */

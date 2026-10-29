@@ -43,8 +43,9 @@ import { activeTab, createNewPanel } from '@/pages/DataStudio/DockLayoutFunction
 import * as Algorithm from './Algorithm';
 import { PanelData } from 'rc-dock/lib/DockData';
 import { useAsyncEffect } from 'ahooks';
+import type { editor } from 'monaco-editor';
 import { useTheme } from '@/hooks/useThemeValue';
-import { DataStudioContext } from '@/pages/DataStudio/DataStudioContext';
+import { DataStudioContext, EditorRegistry } from '@/pages/DataStudio/DataStudioContext';
 import './css/index.less';
 import { getTenantByLocalStorage } from '@/utils/function';
 import FooterContainer from '@/pages/DataStudio/FooterContainer';
@@ -56,6 +57,10 @@ import { SysConfigStateType } from '@/pages/SettingCenter/GlobalSetting/model';
 
 const SqlTask = lazy(() => import('@/pages/DataStudio/CenterTabContent/SqlTask'));
 const DataSourceDetail = lazy(() => import('@/pages/DataStudio/CenterTabContent/DataSourceDetail'));
+const ResourceDetail = lazy(() => import('@/pages/DataStudio/CenterTabContent/ResourceDetail'));
+const SemanticFile = lazy(() => import('@/pages/DataStudio/CenterTabContent/SemanticFile'));
+const KbFile = lazy(() => import('@/pages/DataStudio/CenterTabContent/KbFile'));
+const SkillFile = lazy(() => import('@/pages/DataStudio/CenterTabContent/SkillFile'));
 
 let didMount = false;
 const DataStudio: React.FC = (props: any) => {
@@ -65,6 +70,7 @@ const DataStudio: React.FC = (props: any) => {
     handleToolbarShowDesc,
     handleThemeCompact,
     saveToolbarLayout,
+    syncToolbarTabs,
     handleLayoutChange,
     updateAction,
     removeCenterTab,
@@ -148,6 +154,16 @@ const DataStudio: React.FC = (props: any) => {
       await queryResource();
     }
   }, [enableResource]);
+  /**
+   * 对齐工具栏 tab：redux-persist 会把历史上保存的 allTabs 回灌进 state（IndexedDB 异步），
+   * 不清缓存时新增 tab（如 P2 的「语义项目」）不会出现。挂载即对齐一次，rehydrate 完成后
+   * （800ms）再对齐一次 —— reducer 幂等，重复执行无副作用。
+   */
+  useEffect(() => {
+    syncToolbarTabs();
+    const timer = setTimeout(() => syncToolbarTabs(), 800);
+    return () => clearTimeout(timer);
+  }, []);
   useEffect(() => {
     const { actionType, params } = dataStudioState.action;
     if (actionType?.includes('task-run-')) {
@@ -423,6 +439,19 @@ const DataStudio: React.FC = (props: any) => {
         case 'dataSource':
           content = <DataSourceDetail {...currentData} />;
           break;
+        case 'resource':
+          content = <ResourceDetail {...currentData} />;
+          break;
+        case 'semanticFile':
+          content = <SemanticFile tabData={tabData} />;
+          break;
+        case 'kbFile':
+          content = <KbFile tabData={tabData} />;
+          break;
+        case 'skillFile':
+          // 批次 F：skill 内文件编辑（正文在 tab params.statement，AI Chat 因此能读到）
+          content = <SkillFile tabData={tabData} />;
+          break;
       }
       return {
         ...tab,
@@ -503,8 +532,145 @@ const DataStudio: React.FC = (props: any) => {
       list
     });
   };
+  // 阶段 1a：编辑器实例登记表——AI Chat 需读取「用户在编辑区选中的片段」（1.0.4）
+  const editorsRef = useRef<Map<string, editor.IStandaloneCodeEditor>>(new Map());
+  // 阶段 2b：选区变化监听者（AI Chat 的「修复/改写」浮层据此响应式显示）
+  const selectionListenersRef = useRef<Map<string, Set<(text: string) => void>>>(new Map());
+  const editorRegistry = useMemo<EditorRegistry>(
+    () => ({
+      register: (taskId: string, instance: editor.IStandaloneCodeEditor) => {
+        const key = String(taskId);
+        editorsRef.current.set(key, instance);
+        // 阶段 2b：把 monaco 选区变化广播给订阅者（用于「修复/改写」浮层的显隐）
+        instance.onDidChangeCursorSelection(() => {
+          const listeners = selectionListenersRef.current.get(key);
+          if (!listeners || listeners.size === 0) {
+            return;
+          }
+          let text = '';
+          try {
+            const selection = instance.getSelection();
+            if (selection && !selection.isEmpty()) {
+              text = instance.getModel()?.getValueInRange(selection) ?? '';
+            }
+          } catch (e) {
+            text = '';
+          }
+          listeners.forEach((cb) => cb(text));
+        });
+      },
+      unregister: (taskId: string) => {
+        const key = String(taskId);
+        editorsRef.current.delete(key);
+        selectionListenersRef.current.delete(key);
+      },
+      getSelection: (taskId?: string) => {
+        if (!taskId) {
+          return '';
+        }
+        const instance = editorsRef.current.get(String(taskId));
+        if (!instance) {
+          return '';
+        }
+        try {
+          const selection = instance.getSelection();
+          if (!selection || selection.isEmpty()) {
+            return '';
+          }
+          return instance.getModel()?.getValueInRange(selection) ?? '';
+        } catch (e) {
+          // 编辑器已卸载 / 已 dispose：静默返回空串，不阻断提问主流程
+          return '';
+        }
+      },
+      // 阶段 2（Craft）：读取编辑器全文，作为 diff 的「原文」基准
+      getContent: (taskId?: string) => {
+        if (!taskId) {
+          return '';
+        }
+        const instance = editorsRef.current.get(String(taskId));
+        if (!instance) {
+          return '';
+        }
+        try {
+          return instance.getModel()?.getValue() ?? '';
+        } catch (e) {
+          // 编辑器已卸载 / 已 dispose：静默返回空串
+          return '';
+        }
+      },
+      // 阶段 2（Craft）：整块替换编辑器内容。
+      // 必须用 executeEdits（保留 monaco undo 栈，用户仍可 Ctrl+Z），禁用 setValue。
+      applyFullContent: (taskId?: string, content?: string) => {
+        if (!taskId || content === undefined || content === null) {
+          return false;
+        }
+        const instance = editorsRef.current.get(String(taskId));
+        if (!instance) {
+          return false;
+        }
+        try {
+          const model = instance.getModel();
+          if (!model) {
+            return false;
+          }
+          instance.executeEdits('ai-craft', [
+            { range: model.getFullModelRange(), text: content }
+          ]);
+          instance.pushUndoStop();
+          return true;
+        } catch (e) {
+          return false;
+        }
+      },
+      // 阶段 2b（局部改写）：只替换「选中片段」，选区之外不动；无选中则返回 false
+      applyToSelection: (taskId?: string, text?: string) => {
+        if (!taskId || text === undefined || text === null) {
+          return false;
+        }
+        const instance = editorsRef.current.get(String(taskId));
+        if (!instance) {
+          return false;
+        }
+        try {
+          const model = instance.getModel();
+          const selection = instance.getSelection();
+          if (!model || !selection || selection.isEmpty()) {
+            return false;
+          }
+          instance.executeEdits('ai-chat-p2b', [{ range: selection, text }]);
+          instance.pushUndoStop();
+          instance.focus();
+          return true;
+        } catch (e) {
+          return false;
+        }
+      },
+      // 阶段 2b：订阅指定作业的选区变化
+      onSelectionChange: (taskId?: string, listener?: (text: string) => void) => {
+        if (!taskId || !listener) {
+          return () => {};
+        }
+        const key = String(taskId);
+        const listeners =
+          selectionListenersRef.current.get(key) ?? new Set<(text: string) => void>();
+        listeners.add(listener);
+        selectionListenersRef.current.set(key, listeners);
+        return () => {
+          const set = selectionListenersRef.current.get(key);
+          if (set) {
+            set.delete(listener);
+            if (set.size === 0) {
+              selectionListenersRef.current.delete(key);
+            }
+          }
+        };
+      }
+    }),
+    []
+  );
   return (
-    <DataStudioContext.Provider value={{ theme: theme }}>
+    <DataStudioContext.Provider value={{ theme: theme, editorRegistry }}>
       <ConfigProvider
         theme={{
           token: {

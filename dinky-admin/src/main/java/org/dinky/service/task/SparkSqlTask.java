@@ -28,6 +28,7 @@ import org.dinky.data.dto.TaskDTO;
 import org.dinky.data.result.SqlExplainResult;
 import org.dinky.job.Job;
 import org.dinky.job.JobResult;
+import org.dinky.metadata.driver.RunningSqlRegistry;
 import org.dinky.metadata.result.JdbcSelectResult;
 import org.dinky.service.DataBaseService;
 
@@ -70,6 +71,22 @@ public class SparkSqlTask extends BaseTask {
     private static final String DEFAULT_HADOOP_CONF_DIR = "/opt/hadoop/conf";
     private static final long DEFAULT_TIMEOUT_MINUTES = 60;
     private static final int DESTROY_WAIT_SECONDS = 10;
+
+    /**
+     * Default time (ms) to wait for the ThriftServer to converge after
+     * {@code Statement.cancel()} before falling back to aborting the connection.
+     */
+    private static final long DEFAULT_CANCEL_WAIT_MILLIS = 10_000L;
+
+    /**
+     * Task-level override of the cancel wait (milliseconds), stored in
+     * {@code configJson.customConfig}. 0 disables the fallback abort.
+     */
+    private static final String CANCEL_WAIT_KEY = "spark.sql.cancel.wait.ms";
+
+    /** Message returned when a job is canceled by the user. */
+    private static final String CANCEL_MESSAGE =
+            "Spark SQL canceled: cancel request sent to Spark ThriftServer (Statement.cancel → cancelJobGroup)";
 
     /**
      * Task-level execution mode key stored in {@code configJson.customConfig}.
@@ -369,17 +386,18 @@ public class SparkSqlTask extends BaseTask {
         try {
             DataBaseService dataBaseService = SpringUtil.getBean(DataBaseService.class);
             SqlDTO sqlDTO = SqlDTO.build(sql, task.getDatabaseId(), task.getMaxRowNum());
-            return dataBaseService.executeCommonSql(sqlDTO);
+            JobResult result = dataBaseService.executeCommonSql(sqlDTO);
+            return markCanceledIfNeeded(result, sql);
         } catch (Exception e) {
-            // stop() → execThread.interrupt() may surface as InterruptedException or be wrapped
-            // as the cause of a SQLException by the JDBC driver
-            if (Thread.currentThread().isInterrupted() || isInterruptCause(e)) {
+            // stop() → Statement.cancel() (server side cancel) or execThread.interrupt()
+            // may surface as InterruptedException or be wrapped as the cause of a SQLException
+            if (Thread.currentThread().isInterrupted() || RunningSqlRegistry.wasCanceled() || isInterruptCause(e)) {
                 log.info("Spark SQL task (JDBC mode) interrupted (stop/cancel): {}", task.getName());
                 Thread.currentThread().interrupt();
                 JobResult result = new JobResult();
                 result.setStatement(sql);
-                result.setError("Spark SQL execution interrupted (JDBC mode)");
-                result.setStatus(Job.JobStatus.FAILED);
+                result.setError(CANCEL_MESSAGE);
+                result.setStatus(Job.JobStatus.CANCEL);
                 result.setSuccess(false);
                 return result;
             }
@@ -391,6 +409,23 @@ public class SparkSqlTask extends BaseTask {
             result.setSuccess(false);
             return result;
         }
+    }
+
+    /**
+     * Map a canceled execution to {@link Job.JobStatus#CANCEL} instead of FAILED, so that a
+     * user-canceled job is not counted as a failure by monitoring.
+     */
+    private JobResult markCanceledIfNeeded(JobResult result, String sql) {
+        if (!RunningSqlRegistry.wasCanceled()) {
+            return result;
+        }
+        log.info("Spark SQL task canceled by user (JDBC mode): {}", task.getName());
+        JobResult canceled = result == null ? new JobResult() : result;
+        canceled.setStatement(sql);
+        canceled.setStatus(Job.JobStatus.CANCEL);
+        canceled.setSuccess(false);
+        canceled.setError(CANCEL_MESSAGE);
+        return canceled;
     }
 
     /**
@@ -561,20 +596,54 @@ public class SparkSqlTask extends BaseTask {
     public boolean stop() {
         SparkSqlTask running = RUNNING_TASKS.get(task.getName());
         if (running == null) {
-            return false; // no live process for this task
+            // Nothing running: idempotent success, so the stop button never reports a fake failure.
+            log.info("Spark SQL task not running, stop is a no-op: {}", task.getName());
+            return true;
         }
         if (running.isJdbcMode()) {
-            // JDBC mode: interrupt the blocking JDBC call. Unlike CLI mode there is no
-            // sub-process to kill, so the YARN job on the ThriftServer may keep running.
+            // JDBC mode: cancel the statement on the server side first.
+            // Statement.cancel() → Hive CancelOperation → SparkExecuteStatementOperation.cancel()
+            // → sparkContext.cancelJobGroup(statementId), which stops the Spark jobs on the
+            // ThriftServer. Interrupting the local thread is only the last-resort fallback.
             Thread t = running.execThread;
-            if (t != null && t.isAlive()) {
-                log.info("Spark SQL task (JDBC mode) stopping, interrupting execution thread: {}", task.getName());
+            if (t == null || !t.isAlive()) {
+                log.info("Spark SQL task (JDBC mode) has no live execution thread: {}", task.getName());
+                return true;
+            }
+            log.info("Spark SQL task (JDBC mode) stopping, canceling statement on ThriftServer: {}", task.getName());
+            boolean canceled = RunningSqlRegistry.cancelByThreadId(t.getId(), cancelWaitMillis());
+            if (t.isAlive()) {
+                log.info(
+                        "Spark SQL task (JDBC mode) still alive after cancel, interrupting thread: {}", task.getName());
                 t.interrupt();
             }
-            return true;
+            return canceled;
         }
         running.destroyProcess();
         return true;
+    }
+
+    /**
+     * How long {@link #stop()} waits for the ThriftServer to converge after
+     * {@code Statement.cancel()} before falling back to aborting the connection.
+     *
+     * <p>Task-level override: {@code spark.sql.cancel.wait.ms} in {@code configJson.customConfig}
+     * (milliseconds, 0 disables the fallback abort).
+     */
+    private long cancelWaitMillis() {
+        if (task.getConfigJson() == null || task.getConfigJson().getCustomConfig() == null) {
+            return DEFAULT_CANCEL_WAIT_MILLIS;
+        }
+        String value = task.getConfigJson().getCustomConfigValue(CANCEL_WAIT_KEY);
+        if (value == null || value.trim().isEmpty()) {
+            return DEFAULT_CANCEL_WAIT_MILLIS;
+        }
+        try {
+            return Long.parseLong(value.trim());
+        } catch (NumberFormatException e) {
+            log.warn("Invalid {} value '{}', fallback to {}ms", CANCEL_WAIT_KEY, value, DEFAULT_CANCEL_WAIT_MILLIS);
+            return DEFAULT_CANCEL_WAIT_MILLIS;
+        }
     }
 
     /**

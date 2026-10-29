@@ -220,7 +220,7 @@ export default () => {
         { label: 'Area', value: 'Area', icon: <AreaChartOutlined /> },
         { label: 'Bar', value: 'Bar', icon: <BarChartOutlined /> }
       ];
-      if (chartDatum.length < 2) {
+      if ((chartDatum ?? []).length < 2) {
         options.push({ label: 'Statistic', value: 'Statistic', icon: <FieldNumberOutlined /> });
       }
 

@@ -1,0 +1,117 @@
+/*
+ *
+ *  Licensed to the Apache Software Foundation (ASF) under one or more
+ *  contributor license agreements.  See the NOTICE file distributed with
+ *  this work for additional information regarding copyright ownership.
+ *  The ASF licenses this file to You under the Apache License, Version 2.0
+ *  (the "License"); you may not use this file except in compliance with
+ *  the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ *
+ */
+
+package org.dinky.data.model;
+
+import java.io.Serializable;
+import java.time.LocalDateTime;
+
+import com.baomidou.mybatisplus.annotation.FieldFill;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
+import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.datatype.jsr310.deser.LocalDateTimeDeserializer;
+import com.fasterxml.jackson.datatype.jsr310.ser.LocalDateTimeSerializer;
+
+import io.swagger.annotations.ApiModel;
+import io.swagger.annotations.ApiModelProperty;
+import lombok.Data;
+
+/**
+ * AI Chat 知识库（{@code @kb}）元数据。
+ *
+ * <p><b>职责边界</b>：本表只承载知识库的<b>语义与权限</b>（编码 / 显示名 / 属主 / 租户 / 可见性 / 是否启用）。
+ * 知识库的<b>内容</b>（文档 / 切片 / 向量）全在 kb-service（MinIO + Qdrant），Dinky 只持有
+ * {@code code} 并在检索时把它写进 {@code filter.collection}。
+ *
+ * <p><b>为什么不存库内文档成员表</b>：归属是 kb-service 侧 payload 的属性，双写必然漂移；
+ * 列表/计数一律实时向 kb-service 取（{@code GET /v1/collections}）。这是先行记录 v0.3 的既定决策。
+ *
+ * <p><b>权限（v1.4 收敛后）</b>：本表<b>只描述"这是谁的库"</b>，<b>不再承载授权</b>。
+ * 可见性 = {@code is_public} 或 属主 或 命中 {@code dinky_kb_collection_grant}——
+ * 授权只有一个入口（grant 表），避免"两处都能授权、以哪张为准"的双真相源
+ * （原 {@code visibility(private|tenant|public)} 三档已删除，见 D-K15 修订）。
+ *
+ * <p>本表<b>不接入</b> MyBatis-Plus 租户插件（与 {@link Skill} 同理），所有可见性判定走
+ * <b>显式条件</b>，以免受「异步线程丢失租户上下文」影响（调研 §4.6.1 事实 3）。
+ *
+ * @since 2026/10/27
+ */
+@Data
+@TableName("dinky_kb_collection")
+@ApiModel(value = "KbCollection", description = "AI Chat Knowledge Base Collection")
+public class KbCollection implements Serializable {
+
+    private static final long serialVersionUID = 1L;
+
+    @TableId(value = "id", type = IdType.AUTO)
+    @ApiModelProperty(value = "ID", dataType = "Long", example = "1")
+    private Long id;
+
+    @ApiModelProperty(
+            value = "Code",
+            dataType = "String",
+            notes = "知识库编码（^c_[0-9a-f]{8}$）：系统生成、永不变，写入 kb-service payload，API 全用它")
+    private String code;
+
+    @ApiModelProperty(value = "Name", dataType = "String", notes = "显示名（用户输入，可改；仅用于界面）")
+    private String name;
+
+    @ApiModelProperty(value = "Description", dataType = "String", notes = "一句话说明（@ 候选与范围声明用）")
+    private String description;
+
+    @ApiModelProperty(value = "Owner Id", dataType = "Integer", notes = "属主（sys_user.id）")
+    private Integer ownerId;
+
+    @ApiModelProperty(value = "Tenant Id", dataType = "Integer", notes = "组织归属租户（sys_tenant.id）")
+    private Integer tenantId;
+
+    /**
+     * 是否公开给全体登录用户。
+     *
+     * <p><b>这是唯一的"非授权"可见通道</b>（grant 表表达不了"所有人"）。除此之外的可见性，
+     * 一律由 {@code dinky_kb_collection_grant} 表达，包括"按租户授权"。
+     *
+     * <p>原 {@code visibility} 三档中：{@code private} ≈ 无任何 grant；{@code tenant} ≈
+     * grant(tenant_id)；{@code public} = 本字段。前两者已被 grant 覆盖，故删除。
+     */
+    @ApiModelProperty(value = "Is Public", dataType = "Boolean", notes = "是否公开（唯一非授权可见通道）")
+    private Boolean isPublic;
+
+    @ApiModelProperty(value = "Enabled", dataType = "Boolean", notes = "是否可被检索（0 否 / 1 是）")
+    private Boolean enabled;
+
+    @TableField(fill = FieldFill.INSERT)
+    @JsonDeserialize(using = LocalDateTimeDeserializer.class)
+    @JsonSerialize(using = LocalDateTimeSerializer.class)
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
+    @ApiModelProperty(value = "Create Time", dataType = "String", notes = "创建时间")
+    private LocalDateTime createTime;
+
+    @TableField(fill = FieldFill.INSERT_UPDATE)
+    @JsonDeserialize(using = LocalDateTimeDeserializer.class)
+    @JsonSerialize(using = LocalDateTimeSerializer.class)
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
+    @ApiModelProperty(value = "Update Time", dataType = "String", notes = "更新时间")
+    private LocalDateTime updateTime;
+}

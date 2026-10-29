@@ -49,7 +49,7 @@ const DingTalk = (props: DingTalkProps) => {
           return Promise.reject(l('rc.ai.atMobiles'));
         }
         const fieldValue = form.getFieldValue(['params', 'atMobiles']);
-        const filterField = fieldValue.filter((item: string) => item === value);
+        const filterField = (fieldValue ?? []).filter((item: string) => item === value);
         if (filterField.length > 1) {
           return Promise.reject(l('rc.ai.atMobilesRepeat'));
         }

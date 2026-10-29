@@ -63,7 +63,16 @@ import { API_CONSTANTS } from '@/services/endpoints';
  *  zh: 中间tab 类型
  *  en: Center tab type
  */
-export type CenterTabType = 'web' | 'task' | 'dataSource';
+export type CenterTabType =
+  | 'web'
+  | 'task'
+  | 'dataSource'
+  | 'resource'
+  | 'semanticFile'
+  /** 批次 B：知识库文档只读查看（正文来自 /api/kb/documents/{id}/content） */
+  | 'kbFile'
+  /** 批次 F：skill 内文件编辑（正文来自 /api/skill/file/read，保存走 /api/skill/file/write） */
+  | 'skillFile';
 
 /**
  * @description:
@@ -100,6 +109,26 @@ export type CenterTab = {
  *  en: Layout state
  */
 export type DataStudioState = {
+  /**
+   * zh: 语义面板当前选中的 dbt 语义项目（P3b，供 AI Chat 项目级注入跟随语义树切换）
+   * en: Currently selected dbt semantic project in the semantic panel (P3b)
+   */
+  currentSemanticProject?: string;
+  /**
+   * zh: 左侧栏「知识库」tab 当前选中的库（批次 E，供 AI Chat 默认绑定检索范围）
+   * en: Currently selected knowledge base collection in the KB panel (batch E, default retrieval scope for AI Chat)
+   */
+  currentKbCollection?: string;
+  /**
+   * zh: 左侧栏「技能」tab 当前选中的技能（批次 F，供 AI Chat 默认绑定当前技能）
+   * en: Currently selected skill in the skill panel (batch F, default skill binding for AI Chat)
+   */
+  currentSkillId?: number;
+  /**
+   * zh: 当前选中技能的名字（仅用于 AI Chat 摘要行展示，避免只显示裸 id）
+   * en: Name of the selected skill (display only)
+   */
+  currentSkillName?: string;
   /**
    * zh: 基础布局数据
    * en: Basic layout data
@@ -222,12 +251,35 @@ export type StudioModelType = {
     handleThemeCompact: Reducer<DataStudioState>;
     // 保存工具栏布局
     saveToolbarLayout: Reducer<DataStudioState, SaveToolbarLayoutDTO>;
+    // 对齐工具栏 tab 列表（补齐新增 tab / 剔除已删除 tab）
+    syncToolbarTabs: Reducer<DataStudioState>;
     // 更新中间tab
     updateCenterTab: Reducer<DataStudioState, CenterTabDTO>;
     // 添加中间tab
     addCenterTab: Reducer<DataStudioState, CenterTabDTO>;
     // 删除中间tab
     removeCenterTab: Reducer<DataStudioState>;
+    /**
+     * 激活（切到）已存在的中间 tab：只改 {@code activeTab}，不触碰 tabs。
+     *
+     * <p>⚠️ 为什么不复用 updateCenterTab：编辑器每次击键都会调它（SemanticFile/index.tsx 的 onChange），
+     * 若让它顺手设 activeTab，正在编辑的 tab 会反复抢焦点，且波及全站所有 tabType。
+     * 该 reducer 是为「目录树点已打开的文件要定位过去」而单独开的口子（P3c / BUG-1）。
+     */
+    activateCenterTab: Reducer<DataStudioState, { id: string }>;
+    /**
+     * P3b：记录语义面板当前选中的项目，供 AI Chat 的项目级注入跟随语义树切换。
+     */
+    saveCurrentSemanticProject: Reducer<DataStudioState, { project?: string }>;
+    /**
+     * 批次 E：记录知识库面板当前选中的库，供 AI Chat 作默认检索范围
+     * （省去用户手打 `@kb/<8 位随机编码>`）。
+     */
+    saveCurrentKbCollection: Reducer<DataStudioState, { collection?: string }>;
+    /**
+     * 批次 F：记录技能面板当前选中的技能，供 AI Chat 默认绑定「当前正在编辑的技能」。
+     */
+    saveCurrentSkill: Reducer<DataStudioState, { skillId?: number; skillName?: string }>;
     //更新 project
     updateProject: Reducer<DataStudioState, ProjectDTO>;
     // 更新操作
@@ -272,6 +324,13 @@ const StudioModel: StudioModelType = {
     theme: {
       compact: false
     },
+    // P3b：语义面板当前项目（未打开过语义面板时为 undefined → AI Chat 不注入项目清单）
+    currentSemanticProject: undefined,
+    // 批次 E：知识库面板当前选中的库（仅在用户点选时写入；自动选中首个库不算"绑定"）
+    currentKbCollection: undefined,
+    // 批次 F：技能面板当前选中的技能（仅用户点选时写入 → 才作为 AI Chat 的默认绑定）
+    currentSkillId: undefined,
+    currentSkillName: undefined,
     centerContent: {
       tabs: [],
       activeTab: undefined
@@ -306,7 +365,7 @@ const StudioModel: StudioModelType = {
         type: 'saveTempData',
         payload: {
           ...tempData,
-          flinkEnv: response.map((item) => ({
+          flinkEnv: (response ?? []).map((item) => ({
             id: item.id,
             name: item.name,
             fragment: item.fragment
@@ -321,12 +380,14 @@ const StudioModel: StudioModelType = {
         getClusterConfigurationData,
         payload
       );
-      const flinkClusterData = [...sessionData, ...clusterConfigurationData].map((x) => ({
-        id: x.id,
-        name: x.name,
-        enabled: x.enabled,
-        type: x.type
-      }));
+      const flinkClusterData = [...(sessionData ?? []), ...(clusterConfigurationData ?? [])].map(
+        (x) => ({
+          id: x.id,
+          name: x.name,
+          enabled: x.enabled,
+          type: x.type
+        })
+      );
       // 移除数据，并保留当前类别的属性
       yield put({
         type: 'saveTempData',
@@ -344,7 +405,7 @@ const StudioModel: StudioModelType = {
         type: 'saveTempData',
         payload: {
           ...tempData,
-          alertGroup: data
+          alertGroup: data ?? []
         }
       });
     },
@@ -356,7 +417,7 @@ const StudioModel: StudioModelType = {
         type: 'saveTempData',
         payload: {
           ...tempData,
-          flinkConfigOptions: data
+          flinkConfigOptions: data ?? []
         }
       });
     },
@@ -369,7 +430,7 @@ const StudioModel: StudioModelType = {
         type: 'saveTempData',
         payload: {
           ...tempData,
-          flinkUdfOptions: data
+          flinkUdfOptions: data ?? []
         }
       });
     },
@@ -382,7 +443,7 @@ const StudioModel: StudioModelType = {
         type: 'saveTempData',
         payload: {
           ...tempData,
-          dataSourceDataList: data
+          dataSourceDataList: data ?? []
         }
       });
     },
@@ -395,7 +456,7 @@ const StudioModel: StudioModelType = {
         type: 'saveTempData',
         payload: {
           ...tempData,
-          suggestions: data
+          suggestions: data ?? []
         }
       });
     },
@@ -403,7 +464,7 @@ const StudioModel: StudioModelType = {
       const response: [] = yield call(getUserData, payload);
       yield put({
         type: 'saveUserData',
-        payload: response
+        payload: response ?? []
       });
     },
     *queryResource({}, { call, put, select }) {
@@ -415,7 +476,7 @@ const StudioModel: StudioModelType = {
         type: 'saveTempData',
         payload: {
           ...tempData,
-          resourceDataList: data
+          resourceDataList: data ?? []
         }
       });
     }
@@ -523,6 +584,43 @@ const StudioModel: StudioModelType = {
         }
       };
     },
+
+    /**
+     * 对齐工具栏 tab 列表。
+     *
+     * <p>为什么需要：`app.tsx` 的 `persistReducer` 未设白名单，整个 dva state（含
+     * `toolbar.{leftTop,leftBottom,right}.allTabs`）会被 redux-persist 写进浏览器
+     * IndexedDB 并在启动时回灌。**新增的 tab（如 P2 的「语义项目」）在历史用户的持久化
+     * 布局里并不存在**，于是入口永远不出现（清缓存才会出现），且该列表还参与
+     * `index.tsx` 的 tab 定位判断。
+     *
+     * <p>语义：保留用户既有顺序与位置（含手动拖到别的位置的 tab），仅
+     * ① 剔除已从 `ToolbarRoutes` 移除的 key；② 把 routes 中有、但任何位置都没有的 key
+     * 追加到它的默认位置末尾。幂等，可重复 dispatch。
+     */
+    syncToolbarTabs(state) {
+      const positions: ToolbarPosition[] = ['leftTop', 'leftBottom', 'right'];
+      const validKeys = new Set(ToolbarRoutes.map((route) => route.key));
+      const present = new Set<string>();
+      positions.forEach((position) =>
+        (state.toolbar[position]?.allTabs ?? []).forEach((key) => present.add(key))
+      );
+      let changed = false;
+      const toolbar = { ...state.toolbar };
+      positions.forEach((position) => {
+        const current = state.toolbar[position]?.allTabs ?? [];
+        const kept = current.filter((key) => validKeys.has(key));
+        const defaults = ToolbarRoutes.filter((route) => route.position === position).map(
+          (route) => route.key
+        );
+        const missing = defaults.filter((key) => !present.has(key) && !kept.includes(key));
+        if (missing.length > 0 || kept.length !== current.length) {
+          changed = true;
+          toolbar[position] = { ...state.toolbar[position], allTabs: [...kept, ...missing] };
+        }
+      });
+      return changed ? { ...state, toolbar } : state;
+    },
     updateCenterTab(state, { id, tabType, title, params, isUpdate }) {
       return {
         ...state,
@@ -578,6 +676,86 @@ const StudioModel: StudioModelType = {
               ? tabs[0]?.id
               : prevState.centerContent.activeTab
         }
+      };
+    },
+    /**
+     * 激活已存在的中间 tab（P3c / BUG-1 修复）。
+     *
+     * <p>只改 {@code centerContent.activeTab}，<b>不碰 tabs</b>——因此不会覆盖任何 tab 的
+     * params/statement（不会像 updateCenterTab 那样把未保存的修改冲掉）。
+     * 中间内容区由 {@code DataStudio/index.tsx} 里「监听 activeTab 去切换 dock 面板」的
+     * effect 驱动，所以改这一个字段就够了。
+     *
+     * <p>tab 不存在时原样返回：调用方（如目录树点开文件）可能带着过期状态，
+     * 这里不做隐式新增，避免出现"空 tab"。
+     */
+    activateCenterTab(state, { id }) {
+      if (!id || !state.centerContent.tabs.some((x) => x.id === id)) {
+        return state;
+      }
+      if (state.centerContent.activeTab === id) {
+        return state;
+      }
+      return {
+        ...state,
+        centerContent: {
+          ...state.centerContent,
+          activeTab: id
+        }
+      };
+    },
+    /**
+     * 记录语义面板当前项目（P3b）。
+     *
+     * <p><b>为什么不能只看 activeTab.params.project</b>（UAT 2026-10-22 反馈）：在语义目录树上
+     * 切换项目<b>不会</b>切换中间 tab，所以 AI Chat 的 {@code tabParams} 一直停在上次打开的文件所属
+     * 项目上——用户切到 sem_demo3 后提问，AI 仍认为在 sem_demo2。语义树是"当前关注哪个语义项目"
+     * 的唯一可信来源，故由它写入这里，AI Chat 读这里。
+     */
+    saveCurrentSemanticProject(state, { project }) {
+      if (state.currentSemanticProject === project) {
+        return state;
+      }
+      return {
+        ...state,
+        currentSemanticProject: project
+      };
+    },
+    /**
+     * 记录知识库面板当前选中的库（批次 E）。
+     *
+     * <p>与 {@link #saveCurrentSemanticProject} 同构：AI Chat 从这里取"默认检索范围"，
+     * 不必要求用户手打 `@kb/<code>`（一个 8 位随机编码，谁也记不住）。
+     *
+     * <p>同值不触发变更：这个值是上下文指纹的输入之一，无意义的写入会让每次点同一行都
+     * 触发"上下文变了 → 重注入"，白白多花一轮 schema token。
+     */
+    saveCurrentKbCollection(state, { collection }) {
+      if (state.currentKbCollection === collection) {
+        return state;
+      }
+      return {
+        ...state,
+        currentKbCollection: collection
+      };
+    },
+    /**
+     * 记录技能面板当前选中的技能（批次 F）。
+     *
+     * <p>与 {@link #saveCurrentKbCollection} 同构：AI Chat 从这里取「默认绑定技能」，
+     * 顺序是「编辑区 skill 文件所属技能 > 左侧树选中技能」（解析在 aiChatContext.resolveBinding）。
+     *
+     * <p>同值不触发变更：技能 id 进上下文指纹，无意义写入会让每次点同一行都判定
+     * 「上下文变了 → 重注入」，白花一轮 token。
+     */
+    saveCurrentSkill(state, { skillId, skillName }) {
+      if (state.currentSkillId === skillId && state.currentSkillName === skillName) {
+        return state;
+      }
+      return {
+        ...state,
+        currentSkillId: skillId,
+        currentSkillName: skillName
       };
     },
     updateProject(state, { expandKeys, selectedKeys }) {

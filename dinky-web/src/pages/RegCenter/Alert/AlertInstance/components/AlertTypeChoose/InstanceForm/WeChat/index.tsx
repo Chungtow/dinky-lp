@@ -53,7 +53,7 @@ const WeChat = (props: WeChatProps) => {
           return Promise.reject(l('rc.ai.atUsersPleaseHolder'));
         }
         const fieldValue = form.getFieldValue(['params', 'atUsers']);
-        const filterField = fieldValue.filter((item: string) => item === value);
+        const filterField = (fieldValue ?? []).filter((item: string) => item === value);
         if (filterField.length > 1) {
           return Promise.reject(l('rc.ai.atUsersRepeat'));
         }

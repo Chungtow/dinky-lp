@@ -25,9 +25,11 @@ import org.dinky.data.dto.UserDTO;
 import org.dinky.data.enums.Status;
 import org.dinky.data.model.rbac.Tenant;
 import org.dinky.data.result.Result;
+import org.dinky.interceptor.TenantResolver;
 import org.dinky.service.UserService;
 
-import org.springframework.web.bind.annotation.CookieValue;
+import javax.servlet.http.HttpServletRequest;
+
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -96,7 +98,9 @@ public class AdminController {
     @GetMapping("/current")
     @ApiOperation(value = "Current User Info", notes = "Current User Info")
     @SaCheckLogin
-    public Result<UserDTO> getCurrentUserInfo(@CookieValue(name = "tenantId") Integer tenantId) {
+    public Result<UserDTO> getCurrentUserInfo(HttpServletRequest request) {
+        // 与 TenantInterceptor 使用同一解析链：请求头 → 分槽 Cookie → 旧名 Cookie（兼容）
+        Integer tenantId = TenantResolver.resolve(request);
         if (tenantId == null) {
             throw NotLoginException.newInstance(
                     "LOCAL", NotLoginException.NOT_TOKEN, NotLoginException.NOT_TOKEN_MESSAGE, null);

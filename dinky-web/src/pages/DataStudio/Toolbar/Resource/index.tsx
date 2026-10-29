@@ -18,9 +18,9 @@
  */
 
 import { connect, history } from '@@/exports';
-import { DataStudioState } from '@/pages/DataStudio/model';
+import { CenterTab, DataStudioState } from '@/pages/DataStudio/model';
 import { mapDispatchToProps } from '@/pages/DataStudio/DvaFunction';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ResourceState } from '@/types/RegCenter/state';
 import { InitResourceState } from '@/types/RegCenter/init.d';
 import { API_CONSTANTS } from '@/services/endpoints';
@@ -31,6 +31,7 @@ import {
   queryDataByParams
 } from '@/services/BusinessCrud';
 import { ResourceInfo } from '@/types/RegCenter/data';
+import { message } from 'antd';
 import { SysConfigStateType } from '@/pages/SettingCenter/GlobalSetting/model';
 import { handleCopyToClipboard, unSupportView } from '@/utils/function';
 import {
@@ -39,6 +40,7 @@ import {
   RIGHT_CONTEXT_FOLDER_MENU
 } from '@/pages/RegCenter/Resource/components/constants';
 import { Button, Modal, Result } from 'antd';
+import PushModal, { KbPushPayload } from '@/pages/DataStudio/Toolbar/Kb/PushModal';
 import { l } from '@/utils/intl';
 import { AuthorizedObject, useAccess } from '@/hooks/useAccess';
 import { ProCard } from '@ant-design/pro-components';
@@ -49,20 +51,65 @@ import ResourceModal from '@/pages/RegCenter/Resource/components/ResourceModal';
 import ResourcesUploadModal from '@/pages/RegCenter/Resource/components/ResourcesUploadModal';
 import { MenuInfo } from 'rc-menu/es/interface';
 
+/** 可推送的文本类型（与知识库 tab 的 openable 口径一致；jar/zip/pdf 不在内） */
+const TEXT_EXT = [
+  'md',
+  'markdown',
+  'txt',
+  'sql',
+  'yaml',
+  'yml',
+  'py',
+  'java',
+  'scala',
+  'json',
+  'xml',
+  'sh',
+  'conf',
+  'properties',
+  'csv',
+  'log',
+  'js',
+  'ts'
+];
+
+const isTextResource = (name: string): boolean => {
+  const lower = (name ?? '').toLowerCase();
+  const dot = lower.lastIndexOf('.');
+  return dot >= 0 && TEXT_EXT.includes(lower.slice(dot + 1));
+};
+
 const Resource = (props: {
   enableResource: boolean;
   resourcePhysicalDelete: boolean;
   resourceDataList: ResourceInfo[];
+  copyHdfsDefaultFS: string;
+  copyHdfsUploadBasePath: string;
+  centerContent: DataStudioState['centerContent'];
+  addCenterTab: (payload: CenterTab) => void;
+  updateCenterTab: (payload: CenterTab) => void;
   queryResource: any;
 }) => {
-  const { resourceDataList, enableResource, queryResource, resourcePhysicalDelete } = props;
+  const {
+    resourceDataList,
+    enableResource,
+    queryResource,
+    resourcePhysicalDelete,
+    copyHdfsDefaultFS,
+    copyHdfsUploadBasePath,
+    centerContent,
+    addCenterTab,
+    updateCenterTab
+  } = props;
 
   const [resourceState, setResourceState] = useState<ResourceState>({
     ...InitResourceState,
-    treeData: resourceDataList
+    treeData: resourceDataList ?? []
   });
 
   const [editModal, setEditModal] = useState<string>('');
+  /** 批次 C：待推送的资源文件载荷（null = 弹窗关闭） */
+  const [pushPayload, setPushPayload] = useState<KbPushPayload | null>(null);
 
   const [uploadValue] = useState({
     url: API_CONSTANTS.BASE_URL + API_CONSTANTS.RESOURCE_UPLOAD,
@@ -70,7 +117,7 @@ const Resource = (props: {
     description: ''
   });
   useEffect(() => {
-    setResourceState((prevState) => ({ ...prevState, treeData: resourceDataList }));
+    setResourceState((prevState) => ({ ...prevState, treeData: resourceDataList ?? [] }));
   }, [resourceDataList]);
 
   const refreshTree = async () => {
@@ -78,17 +125,8 @@ const Resource = (props: {
   };
 
   /**
-   * query content by id
-   * @type {(id: number) => Promise<void>}
-   */
-  const queryContent: (id: number) => Promise<void> = useCallback(async (id: number) => {
-    await queryDataByParams<string>(API_CONSTANTS.RESOURCE_GET_CONTENT_BY_ID, {
-      id
-    }).then((res) => setResourceState((prevState) => ({ ...prevState, content: res ?? '' })));
-  }, []);
-
-  /**
    * the node click event
+   * open a readonly tab in the center editor area for resource files
    * @param info
    * @returns {Promise<void>}
    */
@@ -99,7 +137,31 @@ const Resource = (props: {
     } = info;
     setResourceState((prevState) => ({ ...prevState, selectedKeys: [key], clickedNode: node }));
     if (isLeaf && !unSupportView(name)) {
-      await queryContent(id);
+      const content = await queryDataByParams<string>(API_CONSTANTS.RESOURCE_GET_CONTENT_BY_ID, {
+        id
+      }).catch(() => '');
+      const tabId = `resource_${id}`;
+      // P4 一期：把资源 id 与全路径一并放进 params——AI Chat 靠它们溯源
+      // 「这个文件是哪个、在哪个目录」；此前 params 只有 name/content。
+      const tabParams = { id, name, fullName: node.fullName, content: content ?? '' };
+      const isOpened = (centerContent?.tabs ?? []).some((tab) => tab.id === tabId);
+      if (isOpened) {
+        updateCenterTab({
+          id: tabId,
+          tabType: 'resource',
+          title: name,
+          isUpdate: false,
+          params: tabParams
+        });
+      } else {
+        addCenterTab({
+          id: tabId,
+          tabType: 'resource',
+          title: name,
+          isUpdate: false,
+          params: tabParams
+        });
+      }
     } else {
       setResourceState((prevState) => ({ ...prevState, content: '' }));
     }
@@ -182,6 +244,35 @@ const Resource = (props: {
       case ResourceRightMenuKey.RENAME:
         handleRename();
         break;
+      case ResourceRightMenuKey.PUSH_TO_KB: {
+        // 先判类型再读内容：jar/zip 走同一个接口会拿到乱码，推上去只会污染语料
+        const name = String(fullInfo?.name ?? '');
+        if (!isTextResource(name)) {
+          message.warning(l('datastudio.kb.pushNotText'));
+          break;
+        }
+        if (!fullInfo?.id) {
+          break;
+        }
+        try {
+          const content = await queryDataByParams<string>(
+            API_CONSTANTS.RESOURCE_GET_CONTENT_BY_ID,
+            {
+              id: fullInfo.id
+            }
+          );
+          setPushPayload({
+            filename: name,
+            content: content ?? '',
+            source: 'resource',
+            // 资源 id 作为业务主键；资源没有业务表，故不回写 doc_id
+            externalId: String(fullInfo.id)
+          });
+        } catch (e: any) {
+          message.error(e?.message ?? l('datastudio.kb.readFailed'));
+        }
+        break;
+      }
       case ResourceRightMenuKey.COPY_TO_ADD_CUSTOM_JAR:
         if (fullInfo) {
           const fillValue = `ADD CUSTOMJAR 'rs:${fullInfo.fullName}';`;
@@ -204,6 +295,15 @@ const Resource = (props: {
         if (fullInfo) {
           const fillValue = `rs:${fullInfo.fullName}`;
           await handleCopyToClipboard(fillValue);
+        }
+        break;
+      case ResourceRightMenuKey.COPY_HDFS_PATH:
+        if (fullInfo) {
+          const defaultFS = copyHdfsDefaultFS || '';
+          const basePath = (copyHdfsUploadBasePath || '/').replace(/\/+$/, '');
+          const safeFullName = fullInfo.fullName.replace(/^\/+/, '');
+          const hdfsFullPath = `${defaultFS}${basePath}/${safeFullName}`;
+          await handleCopyToClipboard(hdfsFullPath);
         }
         break;
       default:
@@ -286,6 +386,7 @@ const Resource = (props: {
     setResourceState((prevState) => ({ ...prevState, uploadOpen: false }));
     await refreshTree();
   };
+
   const access = useAccess();
 
   const renderRightMenu = () => {
@@ -349,6 +450,12 @@ const Resource = (props: {
               onNodeClick={(info: any) => handleNodeClick(info)}
               onSync={handleSync}
             />
+            <PushModal
+              open={Boolean(pushPayload)}
+              payload={pushPayload}
+              onClose={() => setPushPayload(null)}
+            />
+
             <RightContextMenu
               contextMenuPosition={resourceState.contextMenuPosition}
               open={resourceState.contextMenuOpen}
@@ -392,7 +499,10 @@ export default connect(
   ({ DataStudio, SysConfig }: { DataStudio: DataStudioState; SysConfig: SysConfigStateType }) => ({
     resourceDataList: DataStudio.tempData.resourceDataList,
     enableResource: SysConfig.enableResource,
-    resourcePhysicalDelete: SysConfig.resourcePhysicalDelete
+    resourcePhysicalDelete: SysConfig.resourcePhysicalDelete,
+    copyHdfsDefaultFS: SysConfig.copyHdfsDefaultFS,
+    copyHdfsUploadBasePath: SysConfig.copyHdfsUploadBasePath,
+    centerContent: DataStudio.centerContent
   }),
   mapDispatchToProps
 )(Resource);

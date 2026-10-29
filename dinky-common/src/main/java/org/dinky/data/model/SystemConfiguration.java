@@ -248,6 +248,510 @@ public class SystemConfiguration {
             .defaultValue(false)
             .note(Status.SYS_LDAP_SETTINGS_ENABLE_NOTE);
 
+    // ==================== AI / LLM ====================
+
+    private final Configuration<Boolean> llmEnable = key(Status.SYS_LLM_SETTINGS_ENABLE)
+            .booleanType()
+            .defaultValue(false)
+            .note(Status.SYS_LLM_SETTINGS_ENABLE_NOTE);
+
+    private final Configuration<String> llmBaseUrl = key(Status.SYS_LLM_SETTINGS_BASEURL)
+            .stringType()
+            .defaultValue("https://api.deepseek.com")
+            .note(Status.SYS_LLM_SETTINGS_BASEURL_NOTE);
+
+    private final Configuration<String> llmCompletionsPath = key(Status.SYS_LLM_SETTINGS_COMPLETIONSPATH)
+            .stringType()
+            .defaultValue("/chat/completions")
+            .note(Status.SYS_LLM_SETTINGS_COMPLETIONSPATH_NOTE);
+
+    /** API Key：对外返回时必须脱敏（/api/sysConfig/getAll 是 @SaIgnore 接口） */
+    private final Configuration<String> llmApiKey = key(Status.SYS_LLM_SETTINGS_APIKEY)
+            .stringType()
+            .defaultValue("")
+            .desensitizedHandler(DesensitizedUtil::password)
+            .note(Status.SYS_LLM_SETTINGS_APIKEY_NOTE);
+
+    private final Configuration<String> llmModel = key(Status.SYS_LLM_SETTINGS_MODEL)
+            .stringType()
+            .defaultValue("deepseek-v4-flash")
+            .note(Status.SYS_LLM_SETTINGS_MODEL_NOTE);
+
+    /**
+     * 多 LLM 实例（profile 列表，JSON 串；阶段 3）。
+     *
+     * <p>形如
+     * {@code [{"id":"deepseek","name":"DeepSeek","baseUrl":"...","model":"...","apiKey":"...",
+     * "completionsPath":"/chat/completions","timeoutSeconds":120,"maxTokens":4096,"stream":true,
+     * "supportsTools":true,"note":"..."}]}。
+     *
+     * <p><b>为空时行为与单 profile 时代完全一致</b>（等价于功能级回滚开关）；上面那组单字段配置
+     * （{@link #llmBaseUrl} / {@link #llmApiKey} / {@link #llmModel} …）即「<b>默认 profile</b>」，
+     * 继续作为缺省值使用，无需任何数据迁移。
+     */
+    private final Configuration<String> llmProfiles = key(Status.SYS_LLM_SETTINGS_PROFILES)
+            .stringType()
+            .defaultValue("")
+            .note(Status.SYS_LLM_SETTINGS_PROFILES_NOTE);
+
+    private final Configuration<Integer> llmTimeout =
+            key(Status.SYS_LLM_SETTINGS_TIMEOUT).intType().defaultValue(60).note(Status.SYS_LLM_SETTINGS_TIMEOUT_NOTE);
+
+    private final Configuration<Integer> llmMaxTokens = key(Status.SYS_LLM_SETTINGS_MAXTOKENS)
+            .intType()
+            .defaultValue(4000)
+            .note(Status.SYS_LLM_SETTINGS_MAXTOKENS_NOTE);
+
+    /** 生成 SQL 后是否自动执行校验（阶段 0：正确性闭环） */
+    private final Configuration<Boolean> llmSqlVerifyEnable = key(Status.SYS_LLM_SETTINGS_SQLVERIFYENABLE)
+            .booleanType()
+            .defaultValue(true)
+            .note(Status.SYS_LLM_SETTINGS_SQLVERIFYENABLE_NOTE);
+
+    /** 校验失败后的自动修复重试上限（对齐 pgconsole 的 max 2 次） */
+    private final Configuration<Integer> llmSqlVerifyMaxRetry = key(Status.SYS_LLM_SETTINGS_SQLVERIFYMAXRETRY)
+            .intType()
+            .defaultValue(2)
+            .note(Status.SYS_LLM_SETTINGS_SQLVERIFYMAXRETRY_NOTE);
+
+    /** 校验执行超时（秒） */
+    private final Configuration<Integer> llmSqlExecTimeout = key(Status.SYS_LLM_SETTINGS_SQLEXECTIMEOUT)
+            .intType()
+            .defaultValue(10)
+            .note(Status.SYS_LLM_SETTINGS_SQLEXECTIMEOUT_NOTE);
+
+    /** 是否允许执行 SHOW / DESC / EXPLAIN 等元数据语句 */
+    private final Configuration<Boolean> llmSqlExecAllowMetadata = key(Status.SYS_LLM_SETTINGS_SQLEXECALLOWMETADATA)
+            .booleanType()
+            .defaultValue(true)
+            .note(Status.SYS_LLM_SETTINGS_SQLEXECALLOWMETADATA_NOTE);
+
+    /** 是否允许执行 DML（默认禁止） */
+    private final Configuration<Boolean> llmSqlExecAllowDml = key(Status.SYS_LLM_SETTINGS_SQLEXECALLOWDML)
+            .booleanType()
+            .defaultValue(false)
+            .note(Status.SYS_LLM_SETTINGS_SQLEXECALLOWDML_NOTE);
+
+    /** 是否允许执行 DDL（默认禁止） */
+    private final Configuration<Boolean> llmSqlExecAllowDdl = key(Status.SYS_LLM_SETTINGS_SQLEXECALLOWDDL)
+            .booleanType()
+            .defaultValue(false)
+            .note(Status.SYS_LLM_SETTINGS_SQLEXECALLOWDDL_NOTE);
+
+    /**
+     * 表数不超过该阈值时才「全量表 + 全部字段」；超过则改为「关键词召回相关表 + 相关表字段」。
+     *
+     * <p>默认值刻意取小：中等规模库（几十张表）若只给表名不给字段，模型会因看不到列而无法写 SQL
+     * （实测 45 张表的库：字段缺失时 Text-to-SQL 成功率不足 50%）。
+     */
+    private final Configuration<Integer> llmSchemaTableDetailThreshold =
+            key(Status.SYS_LLM_SETTINGS_SCHEMATABLEDETAILTHRESHOLD)
+                    .intType()
+                    .defaultValue(8)
+                    .note(Status.SYS_LLM_SETTINGS_SCHEMATABLEDETAILTHRESHOLD_NOTE);
+
+    /** 大库场景下关键词召回的表数量上限 */
+    private final Configuration<Integer> llmSchemaRecallTopN = key(Status.SYS_LLM_SETTINGS_SCHEMARECALLTOPN)
+            .intType()
+            .defaultValue(20)
+            .note(Status.SYS_LLM_SETTINGS_SCHEMARECALLTOPN_NOTE);
+
+    /**
+     * 阶段 1a 上下文预算（字符数）：schema 区块总上限。
+     *
+     * <p>原为硬编码常量。现代模型 context window 普遍 128K~1M，24000 属保守值；
+     * 调大需结合「准确率 / p95 延迟 / 成本」实测（见阶段 1 计划 §3.4.5），故改为可配置。
+     */
+    private final Configuration<Integer> llmSchemaMaxChars = key(Status.SYS_LLM_SETTINGS_SCHEMAMAXCHARS)
+            .intType()
+            .defaultValue(24000)
+            .note(Status.SYS_LLM_SETTINGS_SCHEMAMAXCHARS_NOTE);
+
+    /** 阶段 1a 上下文预算（字符数）：逐表累加字段详情的预算上限 */
+    private final Configuration<Integer> llmColumnBudgetChars = key(Status.SYS_LLM_SETTINGS_COLUMNBUDGETCHARS)
+            .intType()
+            .defaultValue(20000)
+            .note(Status.SYS_LLM_SETTINGS_COLUMNBUDGETCHARS_NOTE);
+
+    /** 阶段 1a 上下文预算（字符数）：编辑区代码块上限 */
+    private final Configuration<Integer> llmEditorSqlMaxChars = key(Status.SYS_LLM_SETTINGS_EDITORSQLMAXCHARS)
+            .intType()
+            .defaultValue(6000)
+            .note(Status.SYS_LLM_SETTINGS_EDITORSQLMAXCHARS_NOTE);
+
+    /** 单用户每分钟请求上限（0 表示不限） */
+    private final Configuration<Integer> llmRateLimitPerMinute = key(Status.SYS_LLM_SETTINGS_RATELIMITPERMINUTE)
+            .intType()
+            .defaultValue(10)
+            .note(Status.SYS_LLM_SETTINGS_RATELIMITPERMINUTE_NOTE);
+
+    /** 单用户每日请求上限（0 表示不限） */
+    private final Configuration<Integer> llmMaxRequestsPerDay = key(Status.SYS_LLM_SETTINGS_MAXREQUESTSPERDAY)
+            .intType()
+            .defaultValue(200)
+            .note(Status.SYS_LLM_SETTINGS_MAXREQUESTSPERDAY_NOTE);
+
+    /** 单用户每日 token 上限（0 表示不限） */
+    private final Configuration<Integer> llmMaxTokensPerDay = key(Status.SYS_LLM_SETTINGS_MAXTOKENSPERDAY)
+            .intType()
+            .defaultValue(200000)
+            .note(Status.SYS_LLM_SETTINGS_MAXTOKENSPERDAY_NOTE);
+
+    /** 是否记录 AI 对话审计日志 */
+    private final Configuration<Boolean> llmAuditEnable = key(Status.SYS_LLM_SETTINGS_AUDITENABLE)
+            .booleanType()
+            .defaultValue(true)
+            .note(Status.SYS_LLM_SETTINGS_AUDITENABLE_NOTE);
+
+    /** 是否流式输出（评测脚本可置 false 走一次性返回） */
+    private final Configuration<Boolean> llmStream = key(Status.SYS_LLM_SETTINGS_STREAM)
+            .booleanType()
+            .defaultValue(true)
+            .note(Status.SYS_LLM_SETTINGS_STREAM_NOTE);
+
+    // ==================== AI / LLM：阶段 1b 只读工具（Agent Loop） ====================
+
+    /**
+     * 工具调用总开关。
+     *
+     * <p>关闭时{@code AiToolLoop} 不被启用，行为与阶段 1a 完全一致——这是上线后出现意料之外行为时
+     * 的第一条退路。
+     */
+    private final Configuration<Boolean> llmToolCallEnable = key(Status.SYS_LLM_SETTINGS_TOOLCALLENABLE)
+            .booleanType()
+            .defaultValue(true)
+            .note(Status.SYS_LLM_SETTINGS_TOOLCALLENABLE_NOTE);
+
+    /**
+     * 是否开放触碰业务数据行的 sample_rows 工具。
+     *
+     * <p>默认关闭：元数据红线要求「业务数据入 LLM 必须显式授权」。关闭时该工具<b>不会出现在
+     * 下发给模型的 tools 里</b>，而不是下发后再拒绝。
+     */
+    private final Configuration<Boolean> llmToolSampleRowsEnable = key(Status.SYS_LLM_SETTINGS_TOOLSAMPLEROWSENABLE)
+            .booleanType()
+            .defaultValue(false)
+            .note(Status.SYS_LLM_SETTINGS_TOOLSAMPLEROWSENABLE_NOTE);
+
+    /**
+     * 一次对话最多进行多少轮工具调用（一轮 = 一次完整 LLM 请求）。
+     *
+     * <p><b>为什么默认值从 3 提到 10</b>（UAT B4 实测）：建一个带 {@code references/} 的 skill 需要
+     * 「探查既有范例（1~3 轮）→ 建主文件（1 轮）→ 逐个写附件文件（1 轮/个）」，3 轮必然不够——实测
+     * 第 3 轮结束时模型仍在请求 {@code write_skill_file}，触发「已达上限」提示，用户被迫把同一件事
+     * 分两次说（第二轮才把 references 建出来）。10 轮可覆盖「建主体 + 3~5 个附件 + 少量修订」。
+     *
+     * <p>代价：SSE 的等待时长按轮数线性放大（超时预算估算见 {@code AiChatServiceImpl#chat}），且
+     * 模型陷入试错时的浪费更大，故不宜再放大。
+     */
+    private final Configuration<Integer> llmToolCallMaxRounds = key(Status.SYS_LLM_SETTINGS_TOOLCALLMAXROUNDS)
+            .intType()
+            .defaultValue(10)
+            .note(Status.SYS_LLM_SETTINGS_TOOLCALLMAXROUNDS_NOTE);
+
+    /** 单个工具的执行超时（秒）：元数据查询卡住时不能拖垮整个对话 */
+    private final Configuration<Integer> llmToolTimeoutSeconds = key(Status.SYS_LLM_SETTINGS_TOOLTIMEOUTSECONDS)
+            .intType()
+            .defaultValue(10)
+            .note(Status.SYS_LLM_SETTINGS_TOOLTIMEOUTSECONDS_NOTE);
+
+    /**
+     * 执行类（写）工具的超时（秒），供 2c-1 的写工具经 {@code AiTool#timeoutSeconds} 读取。
+     *
+     * <p>阶段 2c-0 引入：写语句（DML/DDL）通常比只读查询慢，不应与只读工具共用
+     * {@code llmToolTimeoutSeconds}。默认取 60（比只读的 10s 更宽松），仍受语句级执行超时与取消机制约束。
+     */
+    private final Configuration<Integer> llmToolWriteTimeoutSeconds =
+            key(Status.SYS_LLM_SETTINGS_TOOLWRITETIMEOUTSECONDS)
+                    .intType()
+                    .defaultValue(60)
+                    .note(Status.SYS_LLM_SETTINGS_TOOLWRITETIMEOUTSECONDS_NOTE);
+
+    /**
+     * 是否开放「执行类工具」exec_sql（阶段 2c-1）。
+     *
+     * <p>默认<b>关闭</b>：该工具会真正执行 SQL（含 DML / DDL）。关闭时它<b>不会出现在下发给模型的
+     * tools 清单里</b>（而非下发后再拒绝）；即使开启，仍受语句级开关（{@code sqlExecAllowDml} /
+     * {@code sqlExecAllowDdl}）与「执行前二次确认」双重约束。
+     */
+    private final Configuration<Boolean> llmToolExecSqlEnable = key(Status.SYS_LLM_SETTINGS_TOOLEXECSQLENABLE)
+            .booleanType()
+            .defaultValue(false)
+            .note(Status.SYS_LLM_SETTINGS_TOOLEXECSQLENABLE_NOTE);
+
+    /**
+     * 自动纠错的最大尝试次数（阶段 2c-2）。
+     *
+     * <p>针对「执行失败 → 模型改稿 → 再执行」的自动循环：一次对话内累计失败达到该值时，
+     * 执行类工具会<b>停止重试</b>并提示人工介入，避免无脑重试（默认 3）。
+     */
+    private final Configuration<Integer> llmToolAutoRepairMaxAttempts =
+            key(Status.SYS_LLM_SETTINGS_TOOLAUTOREPAIRMAXATTEMPTS)
+                    .intType()
+                    .defaultValue(3)
+                    .note(Status.SYS_LLM_SETTINGS_TOOLAUTOREPAIRMAXATTEMPTS_NOTE);
+
+    /**
+     * 工具轮是否保留 thinking。
+     *
+     * <p>默认关闭：2026-09-28 探针实测 thinking 默认开启时吃掉约 75% 生成预算
+     * （completion 147 vs 38 tokens，延迟 1.34s vs 1.02s），而工具决策轮的输出只是一个结构化 JSON。
+     * 若实测发现工具命中率下降，改回 true 即可，无需改代码。
+     */
+    private final Configuration<Boolean> llmToolThinkingEnabled = key(Status.SYS_LLM_SETTINGS_TOOLTHINKINGENABLED)
+            .booleanType()
+            .defaultValue(false)
+            .note(Status.SYS_LLM_SETTINGS_TOOLTHINKINGENABLED_NOTE);
+
+    /**
+     * 单轮最多<b>执行</b>几个工具调用（默认 16）。
+     *
+     * <p>20261025：原为代码常量 6。模型一次返回的 tool_calls 常超过该值（大规模调研时一轮问十几张表），
+     * 原实现只执行前 6 个、却把<b>全量</b> tool_calls 写回 assistant 消息，导致下一轮请求
+     * 「N 个调用、6 条响应」违反协议（HTTP 400）。现改为可配置，且未执行的调用会补占位响应。
+     */
+    private final Configuration<Integer> llmToolCallMaxPerRound = key(Status.SYS_LLM_SETTINGS_TOOLCALLMAXPERROUND)
+            .intType()
+            .defaultValue(16)
+            .note(Status.SYS_LLM_SETTINGS_TOOLCALLMAXPERROUND_NOTE);
+
+    /**
+     * 一次对话累计最多<b>执行</b>几个工具调用（默认 120，原常量 40）。
+     *
+     * <p>触顶后不再执行新调用，但会为该轮所有未执行调用补占位响应并收尾生成最终答案，
+     * 保证协议完整（历史实现直接在循环中途 break，留下 dangling tool_calls → 必然 400）。
+     */
+    private final Configuration<Integer> llmToolCallMaxTotal = key(Status.SYS_LLM_SETTINGS_TOOLCALLMAXTOTAL)
+            .intType()
+            .defaultValue(120)
+            .note(Status.SYS_LLM_SETTINGS_TOOLCALLMAXTOTAL_NOTE);
+
+    /**
+     * 单个工具结果回灌给模型的字符上限（默认 24000，原常量 8000）。
+     *
+     * <p>宽表 {@code describe_table} 的列清单很容易超过 8000 字符，被截断后模型看到的是半截清单
+     * （虽会附"已截断"提示，但仍可能据此误判字段）。改为可配置后按模型窗口调档。
+     */
+    private final Configuration<Integer> llmToolResultMaxChars = key(Status.SYS_LLM_SETTINGS_TOOLRESULTMAXCHARS)
+            .intType()
+            .defaultValue(24000)
+            .note(Status.SYS_LLM_SETTINGS_TOOLRESULTMAXCHARS_NOTE);
+
+    /**
+     * 带入模型的历史消息条数（默认 10，与原常量一致——保持现状不退化，运维可按需调大）。
+     *
+     * <p>深挖型多轮对话中 10 条会丢掉早先结论；但调大会同时推高 prompt token 与超时风险，
+     * 故默认不变、只开旋钮。
+     */
+    private final Configuration<Integer> llmHistoryMaxMessages = key(Status.SYS_LLM_SETTINGS_HISTORYMAXMESSAGES)
+            .intType()
+            .defaultValue(10)
+            .note(Status.SYS_LLM_SETTINGS_HISTORYMAXMESSAGES_NOTE);
+
+    /**
+     * Craft 模式开关（阶段 2：Ask / Craft 双模式）。
+     *
+     * <p><b>默认关闭</b>：Craft 允许 AI 整块改写编辑器内容，属于「放权」能力，
+     * 必须由管理员显式开启（对齐 §8.0 决策风格：可选增强，显式授权）。
+     */
+    private final Configuration<Boolean> llmCraftModeEnable = key(Status.SYS_LLM_SETTINGS_CRAFTMODEENABLE)
+            .booleanType()
+            .defaultValue(false)
+            .note(Status.SYS_LLM_SETTINGS_CRAFTMODEENABLE_NOTE);
+
+    /**
+     * Skills 能力开关（阶段 4a）。
+     *
+     * <p><b>默认关闭</b>：开启后 AI Chat 会注入「当前用户可见 skill 的清单」，并支持 {@code @skill/<名>}
+     * 显式引用（引用时注入该 skill 正文）。关闭时既不注入清单、也不响应 skill 引用——行为与迭代前
+     * 完全一致（等价功能级回滚开关）。
+     */
+    private final Configuration<Boolean> llmSkillEnable = key(Status.SYS_LLM_SETTINGS_SKILLENABLE)
+            .booleanType()
+            .defaultValue(false)
+            .note(Status.SYS_LLM_SETTINGS_SKILLENABLE_NOTE);
+
+    /**
+     * skill 注入预算（字符，阶段 4a）。
+     *
+     * <p><b>独立预算项</b>：skill 内容（清单 + 显式引用的正文）走自己的上限，不与 schema / 字段预算
+     * 相互挤占。<b>注意</b>：本项目 context engineering 的预算整体宽裕（未来还要容纳语义层与业务知识），
+     * 本项是**防爆上限**（避免单个超大 skill 撑爆上下文），不是「省 token」的手段。
+     */
+    private final Configuration<Integer> llmSkillMaxChars = key(Status.SYS_LLM_SETTINGS_SKILLMAXCHARS)
+            .intType()
+            .defaultValue(4000)
+            .note(Status.SYS_LLM_SETTINGS_SKILLMAXCHARS_NOTE);
+
+    /**
+     * 知识库（{@code @kb}）检索开关（2026-10-27 引入；v1.9 起属 {@code sys.kb.settings} 独立分组）。
+     *
+     * <p><b>默认关闭</b>：关闭时 {@code kb_search} 工具不下发、{@code @kb} 不注入任何内容，
+     * 行为与接入前完全一致（等价功能级回滚开关，见实施计划 U-14）。
+     *
+     * <p>开启后仍需 kb-service 可达（{@code /healthz} 的 embedding 分项 up）工具才会出现——
+     * 否则模型会把工具额度浪费在必然失败的调用上。
+     */
+    private final Configuration<Boolean> kbEnable = key(Status.SYS_KB_SETTINGS_ENABLE)
+            .booleanType()
+            .defaultValue(false)
+            .note(Status.SYS_KB_SETTINGS_ENABLE_NOTE);
+
+    /**
+     * 知识库检索结果注入预算（字符，2026-10-27）。
+     *
+     * <p><b>独立预算项</b>：与 {@link #llmSkillMaxChars} 同理，是防爆上限而非省 token 手段。
+     * 注意 kb-service 侧还有自己的 {@code max_expand_chars=2000}，两者各管一层：
+     * 那边管"单次检索返回多长"，这边管"一次对话里知识库内容占多少"。
+     */
+    private final Configuration<Integer> kbMaxChars = key(Status.SYS_KB_SETTINGS_MAXCHARS)
+            .intType()
+            .defaultValue(4000)
+            .note(Status.SYS_KB_SETTINGS_MAXCHARS_NOTE);
+
+    /**
+     * kb-service 基础地址（2026-10-27）。
+     *
+     * <p>形如 {@code http://meta05:58888}；<b>只有 Dinky 服务端使用</b>，浏览器永不直连
+     * （代理层是唯一出口，见实施计划 D-K5）。这是"我们的 Dinky 连的是哪个 RAG"的唯一真相源，
+     * 改配置即生效（{@code /api/sysConfig/modifyConfig} 同时写库与刷新内存），无需重启。
+     */
+    private final Configuration<String> kbBaseUrl =
+            key(Status.SYS_KB_SETTINGS_BASEURL).stringType().defaultValue("").note(Status.SYS_KB_SETTINGS_BASEURL_NOTE);
+
+    /**
+     * kb-service 访问密钥（2026-10-27）。
+     *
+     * <p><b>API_KEY 不下发前端</b>：读接口走脱敏处理器，前端只能看到掩码；
+     * 任何响应与日志都不得回显明文（实施计划 U-16 专项验证）。
+     */
+    private final Configuration<String> kbApiKey = key(Status.SYS_KB_SETTINGS_APIKEY)
+            .stringType()
+            .defaultValue("")
+            .desensitizedHandler(DesensitizedUtil::password)
+            .note(Status.SYS_KB_SETTINGS_APIKEY_NOTE);
+
+    /**
+     * skill <b>只读</b>工具开关（阶段 4b）。
+     *
+     * <p>控制 {@code list_skills} / {@code read_skill} 是否下发给模型。<b>默认开启</b>——它们只读，
+     * 且必须同时满足 {@link #llmSkillEnable}（skill 功能总开关）才生效。
+     */
+    private final Configuration<Boolean> llmToolSkillEnable = key(Status.SYS_LLM_SETTINGS_TOOLSKILLENABLE)
+            .booleanType()
+            .defaultValue(true)
+            .note(Status.SYS_LLM_SETTINGS_TOOLSKILLENABLE_NOTE);
+
+    /**
+     * skill <b>写</b>工具开关（阶段 4b）。
+     *
+     * <p>控制 {@code create_skill} / {@code write_skill_file} / {@code delete_skill} 是否下发给模型。
+     *
+     * <p><b>默认关闭</b>：与 {@code toolExecSqlEnable}（执行类工具）保持同一保守口径——避免「升级即
+     * 获得写权限」。开启后每次写入仍<b>必须</b>经用户二次确认。
+     */
+    private final Configuration<Boolean> llmToolSkillWriteEnable = key(Status.SYS_LLM_SETTINGS_TOOLSKILLWRITEENABLE)
+            .booleanType()
+            .defaultValue(false)
+            .note(Status.SYS_LLM_SETTINGS_TOOLSKILLWRITEENABLE_NOTE);
+
+    /**
+     * FlinkSQL 上下文注入预算（字符，P0）。
+     *
+     * <p>FlinkSQL 作业的上下文由「作业绑定 + Flink Catalog + 外部资源清单 + 参数放置规则 + 命名名册」组成，
+     * 与 Sql/SparkSQL 的「单数据源 schema」模型不同，故走<b>独立预算</b>，不与 {@code llmSchemaMaxChars} /
+     * {@code llmColumnBudgetChars} 相互挤占。属防爆上限，不是省 token 的手段。
+     */
+    private final Configuration<Integer> llmFlinkContextMaxChars = key(Status.SYS_LLM_SETTINGS_FLINKCONTEXTMAXCHARS)
+            .intType()
+            .defaultValue(6000)
+            .note(Status.SYS_LLM_SETTINGS_FLINKCONTEXTMAXCHARS_NOTE);
+
+    /**
+     * 跨数据源引用开关（P1）。
+     *
+     * <p>开启后：① 用户可用 {@code @source/<数据源>[/<库>[/<表>[.<字段>]]]}（四级渐进披露），
+     * {@code @topic/<名>}、{@code @env/<名>}；② 模型可调 {@code describe_source} 与 {@code check_name_conflict} 两个只读工具。
+     * 关闭后识别到这些引用也不展开（给出"功能未开启"提示，而非静默失效）。
+     *
+     * <p>为什么需要开关：它会把<b>其它数据源的元数据</b>带入对话（仍限本租户、且不含数据行），
+     * 属"能力扩展"而非"默认超集"，故交给管理员可逆。
+     */
+    private final Configuration<Boolean> llmMentionSourceEnable = key(Status.SYS_LLM_SETTINGS_MENTIONSOURCEENABLE)
+            .booleanType()
+            .defaultValue(true)
+            .note(Status.SYS_LLM_SETTINGS_MENTIONSOURCEENABLE_NOTE);
+
+    /**
+     * 单次对话最多展开几个 {@code @source/} 引用（P1）。
+     *
+     * <p>现网一个库可有上百张表，不限量会把上下文预算一次吃光；超出部分不展开并明确提示。
+     */
+    private final Configuration<Integer> llmMentionSourceMaxExpansions =
+            key(Status.SYS_LLM_SETTINGS_MENTIONSOURCEMAXEXPANSIONS)
+                    .intType()
+                    .defaultValue(3)
+                    .note(Status.SYS_LLM_SETTINGS_MENTIONSOURCEMAXEXPANSIONS_NOTE);
+
+    /**
+     * 单条 {@code @} 引用展开的字符上限（P1）。
+     *
+     * <p>作用于 {@code @source/} / {@code @topic/} / {@code @env/} 的每一条；总量仍由 {@code llmSchemaMaxChars} 兜底。
+     */
+    private final Configuration<Integer> llmSourceExpandMaxChars = key(Status.SYS_LLM_SETTINGS_SOURCEEXPANDMAXCHARS)
+            .intType()
+            .defaultValue(8000)
+            .note(Status.SYS_LLM_SETTINGS_SOURCEEXPANDMAXCHARS_NOTE);
+
+    /**
+     * Kafka 接入地址（P0）。
+     *
+     * <p><b>定位</b>：这是 AI Chat 生成 / 解读 FlinkSQL 时的<b>权威取值来源</b>与漂移校验基准；它
+     * <b>不会</b>自动注入到作业 DDL —— connector options 只能写在 {@code CREATE TABLE ... WITH(...)} 里。
+     * 必须使用 Flink 侧可达的 <b>INTERNAL</b> listener（29092），不是 EXTERNAL 的 29094。
+     */
+    private final Configuration<String> kafkaBootstrapServers = key(Status.SYS_KAFKA_SETTINGS_BOOTSTRAPSERVERS)
+            .stringType()
+            .defaultValue("kafka03:29092,kafka04:29092,kafka05:29092")
+            .note(Status.SYS_KAFKA_SETTINGS_BOOTSTRAPSERVERS_NOTE);
+
+    private final Configuration<String> kafkaSecurityProtocol = key(Status.SYS_KAFKA_SETTINGS_SECURITYPROTOCOL)
+            .stringType()
+            .defaultValue("PLAINTEXT")
+            .note(Status.SYS_KAFKA_SETTINGS_SECURITYPROTOCOL_NOTE);
+
+    private final Configuration<String> kafkaSaslMechanism = key(Status.SYS_KAFKA_SETTINGS_SASLMECHANISM)
+            .stringType()
+            .defaultValue("")
+            .note(Status.SYS_KAFKA_SETTINGS_SASLMECHANISM_NOTE);
+
+    private final Configuration<String> kafkaSaslUsername = key(Status.SYS_KAFKA_SETTINGS_SASLUSERNAME)
+            .stringType()
+            .defaultValue("")
+            .note(Status.SYS_KAFKA_SETTINGS_SASLUSERNAME_NOTE);
+
+    private final Configuration<String> kafkaSaslPassword = key(Status.SYS_KAFKA_SETTINGS_SASLPASSWORD)
+            .stringType()
+            .defaultValue("")
+            .desensitizedHandler(DesensitizedUtil::password)
+            .note(Status.SYS_KAFKA_SETTINGS_SASLPASSWORD_NOTE);
+
+    private final Configuration<String> kafkaDefaultScanStartupMode =
+            key(Status.SYS_KAFKA_SETTINGS_DEFAULTSCANSTARTUPMODE)
+                    .stringType()
+                    .defaultValue("latest-offset")
+                    .note(Status.SYS_KAFKA_SETTINGS_DEFAULTSCANSTARTUPMODE_NOTE);
+
+    private final Configuration<String> kafkaConsumerGroupPrefix = key(Status.SYS_KAFKA_SETTINGS_CONSUMERGROUPPREFIX)
+            .stringType()
+            .defaultValue("traccar_")
+            .note(Status.SYS_KAFKA_SETTINGS_CONSUMERGROUPPREFIX_NOTE);
+
+    private final Configuration<Boolean> kafkaTopicMetadataEnable = key(Status.SYS_KAFKA_SETTINGS_TOPICMETADATAENABLE)
+            .booleanType()
+            .defaultValue(true)
+            .note(Status.SYS_KAFKA_SETTINGS_TOPICMETADATAENABLE_NOTE);
+
     private final Configuration<Boolean> metricsSysEnable = key(Status.SYS_METRICS_SETTINGS_SYS_ENABLE)
             .booleanType()
             .defaultValue(false)
@@ -332,6 +836,27 @@ public class SystemConfiguration {
             .defaultValue(true)
             .note(Status.SYS_RESOURCE_SETTINGS_PATH_STYLE_ACCESS_NOTE);
 
+    /**
+     * 语义层（P2）：是否开放「数据开发页 - dbt 语义项目在线编辑」。
+     *
+     * <p>默认 false。关闭时接口直接返回 403、前端不渲染 tab；与 HDFS 连通性无关。
+     */
+    private final Configuration<Boolean> semanticEnable = key(Status.SYS_SEMANTIC_SETTINGS_ENABLE)
+            .booleanType()
+            .defaultValue(false)
+            .note(Status.SYS_SEMANTIC_SETTINGS_ENABLE_NOTE);
+
+    /**
+     * 语义层（P2）：语义根路径（HDFS 绝对路径）。
+     *
+     * <p>与 JupyterLab 侧 `webhdfs.yml:sematic_base` 必须一致（现网 `/semantic`）；
+     * 其下每个一级目录即一个 dbt 语义项目，`_published/**` 只读。
+     */
+    private final Configuration<String> semanticHdfsBasePath = key(Status.SYS_SEMANTIC_SETTINGS_HDFS_BASE_PATH)
+            .stringType()
+            .defaultValue("/semantic")
+            .note(Status.SYS_SEMANTIC_SETTINGS_HDFS_BASE_PATH_NOTE);
+
     private final Configuration<Boolean> isOwnerReference = key(Status.SYS_ENV_SETTINGS_IS_OWNER_REFERENCE)
             .booleanType()
             .defaultValue(true)
@@ -402,6 +927,374 @@ public class SystemConfiguration {
 
     public boolean isUseRestAPI() {
         return Asserts.isNull(useRestAPI.getValue()) ? useRestAPI.getDefaultValue() : useRestAPI.getValue();
+    }
+
+    // ==================== AI / LLM ====================
+
+    public boolean isLlmEnable() {
+        return Asserts.isNull(llmEnable.getValue()) ? llmEnable.getDefaultValue() : llmEnable.getValue();
+    }
+
+    public String getLlmBaseUrl() {
+        return llmBaseUrl.getValue();
+    }
+
+    public String getLlmCompletionsPath() {
+        return llmCompletionsPath.getValue();
+    }
+
+    /** 仅服务端使用：返回真实 API Key，禁止通过任何接口对外返回 */
+    public String getLlmApiKey() {
+        return llmApiKey.getValue();
+    }
+
+    public String getLlmModel() {
+        return llmModel.getValue();
+    }
+
+    /** @return 多 LLM 实例配置（JSON 串；空串表示未启用多实例，行为等同于单 profile） */
+    public String getLlmProfiles() {
+        return Asserts.isNull(llmProfiles.getValue()) ? llmProfiles.getDefaultValue() : llmProfiles.getValue();
+    }
+
+    public int getLlmTimeout() {
+        return Asserts.isNull(llmTimeout.getValue()) ? llmTimeout.getDefaultValue() : llmTimeout.getValue();
+    }
+
+    public int getLlmMaxTokens() {
+        return Asserts.isNull(llmMaxTokens.getValue()) ? llmMaxTokens.getDefaultValue() : llmMaxTokens.getValue();
+    }
+
+    public boolean isLlmSqlVerifyEnable() {
+        return Asserts.isNull(llmSqlVerifyEnable.getValue())
+                ? llmSqlVerifyEnable.getDefaultValue()
+                : llmSqlVerifyEnable.getValue();
+    }
+
+    public int getLlmSqlVerifyMaxRetry() {
+        return Asserts.isNull(llmSqlVerifyMaxRetry.getValue())
+                ? llmSqlVerifyMaxRetry.getDefaultValue()
+                : llmSqlVerifyMaxRetry.getValue();
+    }
+
+    public int getLlmSqlExecTimeout() {
+        return Asserts.isNull(llmSqlExecTimeout.getValue())
+                ? llmSqlExecTimeout.getDefaultValue()
+                : llmSqlExecTimeout.getValue();
+    }
+
+    public boolean isLlmSqlExecAllowMetadata() {
+        return Asserts.isNull(llmSqlExecAllowMetadata.getValue())
+                ? llmSqlExecAllowMetadata.getDefaultValue()
+                : llmSqlExecAllowMetadata.getValue();
+    }
+
+    public boolean isLlmSqlExecAllowDml() {
+        return Asserts.isNull(llmSqlExecAllowDml.getValue())
+                ? llmSqlExecAllowDml.getDefaultValue()
+                : llmSqlExecAllowDml.getValue();
+    }
+
+    public boolean isLlmSqlExecAllowDdl() {
+        return Asserts.isNull(llmSqlExecAllowDdl.getValue())
+                ? llmSqlExecAllowDdl.getDefaultValue()
+                : llmSqlExecAllowDdl.getValue();
+    }
+
+    public int getLlmSchemaTableDetailThreshold() {
+        return Asserts.isNull(llmSchemaTableDetailThreshold.getValue())
+                ? llmSchemaTableDetailThreshold.getDefaultValue()
+                : llmSchemaTableDetailThreshold.getValue();
+    }
+
+    public int getLlmSchemaRecallTopN() {
+        return Asserts.isNull(llmSchemaRecallTopN.getValue())
+                ? llmSchemaRecallTopN.getDefaultValue()
+                : llmSchemaRecallTopN.getValue();
+    }
+
+    /** @return schema 上下文区块的字符总上限（阶段 1a 起可配置） */
+    public int getLlmSchemaMaxChars() {
+        return Asserts.isNull(llmSchemaMaxChars.getValue())
+                ? llmSchemaMaxChars.getDefaultValue()
+                : llmSchemaMaxChars.getValue();
+    }
+
+    /** @return 逐表累加字段详情的字符预算上限（阶段 1a 起可配置） */
+    public int getLlmColumnBudgetChars() {
+        return Asserts.isNull(llmColumnBudgetChars.getValue())
+                ? llmColumnBudgetChars.getDefaultValue()
+                : llmColumnBudgetChars.getValue();
+    }
+
+    /** @return 编辑区代码块的字符上限（阶段 1a 起可配置） */
+    public int getLlmEditorSqlMaxChars() {
+        return Asserts.isNull(llmEditorSqlMaxChars.getValue())
+                ? llmEditorSqlMaxChars.getDefaultValue()
+                : llmEditorSqlMaxChars.getValue();
+    }
+
+    public int getLlmRateLimitPerMinute() {
+        return Asserts.isNull(llmRateLimitPerMinute.getValue())
+                ? llmRateLimitPerMinute.getDefaultValue()
+                : llmRateLimitPerMinute.getValue();
+    }
+
+    public int getLlmMaxRequestsPerDay() {
+        return Asserts.isNull(llmMaxRequestsPerDay.getValue())
+                ? llmMaxRequestsPerDay.getDefaultValue()
+                : llmMaxRequestsPerDay.getValue();
+    }
+
+    public int getLlmMaxTokensPerDay() {
+        return Asserts.isNull(llmMaxTokensPerDay.getValue())
+                ? llmMaxTokensPerDay.getDefaultValue()
+                : llmMaxTokensPerDay.getValue();
+    }
+
+    public boolean isLlmAuditEnable() {
+        return Asserts.isNull(llmAuditEnable.getValue()) ? llmAuditEnable.getDefaultValue() : llmAuditEnable.getValue();
+    }
+
+    public boolean isLlmStream() {
+        return Asserts.isNull(llmStream.getValue()) ? llmStream.getDefaultValue() : llmStream.getValue();
+    }
+
+    /** @return 是否允许模型调用只读工具（关闭后行为与阶段 1a 一致） */
+    public boolean isLlmToolCallEnable() {
+        return Asserts.isNull(llmToolCallEnable.getValue())
+                ? llmToolCallEnable.getDefaultValue()
+                : llmToolCallEnable.getValue();
+    }
+
+    /**
+     * @return 是否开启 Craft 模式（阶段 2）：开启后 AI 可整块改写编辑器内容，默认关闭。
+     */
+    public boolean isLlmCraftModeEnable() {
+        return Asserts.isNull(llmCraftModeEnable.getValue())
+                ? llmCraftModeEnable.getDefaultValue()
+                : llmCraftModeEnable.getValue();
+    }
+
+    /**
+     * @return 是否开启 Skills 能力（阶段 4a）：开启后注入「可见 skill 清单」并支持 {@code @skill/<名>}，默认关闭。
+     */
+    public boolean isLlmSkillEnable() {
+        return Asserts.isNull(llmSkillEnable.getValue()) ? llmSkillEnable.getDefaultValue() : llmSkillEnable.getValue();
+    }
+
+    /** @return skill 注入预算（字符，阶段 4a）：防爆上限，独立于 schema / 字段预算 */
+    public int getLlmSkillMaxChars() {
+        return Asserts.isNull(llmSkillMaxChars.getValue())
+                ? llmSkillMaxChars.getDefaultValue()
+                : llmSkillMaxChars.getValue();
+    }
+
+    /** @return 是否开启知识库检索能力（2026-10-27）：关闭时 {@code kb_search} 不下发、{@code @kb} 不注入 */
+    public boolean isKbEnable() {
+        return Asserts.isNull(kbEnable.getValue()) ? kbEnable.getDefaultValue() : kbEnable.getValue();
+    }
+
+    /** @return 知识库检索结果注入预算（字符，2026-10-27）：一次对话中知识库内容的防爆上限 */
+    public int getKbMaxChars() {
+        return Asserts.isNull(kbMaxChars.getValue()) ? kbMaxChars.getDefaultValue() : kbMaxChars.getValue();
+    }
+
+    /** @return kb-service 基础地址（仅服务端使用，浏览器永不直连） */
+    public String getKbBaseUrl() {
+        String value = kbBaseUrl.getValue();
+        return StrUtil.isBlank(value) ? kbBaseUrl.getDefaultValue() : StrUtil.trim(value);
+    }
+
+    /**
+     * @return kb-service 访问密钥。
+     *
+     * <p>⚠️ 不得写入日志、不得通过任何接口回显；配置页读到的是脱敏值。
+     */
+    public String getKbApiKey() {
+        String value = kbApiKey.getValue();
+        return value == null ? kbApiKey.getDefaultValue() : StrUtil.trim(value);
+    }
+
+    /** @return 是否向模型下发 skill <b>只读</b>工具（阶段 4b；需 {@link #isLlmSkillEnable()} 同时为真） */
+    public boolean isLlmToolSkillEnable() {
+        return Asserts.isNull(llmToolSkillEnable.getValue())
+                ? llmToolSkillEnable.getDefaultValue()
+                : llmToolSkillEnable.getValue();
+    }
+
+    /** @return 是否向模型下发 skill <b>写</b>工具（阶段 4b，默认关闭；每次写入仍需用户二次确认） */
+    public boolean isLlmToolSkillWriteEnable() {
+        return Asserts.isNull(llmToolSkillWriteEnable.getValue())
+                ? llmToolSkillWriteEnable.getDefaultValue()
+                : llmToolSkillWriteEnable.getValue();
+    }
+
+    /** @return 是否开放触碰业务数据行的 sample_rows 工具 */
+    public boolean isLlmToolSampleRowsEnable() {
+        return Asserts.isNull(llmToolSampleRowsEnable.getValue())
+                ? llmToolSampleRowsEnable.getDefaultValue()
+                : llmToolSampleRowsEnable.getValue();
+    }
+
+    /** @return 一次对话最多进行多少轮工具调用 */
+    public int getLlmToolCallMaxRounds() {
+        return Asserts.isNull(llmToolCallMaxRounds.getValue())
+                ? llmToolCallMaxRounds.getDefaultValue()
+                : llmToolCallMaxRounds.getValue();
+    }
+
+    /** @return 单个工具的执行超时（秒） */
+    public int getLlmToolTimeoutSeconds() {
+        return Asserts.isNull(llmToolTimeoutSeconds.getValue())
+                ? llmToolTimeoutSeconds.getDefaultValue()
+                : llmToolTimeoutSeconds.getValue();
+    }
+
+    /** @return 执行类（写）工具的超时（秒） */
+    public int getLlmToolWriteTimeoutSeconds() {
+        return Asserts.isNull(llmToolWriteTimeoutSeconds.getValue())
+                ? llmToolWriteTimeoutSeconds.getDefaultValue()
+                : llmToolWriteTimeoutSeconds.getValue();
+    }
+
+    /** @return 是否开放执行类工具 exec_sql（阶段 2c-1，默认关闭） */
+    public boolean isLlmToolExecSqlEnable() {
+        return Asserts.isNull(llmToolExecSqlEnable.getValue())
+                ? llmToolExecSqlEnable.getDefaultValue()
+                : llmToolExecSqlEnable.getValue();
+    }
+
+    /** @return 自动纠错的最大尝试次数（阶段 2c-2，默认 3） */
+    public int getLlmToolAutoRepairMaxAttempts() {
+        return Asserts.isNull(llmToolAutoRepairMaxAttempts.getValue())
+                ? llmToolAutoRepairMaxAttempts.getDefaultValue()
+                : llmToolAutoRepairMaxAttempts.getValue();
+    }
+
+    /** @return 单轮最多执行的工具调用数（默认 16） */
+    public int getLlmToolCallMaxPerRound() {
+        return Asserts.isNull(llmToolCallMaxPerRound.getValue())
+                ? llmToolCallMaxPerRound.getDefaultValue()
+                : llmToolCallMaxPerRound.getValue();
+    }
+
+    /** @return 一次对话累计最多执行的工具调用数（默认 120） */
+    public int getLlmToolCallMaxTotal() {
+        return Asserts.isNull(llmToolCallMaxTotal.getValue())
+                ? llmToolCallMaxTotal.getDefaultValue()
+                : llmToolCallMaxTotal.getValue();
+    }
+
+    /** @return 单个工具结果的回灌字符上限（默认 24000） */
+    public int getLlmToolResultMaxChars() {
+        return Asserts.isNull(llmToolResultMaxChars.getValue())
+                ? llmToolResultMaxChars.getDefaultValue()
+                : llmToolResultMaxChars.getValue();
+    }
+
+    /** @return 带入模型的历史消息条数（默认 10） */
+    public int getLlmHistoryMaxMessages() {
+        return Asserts.isNull(llmHistoryMaxMessages.getValue())
+                ? llmHistoryMaxMessages.getDefaultValue()
+                : llmHistoryMaxMessages.getValue();
+    }
+
+    /** @return 工具轮是否保留 thinking（默认关闭，详见字段注释） */
+    public boolean isLlmToolThinkingEnabled() {
+        return Asserts.isNull(llmToolThinkingEnabled.getValue())
+                ? llmToolThinkingEnabled.getDefaultValue()
+                : llmToolThinkingEnabled.getValue();
+    }
+
+    /** @return FlinkSQL 上下文区块的字符预算上限（P0） */
+    public int getLlmFlinkContextMaxChars() {
+        return Asserts.isNull(llmFlinkContextMaxChars.getValue())
+                ? llmFlinkContextMaxChars.getDefaultValue()
+                : llmFlinkContextMaxChars.getValue();
+    }
+
+    /** @return 是否开启跨数据源引用（{@code @source/} / {@code @topic/} / {@code @env/} 与相关工具，P1） */
+    public boolean isLlmMentionSourceEnable() {
+        return Asserts.isNull(llmMentionSourceEnable.getValue())
+                ? llmMentionSourceEnable.getDefaultValue()
+                : llmMentionSourceEnable.getValue();
+    }
+
+    /** @return 单次对话最多展开的 {@code @source/} 个数（P1） */
+    public int getLlmMentionSourceMaxExpansions() {
+        return Asserts.isNull(llmMentionSourceMaxExpansions.getValue())
+                ? llmMentionSourceMaxExpansions.getDefaultValue()
+                : llmMentionSourceMaxExpansions.getValue();
+    }
+
+    /** @return 单条 {@code @} 引用展开的字符上限（P1） */
+    public int getLlmSourceExpandMaxChars() {
+        return Asserts.isNull(llmSourceExpandMaxChars.getValue())
+                ? llmSourceExpandMaxChars.getDefaultValue()
+                : llmSourceExpandMaxChars.getValue();
+    }
+
+    /**
+     * @return Kafka 接入地址（bootstrap.servers），AI Chat 生成 / 解读 FlinkSQL 的权威取值来源。
+     *     <p>P0 只把它作为<b>上下文事实与校验基准</b>注入 prompt，不会改写作业 DDL。
+     */
+    public String getKafkaBootstrapServers() {
+        return Asserts.isNullString(kafkaBootstrapServers.getValue())
+                ? kafkaBootstrapServers.getDefaultValue()
+                : kafkaBootstrapServers.getValue();
+    }
+
+    /** @return Kafka security.protocol */
+    public String getKafkaSecurityProtocol() {
+        return Asserts.isNullString(kafkaSecurityProtocol.getValue())
+                ? kafkaSecurityProtocol.getDefaultValue()
+                : kafkaSecurityProtocol.getValue();
+    }
+
+    /** @return Kafka sasl.mechanism */
+    public String getKafkaSaslMechanism() {
+        return Asserts.isNullString(kafkaSaslMechanism.getValue())
+                ? kafkaSaslMechanism.getDefaultValue()
+                : kafkaSaslMechanism.getValue();
+    }
+
+    /** @return Kafka sasl.jaas.config 用户名 */
+    public String getKafkaSaslUsername() {
+        return Asserts.isNullString(kafkaSaslUsername.getValue())
+                ? kafkaSaslUsername.getDefaultValue()
+                : kafkaSaslUsername.getValue();
+    }
+
+    /**
+     * @return Kafka sasl.jaas.config 密码。
+     *     <p>⚠️ <b>禁止注入 prompt</b>：仅用于后续（P1）连接 broker；接口层已脱敏。
+     */
+    public String getKafkaSaslPassword() {
+        return Asserts.isNullString(kafkaSaslPassword.getValue())
+                ? kafkaSaslPassword.getDefaultValue()
+                : kafkaSaslPassword.getValue();
+    }
+
+    /** @return 生成 FlinkSQL 时 scan.startup.mode 的建议值（latest-offset / earliest-offset） */
+    public String getKafkaDefaultScanStartupMode() {
+        return Asserts.isNullString(kafkaDefaultScanStartupMode.getValue())
+                ? kafkaDefaultScanStartupMode.getDefaultValue()
+                : kafkaDefaultScanStartupMode.getValue();
+    }
+
+    /** @return 生成 properties.group.id 的命名前缀建议 */
+    public String getKafkaConsumerGroupPrefix() {
+        return Asserts.isNullString(kafkaConsumerGroupPrefix.getValue())
+                ? kafkaConsumerGroupPrefix.getDefaultValue()
+                : kafkaConsumerGroupPrefix.getValue();
+    }
+
+    /** @return 是否允许 AI 读取 Kafka topic 元数据（P1 预留，P0 不连接 broker） */
+    public boolean isKafkaTopicMetadataEnable() {
+        return Asserts.isNull(kafkaTopicMetadataEnable.getValue())
+                ? kafkaTopicMetadataEnable.getDefaultValue()
+                : kafkaTopicMetadataEnable.getValue();
     }
 
     public int GetJobIdWaitValue() {

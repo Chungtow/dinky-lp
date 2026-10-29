@@ -1,0 +1,665 @@
+/*
+ *
+ *  Licensed to the Apache Software Foundation (ASF) under one or more
+ *  contributor license agreements.  See the NOTICE file distributed with
+ *  this work for additional information regarding copyright ownership.
+ *  The ASF licenses this file to You under the Apache License, Version 2.0
+ *  (the "License"); you may not use this file except in compliance with
+ *  the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ *
+ */
+
+import { getData, postAll } from '@/services/api';
+import { queryDataByParams } from '@/services/BusinessCrud';
+import { API_CONSTANTS } from '@/services/endpoints';
+import { buildTenantHeader } from '@/utils/function';
+
+/**
+ * ⚠️ 本文件含**原生 fetch**（对话流 / 写确认 / 中断），它们**绕开 umi-request 拦截器**：
+ * 每个 fetch 的 headers **必须**合并 `buildTenantHeader()`，否则后端租户上下文为空 →
+ * 元数据查询静默返回空（「数据源不存在」/「没有可用的数据源快照」/`@source/` 渲染失败）。
+ * 事故与修复见 docs/plan/20261018-Dinky AI Chat 租户请求头丢失修复…。
+ */
+
+export type AiChatRole = 'user' | 'assistant';
+
+/** 单条消息的 SQL 校验状态（阶段 0：正确性闭环） */
+export type AiChatVerify = {
+  status?: 'verifying' | 'verified' | 'failed' | 'rejected' | 'retrying';
+  sql?: string;
+  success?: boolean;
+  executed?: boolean;
+  rejected?: boolean;
+  rowCount?: number;
+  costMs?: number;
+  error?: string;
+};
+
+/**
+ * 一次工具调用的展示状态（阶段 1b：只读工具）。
+ *
+ * <p>后端按 toolCallId 先后下发 toolCall（已发起）与 toolResult（已结束）两帧，前端据此把同一条
+ * 记录从"执行中"更新为"成功/失败"。
+ */
+export type AiChatToolStep = {
+  toolCallId: string;
+  name: string;
+  argsSummary?: string;
+  status: 'running' | 'success' | 'failed';
+  costMs?: number;
+  error?: string;
+  /** 阶段 2c-1：写类工具（exec_sql）回报的受影响行数（只读工具无此值） */
+  affectedRows?: number;
+  /** 阶段 2c-1：写类工具的风险摘要（审计用，可选展示） */
+  riskSummary?: string;
+  /** 阶段 2c-2：这是第几次自动纠错尝试（0 / 无值表示不适用） */
+  attempt?: number;
+  /** 阶段 2c-2：是否已达自动纠错上限（到达后已停止重试） */
+  repairExhausted?: boolean;
+};
+
+/**
+ * 变更风险信息（阶段 2c-1）。
+ *
+ * <p><b>注意</b>：{@code modelEstimate} 是 AI 自报的估计值，<b>不是</b>精确值，展示时必须标注「AI 估计」；
+ * 真实受影响行数在工具执行结果（{@code AiChatToolStep.affectedRows}）里回报。
+ */
+export type AiChatChangeRisk = {
+  /** 语句类型：DML / DDL */
+  sqlType?: string;
+  /** 是否为结构变更（DDL） */
+  ddl?: boolean;
+  /** 目标对象（表名，后端粗解析；可能为空） */
+  target?: string;
+  /** AI 自报的影响范围（估计值） */
+  modelEstimate?: string;
+};
+
+/**
+ * 写语句二次确认请求（阶段 2c-0）。
+ *
+ * <p>后端在 AI 生成 DML / DDL 且管理员已开放该类语句时下发；前端弹确认框，用户拍板后经
+ * {@code /api/aiChat/confirm} 回传。**未确认则不执行**。
+ */
+export type AiChatConfirmFrame = {
+  runId: string;
+  /**
+   * 确认类型（阶段 4b）：{@code sql} = 写语句；{@code skill_file} = 写 skill 文件；
+   * {@code skill_delete} = 删除 skill。**缺省按 sql 处理**（兼容旧后端）。
+   *
+   * <p>阶段 4b 起「写确认」通道被 skill 写工具复用，前端必须按 kind 分支渲染——
+   * 否则会拿 SQL 的字段去渲染 skill 载荷，表现为「内容空白 + 语句类型 UNKNOWN」。
+   */
+  kind?: 'sql' | 'skill_file' | 'skill_delete' | string;
+  /** 确认框标题（kind 非 sql 时由后端下发，如「将写入 skill xxx 的文件 yyy」） */
+  title?: string;
+  /** 操作目标名（kind=skill_* 时为 skill 名） */
+  targetName?: string;
+  /** 目标相对路径（kind=skill_file，如 SKILL.md / references/x.md） */
+  relativePath?: string;
+  /** 变更前内容（kind=skill_file；新建文件时为空） */
+  beforeContent?: string;
+  /** 变更后内容（kind=skill_file，供用户核对将写入什么） */
+  afterContent?: string;
+  /** 是否要求手输目标名才能确认（kind=skill_delete，防误删） */
+  requireTypedName?: boolean;
+  /**
+   * 该确认框是否支持「仅应用到编辑区」（2026-10-29，后端对 {@code kind=skill_file} 下发）。
+   *
+   * <p>支持时点确认只把 {@code afterContent} 放进编辑器（未保存），不落盘。
+   */
+  applyToEditorSupported?: boolean;
+  /** 待执行的写语句原文（kind=sql 时使用） */
+  sql: string;
+  /** 语句类型：DML / DDL（kind=sql 时使用） */
+  sqlType: string;
+  /** 确认等待超时（秒），超时按拒绝 */
+  timeoutSeconds?: number;
+  /** 阶段 2c-1：变更风险信息（语句类型 / 是否 DDL / 目标对象 / AI 估计影响） */
+  risk?: AiChatChangeRisk;
+  /** 阶段 2c-2：这是第几次尝试（自动纠错重试时 >1） */
+  attempt?: number;
+  /** 阶段 2c-2：上一次失败的原因（重试时展示，帮助用户判断是否还执行） */
+  previousError?: string;
+};
+
+/**
+ * 本轮对话的结束信息（20261025：后端 {@code done} 帧）。
+ *
+ * <p><b>为什么需要它</b>：此前流只靠连接关闭表示结束，前端既无法区分「正常完成 / 失败 / 用户中断」，
+ * 也没有可展示的完结标志——用户看着光标停住、按钮变回发送，仍不确定"是不是答完了"。
+ * 业界通行做法是给流一个显式终止事件（OpenAI 的 {@code data: [DONE]}、Anthropic 的
+ * {@code message_stop}），这里用结构化 {@code done} 帧承载状态与用量。
+ */
+export type AiChatFinish = {
+  /** completed / failed / cancelled */
+  status: 'completed' | 'failed' | 'cancelled' | string;
+  /** 本轮总耗时（毫秒） */
+  durationMs?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  /** 本轮实际执行的工具调用数 */
+  toolCallCount?: number;
+  /** 失败或中断原因（仅在异常态下发） */
+  reason?: string;
+};
+
+/** 页面内的一条消息（reasoning 为模型的思考过程，仅部分模型提供） */
+export type AiChatMessage = {
+  role: AiChatRole;
+  content: string;
+  reasoning?: string;
+  verify?: AiChatVerify;
+  /** 工具调用过程；只能按 toolCallId 追加或就地更新，不做重排 */
+  tools?: AiChatToolStep[];
+  /** 本轮结束信息；仅最后一条 assistant 消息在收到 done 帧后写入，历史回放无此字段 */
+  finish?: AiChatFinish;
+};
+
+/**
+ * LLM 实例（阶段 3：多 LLM 实例配置）。
+ *
+ * <p>后端逐项**脱敏**后下发：只含 {@code hasApiKey} 布尔，**不含 apiKey 明文**。
+ */
+export type AiChatProfileItem = {
+  id: string;
+  name?: string;
+  model?: string;
+  baseUrl?: string;
+  hasApiKey?: boolean;
+  /** 该实例是否支持工具调用；false 时提示「将退化为纯问答」 */
+  supportsTools?: boolean;
+};
+
+/** 前端可用的 AI 配置（不含密钥） */
+export type AiChatConfig = {
+  enable?: boolean;
+  model?: string;
+  baseUrl?: string;
+  hasApiKey?: boolean;
+  /** Craft 模式是否开启（管理员配置）；未开启时前端不渲染模式切换控件 */
+  craftModeEnable?: boolean;
+  /** 默认 LLM 实例 id（阶段 3）：未选择时使用它 */
+  defaultProfileId?: string;
+  /** 可用的 LLM 实例列表（阶段 3，不含密钥） */
+  profiles?: AiChatProfileItem[];
+  /** 是否开启 Skills 能力（阶段 4a）：决定输入框 @ 候选里是否提供 skill */
+  skillEnable?: boolean;
+  /**
+   * 知识库检索能力开关（知识库 @kb 接入 v1.0）。
+   *
+   * <p>只影响「{@code @} 候选里是否提供 {@code @kb/}」；越权拦截始终在服务端，
+   * 前端拿到 kbEnable=true 也不代表能搜任意库。
+   */
+  kbEnable?: boolean;
+};
+
+/**
+ * {@code @} 引用项（与后端 {@code AiChatMention} 一一对应）。
+ *
+ * <p>type 预留 knowledge：后续「语料包」能力可直接复用本结构，前端无需改协议。
+ */
+export type AiChatMentionItem = {
+  /**
+   * 引用类型。
+   *
+   * <p>P1 新增：{@code source}（跨数据源全限定引用，名字存储为 {@code 数据源/库/表}
+   * 路径）、{@code topic}（零连接版 Kafka topic）、{@code env}（FlinkSQL 环境任务）。
+   * 与后端 {@code MentionType} 逐一对应。
+   */
+  type:
+    | 'table'
+    | 'job'
+    | 'selection'
+    | 'knowledge'
+    | 'column'
+    | 'skill'
+    | 'doc'
+    | 'source'
+    | 'topic'
+    | 'env'
+    /**
+     * P3b：语义资产引用。{@code name} 存**路径式句柄**（{@code project} 或 {@code project/asset}），
+     * 与后端 {@code MentionType.SEMANTIC} 及 {@code AiChatMention.name} 的存法一致（D19）。
+     */
+    | 'semantic'
+    /**
+     * 知识库范围引用（{@code @kb/<code>}，知识库 @kb 接入 v1.0）。
+     *
+     * <p><b>它是范围句柄，不是内容句柄</b>：只声明"在哪个库里检索"，正文由 {@code kb_search}
+     * 工具召回。{@code name} 存库<b>编码</b>（{@code c_} + 8 hex），不存显示名
+     * （显示名可改且可能重名）。
+     */
+    | 'kb'
+    /**
+     * 仅候选面板使用的"一级前缀入口"（`@` → `@source/` 等）：
+     * 选中后只把前缀补进输入框并保持浮层打开，不生成 chip、也不进入请求体。
+     */
+    | 'prefix';
+  schemaName?: string;
+  name: string;
+  /**
+   * 语义资产的类别（来自索引 {@code names[].type}）。
+   *
+   * <p>同名的表与指标需要生成长式句柄区分（UAT 2026-10-22 / U23），短名不足以定位。
+   */
+  assetType?: 'table' | 'metric';
+  /**
+   * 字段名（type=column 时有效）。
+   *
+   * <p>column 类型下 name 存的是<b>表名</b>而非字段名：输入框里写 {@code @表名.字段}，
+   * 而「删掉 @ 文本时同步移除 chip」的判定（value.includes('@' + name)）依然成立。
+   */
+  columnName?: string;
+  /** 片段正文（selection / job 携带），仅编辑器文本，不含业务数据行 */
+  content?: string;
+  /**
+   * 仅候选面板使用：该候选是「可继续下钻的中间层级」（数据源 / 库 / 语义项目）。
+   *
+   * <p>为 {@code true} 时，选中不会生成 chip，而是把路径补成 {@code xx/} 并保持浮层打开，
+   * 由解析器自动给出下一级候选（UAT 2026-10-23：source → 库 → 表、semantic → 资产）。
+   * 该字段只在本地判定用，**不进请求体**（后端 {@code AiChatMention} 无此字段）。
+   */
+  chainable?: boolean;
+};
+
+/** 对话请求体：只携带元数据定位信息，绝不携带业务数据 */
+export type AiChatRequestBody = {
+  /**
+   * 动作（阶段 2b 新增 FIX_SQL / REWRITE_SQL）：
+   * TEXT_TO_SQL（取数）/ EXPLAIN（解释）/ FIX_SQL（基于最近报错修复选中 SQL）/
+   * REWRITE_SQL（综合优化改写选中 SQL）。后两者单轮产出、**不执行**。
+   */
+  action?: 'TEXT_TO_SQL' | 'EXPLAIN' | 'FIX_SQL' | 'REWRITE_SQL';
+  message?: string;
+  history?: { role: string; content: string }[];
+  sessionId?: string;
+  databaseId?: number;
+  schemaName?: string;
+  tableName?: string;
+  dialect?: string;
+  sql?: string;
+  /** 当前作业 id（阶段 1.0 已在使用，此前类型漏声明） */
+  taskId?: number;
+  /** 编辑区选中片段：非空时后端优先采用它，而非 sql 全文（阶段 1a：1.0.4） */
+  selectedSql?: string;
+  /** 当前作业最近一次执行报错原文（FIX_SQL 用；后端 {@code AiChatRequest.executionError} 同名字段） */
+  executionError?: string;
+  /** 上下文范围档位（阶段 1a：1.1） */
+  contextScope?: 'current' | 'all' | 'custom';
+  /** custom 档位下勾选的表名 */
+  customTables?: string[];
+  /** {@code @} 显式引用项：最高优先级，后端不做预算裁剪 */
+  mentions?: AiChatMentionItem[];
+  /**
+   * 对话模式（阶段 2）：{@code ask}（默认，只回答不触碰编辑器）/ {@code craft}（可整块改写编辑器）。
+   *
+   * <p>Craft 需管理员开启 {@code llm.craftModeEnable} 后才下发；未开启时后端一律按 ask 处理——
+   * 即「未授权即无能力」，安全性不依赖前端是否隐藏控件。
+   */
+  mode?: 'ask' | 'craft';
+  /**
+   * LLM 实例 id（阶段 3）：缺省 / 传不存在的值 → 后端回落默认实例。
+   *
+   * <p>不传时行为与改造前完全一致（评测脚本即不传）。
+   */
+  profileId?: string;
+  /**
+   * P3b：项目级语义资产常驻（D17）。
+   *
+   * <p>语义项目名（不含 {@code /}）：非空时后端把该已发布项目的**资产清单**
+   * （表名 + 指标名 + 一句话口径）常驻进上下文；不传等价于关闭。
+   * 单资产精确引用走 {@code mentions} 里的 {@code type='semantic'}。
+   */
+  semanticProject?: string;
+  /**
+   * 批次 E：左侧栏「知识库」tab 当前选中的库 = 本轮**默认检索范围**。
+   *
+   * <p>非空时后端校验可见性后，把它写进注入提示词（"默认在本库检索"）并作为
+   * {@code kb_search} 未传 collection 时的默认 filter。显式 {@code @kb/} 永远优先；
+   * 不可见（停用/撤权/换租户）时显式拒绝并留痕 `kb_denied`，**不**降级为"全部可见库"。
+   */
+  defaultCollection?: string;
+  /**
+   * 批次 F：默认绑定技能的 id（左侧技能树选中 / 正在编辑的 skill 文件所属技能）。
+   *
+   * <p>非空时后端把该技能的「名字 + 说明 + 文件路径清单」注入提示词（**不注入正文**，
+   * 正文由模型按需 {@code read_skill}）；不可见时显式拒绝，不降级为"整个可用技能清单"。
+   */
+  defaultSkillId?: number;
+  /**
+   * P4 一期：上下文指纹（`ctx_` + 8 位十六进制）。
+   *
+   * <p>由 `aiChatContext.buildFingerprint` 按「本轮全部绑定来源」同步计算，后端据此判断
+   * 是否需要按首轮重新注入 schema / 语义清单（切 tab、换语义项目时 sessionId 并未变化）。
+   * 不传 = 旧行为（只按 sessionId 是否为空判断首轮）。
+   */
+  contextFingerprint?: string;
+};
+
+/**
+ * 拉取指定表的字段（阶段 2 前置：字段级 {@code @表.} 引用）。
+ *
+ * <p>复用注册中心现成接口 {@code /api/database/listColumns}——<b>不新增后端接口</b>.
+ */
+export const listTableColumns = async (
+  databaseId: number,
+  schemaName: string,
+  tableName: string
+): Promise<any[]> => {
+  const res = await queryDataByParams(API_CONSTANTS.DATASOURCE_GET_COLUMNS_BY_TABLE, {
+    id: databaseId,
+    schemaName,
+    tableName
+  });
+  return (res?.data ?? res ?? []) as any[];
+};
+
+/**
+ * 简单字符串 hash（djb2）。
+ *
+ * <p><b>仅用于审计比对</b>（判断改动前后是否为同一内容），不用于任何安全场景。
+ */
+export const hashText = (text: string): string => {
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) {
+    h = ((h << 5) + h + text.charCodeAt(i)) | 0;
+  }
+  return (h >>> 0).toString(16);
+};
+
+/**
+ * 上报 Craft 写入审计（阶段 2 T2-5）。
+ *
+ * <p>只上报 hash 与字符数变化，<b>不上传代码正文</b>：既避免审计表膨胀，
+ * 也避免作业代码进入后端存储造成额外泄露面。
+ *
+ * <p>审计是<b>旁路</b>：上报失败静默吞掉，绝不影响用户已经完成的改写。
+ */
+export const reportCraftWrite = async (params: {
+  taskId?: number;
+  sessionId?: string;
+  before: string;
+  after: string;
+}): Promise<void> => {
+  try {
+    // 后端是 @PostMapping + @RequestBody；此前用 queryDataByParams（GET）→ 每次采纳都会
+    // 405 "Request method 'GET' not supported"，被全局 errorHandler 弹成「服务器错误」。
+    await postAll(API_CONSTANTS.AI_CHAT_WRITE_AUDIT, {
+      taskId: params.taskId,
+      sessionId: params.sessionId,
+      mode: 'craft',
+      beforeHash: hashText(params.before),
+      afterHash: hashText(params.after),
+      chars: params.after.length - params.before.length
+    });
+  } catch (e) {
+    // 旁路失败：不打扰用户，审计缺失可接受，写能力不可用不可接受
+  }
+};
+
+export const getAiChatConfig = async (): Promise<AiChatConfig> => {
+  const res = await getData(API_CONSTANTS.AI_CHAT_CONFIG);
+  return (res?.data ?? {}) as AiChatConfig;
+};
+
+/**
+ * 拉取当前用户可见的 skill 列表（阶段 4a：{@code @skill/<名>} 的候选来源）。
+ *
+ * <p>仅在管理员开启 {@code sys.llm.settings.skillEnable} 时调用；description 只用于候选展示，
+ * 提交给后端时按 name 定位（正文由后端按可见性读取后注入）。
+ */
+/**
+ * P1：FlinkSQL 环境任务清单（{@code @env/} 候选来源）。
+ *
+ * <p>复用既有的 {@code /api/task/listFlinkSQLEnv}（DataStudio 的「FlinkSQL 环境」下拉同源），
+ * 不新增后端接口。失败时返回空数组（不阻断输入框）。
+ */
+/**
+ * P1-A：{@code @topic/} 候选（**名册版**）。
+ *
+ * <p>后端取值全部来自命名名册（本租户 `FlinkSql`/`FlinkSqlEnv` 作业的 DDL），
+ * **不连接 Kafka**——因此候选只含"已被作业使用"的 topic；
+ * "平台里存在但没任何作业消费"的 topic 需等批次 2 的 {@code list_topics}。
+ */
+export const listMentionTopics = async (): Promise<string[]> => {
+  try {
+    const res: any = await getData(API_CONSTANTS.AI_CHAT_MENTION_TOPICS);
+    return res ?? [];
+  } catch (e) {
+    return [];
+  }
+};
+
+export const listFlinkSqlEnvs = async (): Promise<{ id: number; name: string }[]> => {
+  try {
+    const res: any = await queryDataByParams(API_CONSTANTS.LIST_FLINK_SQL_ENV);
+    return res ?? [];
+  } catch (e) {
+    return [];
+  }
+};
+
+export const listSkills = async (): Promise<AiChatMentionItem[]> => {
+  const res: any = await getData(API_CONSTANTS.SKILL_LIST);
+  const rows = res?.data ?? res ?? [];
+  return (rows as any[]).map((s) => ({
+    type: 'skill' as const,
+    name: s.name,
+    content: s.description
+  }));
+};
+
+/**
+ * 知识库 @kb 接入 v1.0：{@code @kb/} 候选——当前用户**可见**的知识库。
+ *
+ * <p>{@code name} 必须是库**编码**（{@code c_xxxxxxxx}）而不是显示名：编码系统生成、永不变，
+ * 可直接写进 kb-service 的 {@code filter.collection}；显示名可改且可能重名。
+ * 显示名放在 {@code content} 里供候选浮层做副标题，避免"只能看到一串 c_xxxx"。
+ *
+ * <p>后端 {@code /api/kb/collections} 已按可见性过滤（private/tenant/public + enabled），
+ * 前端<b>不做也不应做</b>二次过滤——越权拦截在服务端，前端过滤只是观感。
+ */
+export const listKbCollections = async (): Promise<AiChatMentionItem[]> => {
+  try {
+    const res: any = await getData(API_CONSTANTS.KB_COLLECTIONS);
+    const rows = res?.data ?? res ?? [];
+    return (rows as any[]).map((c) => ({
+      type: 'kb' as const,
+      name: c.code,
+      content: c.name
+    }));
+  } catch (e) {
+    // 批次 A 的开关默认关闭 / 后端未升级时，候选缺失不应影响其他 @ 功能
+    return [];
+  }
+};
+
+/**
+ * P3b：{@code @semantic/} 一级候选——**已发布**的语义项目。
+ *
+ * <p>只列有 `_published` 版本的项目：AI 只能引用不可变快照（编辑区内容不作为候选，
+ * 否则"今天引用的口径明天变了"无法复现）。返回项含 {@code name/version/indexState}。
+ */
+export const listPublishedSemanticProjects = async (): Promise<any[]> => {
+  const res: any = await getData(API_CONSTANTS.SEMANTIC_PUBLISHED_PROJECTS);
+  return (res?.data ?? res ?? []) as any[];
+};
+
+/**
+ * P3b：{@code @semantic/<项目>/} 二级候选——该项目内的可引用资产。
+ *
+ * <p>来自索引 {@code names[]}（{@code {name, type, oneLiner}}）；索引未就绪时后端降级为
+ * YAML 文件级列表（{@code oneLiner} 为空），候选仍可用。
+ */
+export const listPublishedSemanticAssets = async (project: string): Promise<any[]> => {
+  const res: any = await getData(API_CONSTANTS.SEMANTIC_PUBLISHED_ASSETS, { project });
+  return (res?.data ?? res ?? []) as any[];
+};
+
+/**
+ * 回传写语句二次确认结果（阶段 2c-0）。
+ *
+ * <p>与对话同为 POST + JSON；返回 HTTP 是否成功即可——runId 失效等业务失败由后端按「拒绝/超时」处理。
+ */
+export const confirmAiChat = async (
+  runId: string,
+  approve: boolean,
+  /**
+   * 阶段 4b：删除类确认（{@code kind=skill_delete}）要求**手输目标名**才能确认（防误删），
+   * 后端会校验其与目标名一致，不一致按拒绝处理。其它确认类型无需传（undefined 不会进 JSON）。
+   */
+  confirmName?: string,
+  /**
+   * 批次 F（2026-10-29）：写 skill 文件时"只应用到编辑区、不落盘"。
+   *
+   * <p>用户口径："AI 的改解放进编辑区就行，保存我自己点"。为 true 时后端跳过持久化，
+   * 前端负责把新正文塞进编辑器并保持未保存状态。仅对 {@code kind=skill_file} 有意义。
+   */
+  applyOnly?: boolean
+): Promise<boolean> => {
+  try {
+    const res = await fetch(API_CONSTANTS.AI_CHAT_CONFIRM, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...buildTenantHeader() },
+      credentials: 'include',
+      body: JSON.stringify({ runId, approve, confirmName, applyOnly })
+    });
+    return res.ok;
+  } catch (e) {
+    return false;
+  }
+};
+
+/** 请求中断本次运行（阶段 2c-0）：不再只断开 SSE HTTP 流，而是让服务端循环真正收到取消信号 */
+export const cancelAiChat = async (runId: string): Promise<boolean> => {
+  try {
+    const res = await fetch(API_CONSTANTS.AI_CHAT_CANCEL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...buildTenantHeader() },
+      credentials: 'include',
+      body: JSON.stringify({ runId })
+    });
+    return res.ok;
+  } catch (e) {
+    return false;
+  }
+};
+
+/**
+ * 流式对话：读取 SSE 帧并回调文本片段。
+ *
+ * <p>后端按 JSON 帧下发（<code>data: {"content":"..."}</code> / <code>{"error":"..."}</code>），
+ * 因此不会出现多行文本被 SSE 协议截断的问题。
+ */
+export const aiChatStream = async (
+  body: AiChatRequestBody,
+  onFrame: (frame: {
+    content?: string;
+    reasoning?: string;
+    sql?: string;
+    status?: string;
+    execResult?: AiChatVerify;
+    /** 工具已发起（可能尚在执行） */
+    toolCall?: AiChatToolStep;
+    /** 工具执行结束（成功或失败） */
+    toolResult?: AiChatToolStep;
+    /** 阶段 2c-0：本次运行的 id（对话开始时下发） */
+    runId?: string;
+    /** 阶段 2c-0：写语句执行前的二次确认请求 */
+    confirmRequest?: AiChatConfirmFrame;
+    /** 20261025：本轮结束（status / 耗时 / 用量）——显式结束标志 */
+    done?: AiChatFinish;
+  }) => void,
+  onError?: (message: string) => void,
+  signal?: AbortSignal
+): Promise<void> => {
+  const response = await fetch(API_CONSTANTS.AI_CHAT_CHAT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...buildTenantHeader() },
+    credentials: 'include',
+    body: JSON.stringify(body),
+    signal
+  });
+
+  if (!response.ok || !response.body) {
+    throw new Error(`请求失败（HTTP ${response.status}）`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    // 最后一段可能是不完整的一行，留在 buffer 里等下一批数据
+    buffer = lines.pop() ?? '';
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line.startsWith('data:')) {
+        continue;
+      }
+      const data = line.slice(5).trim();
+      if (!data) {
+        continue;
+      }
+      try {
+        const frame = JSON.parse(data);
+        if (typeof frame?.content === 'string' && frame.content.length > 0) {
+          onFrame({ content: frame.content });
+        }
+        if (typeof frame?.reasoning === 'string' && frame.reasoning.length > 0) {
+          onFrame({ reasoning: frame.reasoning });
+        }
+        if (typeof frame?.sql === 'string' && frame.sql.length > 0) {
+          onFrame({ sql: frame.sql });
+        }
+        if (typeof frame?.status === 'string' && frame.status.length > 0) {
+          onFrame({ status: frame.status });
+        }
+        if (frame?.execResult && typeof frame.execResult === 'object') {
+          onFrame({ execResult: frame.execResult });
+        }
+        if (frame?.toolCall && typeof frame.toolCall === 'object') {
+          onFrame({ toolCall: frame.toolCall });
+        }
+        if (frame?.toolResult && typeof frame.toolResult === 'object') {
+          onFrame({ toolResult: frame.toolResult });
+        }
+        // 阶段 2c-0：运行 id 与写语句二次确认请求
+        if (typeof frame?.runId === 'string' && frame.runId.length > 0) {
+          onFrame({ runId: frame.runId });
+        }
+        if (frame?.confirmRequest && typeof frame.confirmRequest === 'object') {
+          onFrame({ confirmRequest: frame.confirmRequest as AiChatConfirmFrame });
+        }
+        // 20261025：显式结束帧——放在最后解析，保证同一批里的正文/校验帧先落地
+        if (frame?.done && typeof frame.done === 'object') {
+          onFrame({ done: frame.done as AiChatFinish });
+        }
+        // 其余帧（如 heartbeat）无需处理：此处刻意保持「未知帧静默丢弃」，
+        // 避免把结构化数据误当成正文拼接出来。
+        if (typeof frame?.error === 'string' && frame.error.length > 0) {
+          onError?.(frame.error);
+        }
+      } catch (e) {
+        // 非 JSON 帧（兼容旧格式）：补回换行，避免多行 SQL 被压成一行
+        onFrame({ content: `${data}\n` });
+      }
+    }
+  }
+};

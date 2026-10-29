@@ -40,7 +40,11 @@ export type MetricsProps = {
 };
 
 const JobMetricsList = (props: MetricsProps) => {
-  const { timeRange } = props;
+  // 2026-10-14 修复（P4）：本组件曾被路由直接挂载，而 Umi 渲染路由组件时不传 props，
+  // 导致 timeRange 为 undefined → 下方 useEffect 读 timeRange.isReal 抛 TypeError，
+  // 进而卸载整棵根树。这里补默认值兜底（正确传参时行为不变）。
+  const { timeRange = { startTime: Date.now() - 2 * 60 * 1000, endTime: Date.now(), isReal: true } } =
+    props ?? {};
 
   const [chartDatas, setChartDatas] = useState<Record<string, ChartData[]>>({});
   const [jobIds, setJobIds] = useState<string>('');
@@ -87,7 +91,7 @@ const JobMetricsList = (props: MetricsProps) => {
         }
       });
       setJobIds(jids.join(','));
-      if (timeRange.isReal) {
+      if (timeRange?.isReal) {
         return subscribeTopic(Topic.METRICS, params, (data: WsData) => {
           //todo ws 实时待优化实现
           // setChartDatas((prevState) => dataProcess(prevState, [data.data]));
@@ -190,6 +194,11 @@ const JobMetricsList = (props: MetricsProps) => {
             </Spin>
           );
         })}
+      {/* 2026-10-14 修复（P4）：Dinky 服务监控未开启 / 接口不可用时，页面留空并给出说明，
+          而不是空白无提示（本组件此前还会在此情形下抛 TypeError） */}
+      {data == undefined && !loading && (
+        <Empty className={'code-content-empty'} description={l('metrics.dinky.not.open')} />
+      )}
       <br />
       <br />
     </>

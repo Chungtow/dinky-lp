@@ -191,7 +191,7 @@ const Service = (props: { showDesc: boolean; tabs: CenterTab[]; action: any }) =
         newTreeData.forEach((node) => {
           const dialect = tab.params.dialect;
           if (
-            assert(dialect, [DIALECT.FLINK_SQL, DIALECT.FLINKJAR], true, 'includes') ||
+            assert(dialect, [DIALECT.FLINK_SQL, DIALECT.FLINKJAR, DIALECT.SHELL], true, 'includes') ||
             isSql(dialect)
           ) {
             const icon = getTabIcon(dialect, 20);

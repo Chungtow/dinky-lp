@@ -1,0 +1,93 @@
+/*
+ *
+ *  Licensed to the Apache Software Foundation (ASF) under one or more
+ *  contributor license agreements.  See the NOTICE file distributed with
+ *  this work for additional information regarding copyright ownership.
+ *  The ASF licenses this file to You under the Apache License, Version 2.0
+ *  (the "License"); you may not use this file except in compliance with
+ *  the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ *
+ */
+
+package org.dinky.ai;
+
+import lombok.Builder;
+import lombok.Data;
+
+/**
+ * 工具执行结果。
+ *
+ * <p><b>安全约束</b>：{@link #content} 与 {@link #errorMessage} 都是<b>回灌给模型</b>的文本，
+ * 因此错误信息必须是<b>脱敏后的</b>——原始异常里可能包含 JDBC URL、用户名、内网地址
+ * （调研报告 §7.2）。完整异常只进服务端日志与审计表。
+ *
+ * @since 2026/09/28
+ */
+@Data
+@Builder
+public class AiToolResult {
+
+    /** 是否成功 */
+    private boolean success;
+
+    /** 成功时给模型的正文（元数据清单 / 样例行等） */
+    private String content;
+
+    /** 失败时给模型的文案（已脱敏） */
+    private String errorMessage;
+
+    /** 执行耗时（毫秒，用于前端展示与审计） */
+    private long costMs;
+
+    /**
+     * 阶段 2c-1：受影响行数（仅写操作有意义；null 表示不适用）。
+     *
+     * <p>来自 {@code SqlVerifier.VerifyResult#getAffectedRows()} 的<b>事后真实值</b>，
+     * 由前端在工具步骤里展示「已影响 N 行」。
+     */
+    private Integer affectedRows;
+
+    /** 阶段 2c-1：风险摘要（仅写类工具填写；写入审计，不回灌给模型） */
+    private String riskSummary;
+
+    /**
+     * 阶段 2c-2：本次工具调用是否走过「写操作」路径（含用户拒绝 / 未确认的情形）。
+     *
+     * <p>用于<b>闭环收敛</b>：同一次对话里若工具已走过写路径，{@code doChat} 不再对同一回答执行
+     * SQL 校验自动执行 / 二次确认，避免同一条语句被写两次。
+     */
+    private boolean writeAttempted;
+
+    /** 阶段 2c-2：本次工具尝试执行的语句原文（供审计落 `sql_text`，替代此前的 200 字参数摘要） */
+    private String sqlText;
+
+    /** 阶段 2c-2：本条失败属于第几次自动纠错尝试（0 表示不适用 / 未失败） */
+    private int attempt;
+
+    /** 阶段 2c-2：是否已达自动纠错上限（到达后模型应停止重试） */
+    private boolean repairExhausted;
+
+    public static AiToolResult success(String content, long costMs) {
+        return AiToolResult.builder()
+                .success(true)
+                .content(content)
+                .costMs(costMs)
+                .build();
+    }
+
+    public static AiToolResult failure(String sanitizedMessage, long costMs) {
+        return AiToolResult.builder()
+                .success(false)
+                .errorMessage(sanitizedMessage)
+                .costMs(costMs)
+                .build();
+    }
+}

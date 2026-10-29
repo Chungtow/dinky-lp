@@ -19,7 +19,7 @@
 
 import { redirectToLogin } from '@/pages/Other/Login/function';
 import { ENABLE_MODEL_TIP } from '@/services/constants';
-import { getValueFromLocalStorage } from '@/utils/function';
+import { buildTenantHeader, getValueFromLocalStorage } from '@/utils/function';
 import { l } from '@/utils/intl';
 import { ErrorNotification, WarningNotification } from '@/utils/messages';
 import type { RequestOptions } from '@@/plugin-request/request';
@@ -130,7 +130,10 @@ export const errorConfig: RequestConfig = {
     (config: RequestOptions) => {
       // Intercept request configuration for personalized processing.
       const url = config?.url;
-      return { ...config, url };
+      // 注入当前租户：构造点统一收敛到 buildTenantHeader()（原生 fetch 也复用它），
+      // 避免"两套传递通道"再次漂移 —— 2026-10-18 AI Chat 元数据事故即源于此。
+      const headers = { ...config?.headers, ...buildTenantHeader() };
+      return { ...config, url, headers };
     }
   ],
 

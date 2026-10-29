@@ -252,4 +252,87 @@ public class PermissionConstants {
     public static final String DASHBOARD_CHART_DELETE = "dashboard:chart:delete";
     public static final String DASHBOARD_CHART_EDIT = "dashboard:chart:edit";
     public static final String DASHBOARD_CHART_ADD = "dashboard:chart:add";
+
+    /**
+     * registration skills
+     *
+     * <p>2026-10-14 菜单与权限登记缺口修复：Skills 能力此前无独立权限点，写接口复用
+     * REGISTRATION_RESOURCE_UPLOAD/DELETE。过渡期两个发布周期内以 SaMode.OR 同时接受新旧权限点，
+     * 避免"升级即失权"。
+     */
+    public static final String REGISTRATION_SKILL = "registration:skill";
+
+    public static final String REGISTRATION_SKILL_VIEW = "registration:skill:view";
+    public static final String REGISTRATION_SKILL_ADD = "registration:skill:add";
+    public static final String REGISTRATION_SKILL_SAVE = "registration:skill:save";
+    public static final String REGISTRATION_SKILL_DELETE = "registration:skill:delete";
+    public static final String REGISTRATION_SKILL_FILE = "registration:skill:file";
+
+    /**
+     * Skills 可见性：把资产设置为「全体公开」所需的权限点（2026-10-14 三档可见性）。
+     *
+     * <p>「私有 / 同租户共享」沿用 {@link #REGISTRATION_SKILL_SAVE}；只有「面向全体公开」这一组织级
+     * 动作单独管控。权限串**必须 ≥ 3 段**，否则连超管 {@code *:*:*} 都匹配不上
+     * （见 V20261014.1.4.5 的实测教训）。
+     */
+    public static final String REGISTRATION_SKILL_SHARE = "registration:skill:share";
+
+    /**
+     * 知识库（{@code @kb}）权限点（知识库 @kb 接入 v1.0）。
+     *
+     * <p>前缀与 Skills 同构（都是「注册中心」下的资产），段数同样**必须 ≥ 3**
+     * —— 理由见 {@link #REGISTRATION_SKILL_SHARE}。
+     *
+     * <ul>
+     *   <li>{@code view}：浏览库列表与库内文档（只读打开）；</li>
+     *   <li>{@code save}：新建 / 改名 / 改描述 / 启停 / 同租户共享；</li>
+     *   <li>{@code share}：设为「全体公开」（组织级动作，单独管控）；</li>
+     *   <li>{@code write}：把文本推送入库。<b>独立授权</b>：A 侧采用「合并归属」后，
+     *       多归属会扩大文档的可见范围，放任任何人都能往公开库或别人的库里塞内容就是越权扩散。</li>
+     * </ul>
+     */
+    public static final String REGISTRATION_KB_VIEW = "registration:kb:view";
+
+    public static final String REGISTRATION_KB_SAVE = "registration:kb:save";
+
+    public static final String REGISTRATION_KB_SHARE = "registration:kb:share";
+
+    public static final String REGISTRATION_KB_WRITE = "registration:kb:write";
+
+    /**
+     * AI Chat（分级：使用 / 写操作）
+     *
+     * <p>aiChat:panel:use → 面板入口、对话、只读工具；aiChat:panel:write → 写审计 / 确认 / 取消（落盘闸门）。
+     *
+     * <p><b>必须保持 3 段式</b>：超管的通配权限为 {@code *:*:*}，Sa-Token 的通配按「冒号分段」匹配，
+     * 2 段权限串（如 {@code aiChat:use}）**连超管都无法匹配**，会导致接口对所有人 403。
+     */
+    public static final String AI_CHAT_USE = "aiChat:panel:use";
+
+    public static final String AI_CHAT_WRITE = "aiChat:panel:write";
+
+    /**
+     * classloader jars
+     */
+    public static final String SETTINGS_CLASSLOADERJARS_VIEW = "settings:classloaderjars:view";
+
+    /**
+     * dbt 语义项目在线编辑（P2）。
+     *
+     * <p><b>必须保持 3 段式</b>：超管通配 {@code *:*:*} 按冒号分段匹配，2 段串连超管都匹配不上。
+     * 这两条权限挂在「数据开发」菜单（dinky_sys_menu id=5）下，只登记功能权限、不新增菜单行
+     * （「dbt」是数据开发页内的前端 tab，不是左侧菜单）。
+     */
+    public static final String DATASTUDIO_SEMANTIC_VIEW = "datastudio:semantic:view";
+
+    public static final String DATASTUDIO_SEMANTIC_EDIT = "datastudio:semantic:edit";
+
+    /**
+     * P4 一期：处理语义资产反馈（RESOLVED / IGNORED）。
+     *
+     * <p><b>只给「处理」用</b>——提交反馈沿用 {@link #DATASTUDIO_SEMANTIC_VIEW}，
+     * 让所有能看语义项目的人都能提意见（否则收不到反馈，闭环无从谈起）。
+     * 迁移 {@code V20261023.1.4.9} 已登记该权限点（menu id = 190）。
+     */
+    public static final String DATASTUDIO_SEMANTIC_FEEDBACK = "datastudio:semantic:feedback";
 }

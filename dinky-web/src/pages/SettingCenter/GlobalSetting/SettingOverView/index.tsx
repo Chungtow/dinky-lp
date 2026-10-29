@@ -28,6 +28,7 @@ import {
   ResourceIcon
 } from '@/components/Icons/CustomIcons';
 import { TagAlignCenter } from '@/components/StyledComponents';
+import { ApiOutlined, BookOutlined, FileTextOutlined, RobotOutlined } from '@ant-design/icons';
 import { AuthorizedObject, useAccess } from '@/hooks/useAccess';
 import { SettingConfigKeyEnum } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/constants';
 import { DSConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/DSConfig';
@@ -36,7 +37,11 @@ import { FlinkConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView
 import { LdapConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/LdapConfig';
 import { MavenConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/MavenConfig';
 import { MetricsConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/MetricsConfig';
+import { LLMConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/LLMConfig';
+import { KbConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/KbConfig';
+import { KafkaConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/KafkaConfig';
 import { ResourcesConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/ResourcesConfig';
+import { SemanticConfig } from '@/pages/SettingCenter/GlobalSetting/SettingOverView/SemanticConfig';
 import { handleOption, queryDataByParams } from '@/services/BusinessCrud';
 import { RESPONSE_CODE } from '@/services/constants';
 import { API_CONSTANTS } from '@/services/endpoints';
@@ -60,7 +65,11 @@ const SettingOverView = () => {
     maven: [],
     ldap: [],
     metrics: [],
-    resource: []
+    resource: [],
+    llm: [],
+    kafka: [],
+    semantic: [],
+    kb: []
   });
 
   const fetchData = async () => {
@@ -104,7 +113,9 @@ const SettingOverView = () => {
       dolphinscheduler: dsConfig,
       ldap: ldapConfig,
       metrics: metricsConfig,
-      resource: resourceConfig
+      resource: resourceConfig,
+      llm: llmConfig,
+      kafka: kafkaConfig
     } = data;
 
     return [
@@ -226,6 +237,79 @@ const SettingOverView = () => {
           />
         ),
         path: PermissionConstants.SETTING_GLOBAL_RESOURCE
+      },
+      {
+        key: SettingConfigKeyEnum.LLM,
+        label: (
+          <TagAlignCenter>
+            <RobotOutlined />
+            {l('sys.setting.llm')}
+          </TagAlignCenter>
+        ),
+        children: (
+          <LLMConfig
+            auth={PermissionConstants.SETTING_GLOBAL_LLM_EDIT}
+            onSave={handleSaveSubmit}
+            data={llmConfig}
+          />
+        ),
+        path: PermissionConstants.SETTING_GLOBAL_LLM
+      },
+      {
+        key: SettingConfigKeyEnum.KAFKA,
+        label: (
+          <TagAlignCenter>
+            <ApiOutlined />
+            {l('sys.setting.kafka')}
+          </TagAlignCenter>
+        ),
+        children: (
+          <KafkaConfig
+            auth={PermissionConstants.SETTING_GLOBAL_KAFKA_EDIT}
+            onSave={handleSaveSubmit}
+            data={kafkaConfig}
+          />
+        ),
+        path: PermissionConstants.SETTING_GLOBAL_KAFKA
+      },
+      {
+        // P2：语义层（开关 + 语义根）。编辑权限复用 datastudio:semantic:edit，
+        // 不为配置页单独再开一个权限点（迁移只登记 2 条权限行）
+        key: SettingConfigKeyEnum.SEMANTIC,
+        label: (
+          <TagAlignCenter>
+            <FileTextOutlined />
+            {l('sys.setting.semantic')}
+          </TagAlignCenter>
+        ),
+        children: (
+          <SemanticConfig
+            auth={PermissionConstants.DATASTUDIO_SEMANTIC_EDIT}
+            onSave={handleSaveSubmit}
+            data={data.semantic}
+          />
+        ),
+        path: PermissionConstants.DATASTUDIO_SEMANTIC_EDIT
+      },
+      {
+        // v1.9：知识库 / RAG 连接（sys.kb.settings.*）。
+        // 与语义层同理，编辑权限复用「LLM 配置」的编辑点，不为它单独开权限行——
+        // 这四项只影响 AI 是否/如何检索外部 RAG，属于 AI 能力的配置面。
+        key: SettingConfigKeyEnum.KB,
+        label: (
+          <TagAlignCenter>
+            <BookOutlined />
+            {l('sys.setting.kb')}
+          </TagAlignCenter>
+        ),
+        children: (
+          <KbConfig
+            auth={PermissionConstants.SETTING_GLOBAL_LLM_EDIT}
+            onSave={handleSaveSubmit}
+            data={data.kb}
+          />
+        ),
+        path: PermissionConstants.SETTING_GLOBAL_LLM
       }
     ];
   };

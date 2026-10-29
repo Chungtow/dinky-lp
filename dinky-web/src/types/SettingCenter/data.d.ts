@@ -76,6 +76,13 @@ export type Settings = {
   ldap: BaseConfigProperties[];
   metrics: BaseConfigProperties[];
   resource: BaseConfigProperties[];
+  llm: BaseConfigProperties[];
+  /** P0：Kafka 配置分组（AI Chat 生成 / 解读 FlinkSQL 时的权威接入地址来源） */
+  kafka: BaseConfigProperties[];
+  /** P2：语义层分组（sys.semantic.settings.*：开关 + 语义根） */
+  semantic: BaseConfigProperties[];
+  /** v1.9：知识库分组（sys.kb.settings.*：RAG 服务地址/密钥、检索开关与注入预算） */
+  kb: BaseConfigProperties[];
 };
 
 export type BaseConfigProperties = {

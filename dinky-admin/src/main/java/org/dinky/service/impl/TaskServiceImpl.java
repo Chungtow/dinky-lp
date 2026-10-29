@@ -470,6 +470,12 @@ public class TaskServiceImpl extends SuperServiceImpl<TaskMapper, Task> implemen
     @Override
     public boolean cancelTaskJob(TaskDTO task, boolean withSavePoint, boolean forceCancel) {
         if (Dialect.isCommonSql(task.getDialect())) {
+            // SparkSQL owns a real stop implementation (cancel the statement on the ThriftServer in
+            // JDBC mode, destroy the spark-sql process in CLI mode). Other SQL dialects (Hive,
+            // MySQL, ...) keep the historical no-op behaviour.
+            if (Dialect.SPARK_SQL == Dialect.get(task.getDialect())) {
+                return stopSparkSqlTask(task);
+            }
             return true;
         }
         JobInstance jobInstance = jobInstanceService.getById(task.getJobInstanceId());
@@ -505,6 +511,25 @@ public class TaskServiceImpl extends SuperServiceImpl<TaskMapper, Task> implemen
         }
         jobInstanceService.refreshJobInfoDetail(jobInstance.getId(), jobInstance.getTaskId(), true);
         return isSuccess;
+    }
+
+    /**
+     * Stop a running SparkSQL task.
+     *
+     * <p>Delegates to {@link BaseTask#stop()} of the live task instance (the implementation looks
+     * up the running instance through its own static registry). Returns {@code true} when the stop
+     * request has been accepted or when nothing is running, keeping the stop operation idempotent
+     * and never reporting a fake failure to the UI.
+     */
+    private boolean stopSparkSqlTask(TaskDTO task) {
+        try {
+            boolean stopped = BaseTask.getTask(task).stop();
+            log.info("SparkSQL task stop requested: task={}, accepted={}", task.getName(), stopped);
+            return stopped;
+        } catch (Exception e) {
+            log.warn("SparkSQL task stop failed: task={}, error={}", task.getName(), e.getMessage());
+            return true;
+        }
     }
 
     @Override
@@ -655,6 +680,18 @@ public class TaskServiceImpl extends SuperServiceImpl<TaskMapper, Task> implemen
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean saveOrUpdateTask(Task task) {
+        // 责任人未指定时兜底为当前登录用户（覆盖导入 JSON / 直调 API 等绕过前端的路径）。
+        // taskOwnerLockStrategy 默认 ALL，不受影响；仅当管理员改为 OWNER/OWNER_AND_MAINTAINER 时
+        // 该字段才成为操作门槛，此时默认填自己可避免「责任人留空 → 创建者反被锁」。
+        // ⚠️ 必须吞掉异常：系统初始化 initDefaultFlinkSQLEnv 等**非 web 上下文**没有登录态，
+        //    StpUtil 会抛 NotWebContextException —— 不捕获会导致应用启动失败（首次部署已实测踩到）。
+        if (task.getFirstLevelOwner() == null) {
+            try {
+                task.setFirstLevelOwner(StpUtil.getLoginIdAsInt());
+            } catch (Exception e) {
+                log.debug("Skip firstLevelOwner fallback (no login context): {}", e.getMessage());
+            }
+        }
         Task byId = getById(task.getId());
         if (byId != null && JobLifeCycle.PUBLISH.equalsValue(byId.getStep())) {
             throw new BusException(Status.TASK_IS_ONLINE.getMessage());

@@ -204,5 +204,27 @@ export default (props: {
     });
   }
 
+  if (data.dialect?.toLowerCase() === DIALECT.DATAX) {
+    items.push({
+      key: 'taskParams',
+      label: l('menu.datastudio.task.taskParams'),
+      children: (
+        <ProForm
+          className={'datastudio-theme'}
+          initialValues={{
+            ...props.data
+          }}
+          disabled={props.data?.step === JOB_LIFE_CYCLE.PUBLISH || props.isLockTask}
+          style={{ padding: '10px' }}
+          submitter={false}
+          layout='vertical'
+          onValuesChange={props.onValuesChange}
+        >
+          <ProFormTaskParam />
+        </ProForm>
+      )
+    });
+  }
+
   return <Tabs items={items} centered />;
 };

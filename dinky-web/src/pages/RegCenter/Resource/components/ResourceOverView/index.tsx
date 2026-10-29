@@ -67,9 +67,21 @@ const ResourceOverView: React.FC<connect> = (props) => {
     description: ''
   });
 
+  /**
+   * 阶段 4a：资源页**隐藏 `/skills` 前缀**——skill 文件由独立的「Skills」入口管理；
+   * 混在资源树里只会让 JAR / UDF / skill 心智混杂（见阶段 4a 计划 §3.7）。
+   */
+  const hideSkillsPrefix = (nodes: ResourceInfo[]): ResourceInfo[] =>
+    (nodes ?? [])
+      .filter((node) => !(node.fullName ?? '').startsWith('/skills'))
+      .map((node) => ({
+        ...node,
+        children: node.children ? hideSkillsPrefix(node.children) : node.children
+      }));
+
   const refreshTree = async () => {
     await queryDataByParams<ResourceInfo[]>(API_CONSTANTS.RESOURCE_SHOW_TREE).then((res) =>
-      setResourceState((prevState) => ({ ...prevState, treeData: res ?? [] }))
+      setResourceState((prevState) => ({ ...prevState, treeData: hideSkillsPrefix(res ?? []) }))
     );
   };
 

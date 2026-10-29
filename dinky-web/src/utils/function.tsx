@@ -95,11 +95,16 @@ export function getTenantByLocalStorage() {
 }
 
 /**
- * get cookie by key
- * @param key
+ * 统一租户请求头（umi-request 拦截器与原生 fetch 共用）
+ *
+ * 租户上下文自「20261013 双槽租户交叉污染修复」起由**请求头**传递，前端不再写租户 Cookie。
+ * 因此任何**绕开统一请求层**的原生 fetch 都必须显式合并本头，否则后端租户上下文为空，
+ * 所有带租户过滤的查询会静默返回空——表现为「数据源不存在」「没有可用的数据源快照」
+ * （2026-10-18 AI Chat 元数据不可用事故，见 docs/plan/20261018-Dinky AI Chat 租户请求头丢失修复…）。
  */
-export function getCookieByKey(key: string) {
-  return cookies.get(key) ?? '';
+export function buildTenantHeader(): Record<string, string> {
+  const tenantId = getTenantByLocalStorage();
+  return tenantId ? { tenantId } : {};
 }
 
 /**
@@ -113,14 +118,19 @@ export function setCookieByKey(key: string, value: string, options?: {}) {
 }
 
 /**
- * PUT tenantId TO localStorage & cookies
- * @param tenantId
+ * 设置当前租户（前端唯一入口）
+ *
+ * 只写 localStorage：localStorage 按 origin（协议 + 域名 + 端口）隔离，测试槽 8889 与生产槽 8888 各存各的。
+ * 同时清理历史遗留的 tenantId Cookie —— 旧实现把租户写进 Cookie，而 Cookie 的作用域**不含端口**，
+ * 导致同一台机器上的两个槽互相覆盖租户上下文；租户的传递改由请求头完成（见 src/requestErrorConfig.ts）。
+ *
+ * @param tenantId tenant id
  */
-export function setTenantStorageAndCookie(tenantId: number) {
-  // save as localStorage
+export function setCurrentTenant(tenantId: number) {
+  // save to localStorage (origin-scoped)
   setKeyToLocalStorage(TENANT_ID, tenantId.toString());
-  // save as cookies
-  setCookieByKey(TENANT_ID, tenantId.toString(), { path: '/' });
+  // drop the legacy tenant cookie, so that the backend fallback chain never reads a stale tenant
+  cookies.remove(TENANT_ID, { path: '/' });
 }
 
 /**
