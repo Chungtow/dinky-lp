@@ -37,11 +37,16 @@ export default React.memo((props: ToolbarProp) => {
   //    `HasAuthority` 只收集 type='F' 的菜单（useAccess.tsx:80-93），拿 C 类页面菜单的 path
   //    （/registration/kb）判会**恒为 false**，非超管永远看不到 tab。
   const canUseKb = HasAuthority(PermissionConstants.KB_VIEW);
+  // 批次 F：无 registration:skill:view 时不展示「技能」面板。
+  // 同样用 **F 类**权限点的 path（/registration/skill/view，迁移 .1.4.0__skill_menu.sql）——
+  // 拿 C 类页面菜单 path（/registration/skill）判会恒为 false。
+  const canUseSkill = HasAuthority(PermissionConstants.REGISTRATION_SKILL_VIEW);
   const routes = toolbarSelect.allTabs.filter(
     (key) =>
       (key !== 'aiChat' || canUseAiChat) &&
       (key !== 'semantic' || canUseSemantic) &&
-      (key !== 'kb' || canUseKb)
+      (key !== 'kb' || canUseKb) &&
+      (key !== 'skill' || canUseSkill)
   );
   const currentRoutes = routes
     .map((value) => ToolbarRoutes.find((item) => item.key === value)!!)

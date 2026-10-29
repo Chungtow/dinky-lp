@@ -111,6 +111,12 @@ export type AiChatConfirmFrame = {
   afterContent?: string;
   /** 是否要求手输目标名才能确认（kind=skill_delete，防误删） */
   requireTypedName?: boolean;
+  /**
+   * 该确认框是否支持「仅应用到编辑区」（2026-10-29，后端对 {@code kind=skill_file} 下发）。
+   *
+   * <p>支持时点确认只把 {@code afterContent} 放进编辑器（未保存），不落盘。
+   */
+  applyToEditorSupported?: boolean;
   /** 待执行的写语句原文（kind=sql 时使用） */
   sql: string;
   /** 语句类型：DML / DDL（kind=sql 时使用） */
@@ -324,6 +330,13 @@ export type AiChatRequestBody = {
    */
   defaultCollection?: string;
   /**
+   * 批次 F：默认绑定技能的 id（左侧技能树选中 / 正在编辑的 skill 文件所属技能）。
+   *
+   * <p>非空时后端把该技能的「名字 + 说明 + 文件路径清单」注入提示词（**不注入正文**，
+   * 正文由模型按需 {@code read_skill}）；不可见时显式拒绝，不降级为"整个可用技能清单"。
+   */
+  defaultSkillId?: number;
+  /**
    * P4 一期：上下文指纹（`ctx_` + 8 位十六进制）。
    *
    * <p>由 `aiChatContext.buildFingerprint` 按「本轮全部绑定来源」同步计算，后端据此判断
@@ -505,14 +518,21 @@ export const confirmAiChat = async (
    * 阶段 4b：删除类确认（{@code kind=skill_delete}）要求**手输目标名**才能确认（防误删），
    * 后端会校验其与目标名一致，不一致按拒绝处理。其它确认类型无需传（undefined 不会进 JSON）。
    */
-  confirmName?: string
+  confirmName?: string,
+  /**
+   * 批次 F（2026-10-29）：写 skill 文件时"只应用到编辑区、不落盘"。
+   *
+   * <p>用户口径："AI 的改解放进编辑区就行，保存我自己点"。为 true 时后端跳过持久化，
+   * 前端负责把新正文塞进编辑器并保持未保存状态。仅对 {@code kind=skill_file} 有意义。
+   */
+  applyOnly?: boolean
 ): Promise<boolean> => {
   try {
     const res = await fetch(API_CONSTANTS.AI_CHAT_CONFIRM, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...buildTenantHeader() },
       credentials: 'include',
-      body: JSON.stringify({ runId, approve, confirmName })
+      body: JSON.stringify({ runId, approve, confirmName, applyOnly })
     });
     return res.ok;
   } catch (e) {

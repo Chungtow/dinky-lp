@@ -27,7 +27,12 @@ import {
 } from '@/pages/DataStudio/Toolbar/DataSource/service';
 import { decideMentionBackspace } from './mentionBackspace';
 import type { MentionBackspaceArm } from './mentionBackspace';
-import { finalizePathMention, replaceMentionToken } from './mentionPath';
+import { finalizePathMention, isMentionTrigger, replaceMentionToken } from './mentionPath';
+// 注意与本文件 './service' 里的 `listSkills`（@ 候选用的轻量列表）重名，这里显式起别名
+import {
+  detailSkill as fetchSkillDetail,
+  listSkills as listSkillInfos
+} from '@/pages/RegCenter/Skills/service';
 import { Authorized } from '@/hooks/useAccess';
 import { PermissionConstants } from '@/types/Public/constants';
 import ToolProcess from './components/ToolProcess';
@@ -35,9 +40,15 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import CraftDiff from './components/CraftDiff';
 import SqlDiff from './components/SqlDiff';
+import SkillDiff from './components/SkillDiff';
 import ContextBar from './ContextBar';
 import type { ContextScope } from './ContextBar';
-import { buildFingerprint, effectiveSemanticProjectOf, resolveBinding } from './aiChatContext';
+import {
+  buildFingerprint,
+  effectiveSemanticProjectOf,
+  effectiveSkillIdOf,
+  resolveBinding
+} from './aiChatContext';
 import './index.less';
 import {
   AiChatConfig,
@@ -118,6 +129,10 @@ type AiChatProps = {
   tabs: any[];
   activeTab?: string;
   updateAction: (payload: any) => void;
+  /** 新建中间 tab（批次 F：AI 改写未打开的文件时，开一个"未保存"tab 而不是直接落盘） */
+  addCenterTab?: (payload: any) => void;
+  /** 激活中间 tab（同上：把刚应用的内容立刻呈现给用户） */
+  activateCenterTab?: (id: string) => void;
   /**
    * P3b：语义面板当前选中的项目（来自 model）。
    *
@@ -132,10 +147,29 @@ type AiChatProps = {
    * {@code @kb/<8 位随机编码>}；显式 {@code @kb} 仍然优先（判定在后端）。
    */
   currentKbCollection?: string;
+  /**
+   * 批次 F：左侧栏「技能」tab 当前选中的技能（来自 model）。
+   *
+   * <p>决定本轮提示词里「当前正在编辑的技能」区块介绍哪个 skill；与语义项目/知识库
+   * 同一条链路：绑定只声明"优先参考谁"，技能正文仍由模型按需 {@code read_skill} 取。
+   */
+  currentSkillId?: number;
+  /** 当前选中技能名（仅摘要行展示） */
+  currentSkillName?: string;
 };
 
 const AiChat = (props: AiChatProps) => {
-  const { tabs, activeTab, updateAction, currentSemanticProject, currentKbCollection } = props;
+  const {
+    tabs,
+    activeTab,
+    updateAction,
+    currentSemanticProject,
+    currentKbCollection,
+    currentSkillId,
+    currentSkillName,
+    addCenterTab,
+    activateCenterTab
+  } = props;
 
   const [messages, setMessages] = useState<AiChatMessage[]>([]);
   const [inputValue, setInputValue] = useState<string>('');
@@ -194,6 +228,8 @@ const AiChat = (props: AiChatProps) => {
         activeTab: currentTab,
         currentSemanticProject,
         currentKbCollection,
+        currentSkillId,
+        currentSkillName,
         kbBindingCleared,
         datasourceList,
         override: {
@@ -207,6 +243,8 @@ const AiChat = (props: AiChatProps) => {
       currentTab,
       currentSemanticProject,
       currentKbCollection,
+      currentSkillId,
+      currentSkillName,
       kbBindingCleared,
       datasourceList,
       datasourceId,
@@ -358,6 +396,8 @@ const AiChat = (props: AiChatProps) => {
   const [mentionOpen, setMentionOpen] = useState<boolean>(false);
   const [mentionQuery, setMentionQuery] = useState<string>('');
   const [mentionIndex, setMentionIndex] = useState<number>(0);
+  /** @ 候选浮层的滚动容器（键盘上下选时要让高亮项滚进可视区） */
+  const mentionListRef = useRef<HTMLDivElement>(null);
   /**
    * 阶段 2 前置（字段级 {@code @表.字段}）：二级候选。
    *
@@ -1032,6 +1072,34 @@ const AiChat = (props: AiChatProps) => {
       .slice(0, 20);
   }, [mentionCandidates, mentionQuery, recentMentions]);
 
+  /**
+   * 键盘上下选择时让高亮项跟随滚动（UAT 2026-10-29）。
+   *
+   * <p>此前只改 {@code mentionIndex} 的背景色，容器 {@code maxHeight:220 + overflowY:auto} 不会动，
+   * 选到列表下半部分时高亮项被输入框/面板遮住，只能盲选。
+   *
+   * <p>用手算 {@code scrollTop} 而不是 {@code scrollIntoView}：后者会连带滚动整个页面，
+   * 而这里只希望动这个 220px 的小容器。鼠标悬停也会改 index，但"已在可视区就不动"的判据
+   * 让它不会产生跳动。
+   */
+  useEffect(() => {
+    const list = mentionListRef.current;
+    if (!mentionOpen || !list) {
+      return;
+    }
+    const el = list.children[mentionIndex] as HTMLElement | undefined;
+    if (!el) {
+      return;
+    }
+    const top = el.offsetTop;
+    const bottom = top + el.offsetHeight;
+    if (top < list.scrollTop) {
+      list.scrollTop = top;
+    } else if (bottom > list.scrollTop + list.clientHeight) {
+      list.scrollTop = bottom - list.clientHeight;
+    }
+  }, [mentionIndex, mentionOpen, filteredMentions.length]);
+
   /** 取输入框当前光标位（拿不到按末尾处理，等价于改造前行为） */
   const caretOf = (): number => {
     const el = inputRef.current?.resizableTextArea?.textArea as HTMLTextAreaElement | undefined;
@@ -1126,7 +1194,11 @@ const AiChat = (props: AiChatProps) => {
       typeof e.target.selectionStart === 'number' ? e.target.selectionStart : value.length;
     const beforeCaret = value.slice(0, caret);
     const match = /@([^\s@]*)$/.exec(beforeCaret);
-    if (match) {
+    // 触发判据必须与 replaceMentionToken 里的定位判据**同源**（mentionPath.isMentionTrigger），
+    // 否则会出现"浮层弹得出来、选中却替换不到"（2026-10-29：中文句子后面直接打 @ 时
+    // 每选一级都把完整路径再追加一遍）。邮箱类（foo@bar）仍然不触发。
+    const atIndex = match ? beforeCaret.length - (match[1]?.length ?? 0) - 1 : -1;
+    if (match && isMentionTrigger(beforeCaret, atIndex)) {
       setMentionOpen(true);
       setMentionQuery(match[1] ?? '');
       setMentionIndex(0);
@@ -1437,6 +1509,10 @@ const AiChat = (props: AiChatProps) => {
           // 批次 E：左侧栏当前选中的库 = 本轮默认检索范围（省去手打 @kb/<code>）。
           // 后端会校验可见性；显式 @kb 优先于它；不可见时显式拒绝而非静默降级。
           defaultCollection: binding.kbCollection,
+          // 批次 F：左侧技能树 / 正在编辑的 skill 文件 = 本轮默认绑定技能。
+          // 后端校验可见性后把该技能的「名字 + 说明 + 文件路径清单」注入提示词（不含正文）；
+          // 显式 @skill 优先；不可见时显式拒绝而非静默回落成"整个可用清单"。
+          defaultSkillId: effectiveSkillIdOf(binding),
           // P4：上下文指纹——后端据此判断本轮是否按首轮重注入（切 tab 时 sessionId 不变）
           contextFingerprint: fingerprint
         },
@@ -1536,6 +1612,77 @@ const AiChat = (props: AiChatProps) => {
     setLoading(false);
   };
 
+  /**
+   * 把写确认框里的正文**应用到编辑区**（不落盘）——批次 F，2026-10-29 用户口径。
+   *
+   * <p>为什么不再让后端直接写：用户要的是「AI 改完放进编辑器、由我自己核对后点保存」，
+   * 与作业 tab 的 Craft 采纳完全一致。直接落盘会带来两个体感问题：
+   * <ol>
+   *   <li>版本号自己往上涨（文件已被改，人却没看过）；</li>
+   *   <li>编辑器里的仍是旧正文、版本号也不刷新（KeepAlive 复用组件 state），
+   *       表现为"存了但页面没变"。</li>
+   * </ol>
+   *
+   * <p>两条落法：
+   * <ul>
+   *   <li>目标文件已打开 → {@code applyFullContent} 直接替换编辑器内容（触发 onChange → 未保存态）；</li>
+   *   <li>没打开 → 新开一个"未保存"的 skill 文件 tab，用户看到的就是待确认的新正文。</li>
+   * </ul>
+   */
+  const applySkillContentToEditor = async (frame: AiChatConfirmFrame) => {
+    const content = frame.afterContent ?? '';
+    const relativePath = frame.relativePath ?? '';
+    const skillName = frame.targetName ?? '';
+    // ① 已打开同文件：直接替换编辑器内容（编辑器键与 SkillFile 注册时同源）
+    const opened = (tabs ?? []).find(
+      (tab: any) =>
+        tab?.tabType === 'skillFile' &&
+        tab?.params?.relativePath === relativePath &&
+        (!skillName || tab?.params?.skillName === skillName)
+    );
+    if (opened) {
+      const key = resolveEditorKey(opened.params);
+      const ok = key ? (editorRegistry?.applyFullContent(key, content) ?? false) : false;
+      if (ok) {
+        activateCenterTab?.(opened.id);
+        message.success(l('datastudio.aiChat.confirm.appliedToEditor'));
+        return;
+      }
+    }
+    // ② 没打开：查 skill 拿 id / 最新版本后开一个未保存 tab（只读属性沿用后端判定的 editable）
+    try {
+      const skills = await listSkillInfos();
+      const skill = (skills ?? []).find((item) => item.name === skillName);
+      if (!skill) {
+        message.warning(l('datastudio.aiChat.confirm.applyOpenFailed'));
+        return;
+      }
+      const detail = await fetchSkillDetail(skill.id).catch(() => undefined);
+      const tabId = `skill_${skill.id}_${relativePath}`;
+      addCenterTab?.({
+        id: tabId,
+        title: `${skillName} / ${relativePath}`,
+        tabType: 'skillFile',
+        // 未保存态：与手动编辑后一致，关闭时会被"未保存"逻辑拦住
+        isUpdate: true,
+        params: {
+          skillId: skill.id,
+          skillName,
+          relativePath,
+          mainFile: relativePath === 'SKILL.md' || relativePath === 'DOC.md',
+          statement: content,
+          // 乐观锁基准取远端最新版本，用户点保存时才可能冲突
+          version: detail?.skill?.version ?? skill.version,
+          readOnly: detail?.editable === false
+        }
+      });
+      activateCenterTab?.(tabId);
+      message.success(l('datastudio.aiChat.confirm.appliedToEditor'));
+    } catch (e: any) {
+      message.warning(e?.message ?? l('datastudio.aiChat.confirm.applyOpenFailed'));
+    }
+  };
+
   /** 阶段 2c-0：回传写语句执行确认结果（确认即执行；拒绝 / 超时则不执行） */
   const handleWriteConfirm = async (approve: boolean) => {
     const current = writeConfirm;
@@ -1546,7 +1693,12 @@ const AiChat = (props: AiChatProps) => {
     if (!current?.runId) {
       return;
     }
-    await confirmAiChat(current.runId, approve, typedName || undefined);
+    // 批次 F：skill 文件的"确认"= 应用到编辑区，不落盘（后端据此跳过写入）
+    const applyOnly = approve && current.kind === 'skill_file';
+    await confirmAiChat(current.runId, approve, typedName || undefined, applyOnly || undefined);
+    if (applyOnly) {
+      await applySkillContentToEditor(current);
+    }
   };
 
   /**
@@ -1556,6 +1708,33 @@ const AiChat = (props: AiChatProps) => {
    * 额外下发 {@code kind}。缺省或 {@code kind='sql'} 走原有 SQL 渲染（兼容旧后端）。
    */
   const isSkillConfirm = !!writeConfirm?.kind && writeConfirm.kind !== 'sql';
+
+  /**
+   * 写 skill 文件确认框的「原文」（diff 左栏）。
+   *
+   * <p>三层来源，按可靠性从高到低：
+   * <ol>
+   *   <li>后端 {@code beforeContent}：写入前静默读到的文件当前内容（最准，含他人已保存的改动）；</li>
+   *   <li>编辑区当前文本：后端读不到（资源存储异常 / 空文件）**且**确认框指向的正是当前打开的
+   *       那个文件时，用 {@code tabParams.statement} 兜底——否则左栏会整块空白，用户无法判断改了
+   *       什么（与 2026-10-21 语义文件 Craft diff「左侧为空」同一类缺陷）；</li>
+   *   <li>空串：确实是新建文件，由 {@code newFileHint} 明确告知。</li>
+   * </ol>
+   */
+  const skillConfirmBefore = useMemo(() => {
+    if (writeConfirm?.kind !== 'skill_file') {
+      return '';
+    }
+    const fromServer = writeConfirm?.beforeContent ?? '';
+    if (fromServer) {
+      return fromServer;
+    }
+    const sameFile =
+      currentTab?.tabType === 'skillFile' &&
+      tabParams?.relativePath === writeConfirm?.relativePath &&
+      (!writeConfirm?.targetName || tabParams?.skillName === writeConfirm?.targetName);
+    return sameFile ? (tabParams?.statement ?? '') : '';
+  }, [writeConfirm, currentTab, tabParams]);
 
   /**
    * 阶段 2b：对编辑区选中片段发起 Fix（基于最近执行报错）/ Rewrite（综合优化）。
@@ -1585,6 +1764,8 @@ const AiChat = (props: AiChatProps) => {
           semanticProject: effectiveSemanticProjectOf(binding),
           // 批次 E：默认检索范围（与主发送链路同源，避免两条链路口径不一致）
           defaultCollection: binding.kbCollection,
+          // 批次 F：默认绑定技能（与主发送链路同源，避免两条链路口径不一致）
+          defaultSkillId: effectiveSkillIdOf(binding),
           dialect,
           sql: currentSql,
           taskId: binding.editor?.taskId,
@@ -2128,6 +2309,7 @@ const AiChat = (props: AiChatProps) => {
       <div style={{ position: 'relative' }}>
         {mentionOpen && (
           <div
+            ref={mentionListRef}
             style={{
               position: 'absolute',
               bottom: '100%',
@@ -2354,6 +2536,8 @@ const AiChat = (props: AiChatProps) => {
         }
         open={!!writeConfirm}
         maskClosable={false}
+        // skill 写确认要放下「原文 / 改写后」双栏 diff，默认 520px 宽度会把两侧都挤成一列
+        width={writeConfirm?.kind === 'skill_file' ? '75%' : undefined}
         onCancel={() => handleWriteConfirm(false)}
         footer={
           <Space>
@@ -2362,7 +2546,8 @@ const AiChat = (props: AiChatProps) => {
             </Button>
             <Authorized path={PermissionConstants.DATASTUDIO_AI_CHAT_WRITE}>
               <Button
-                danger
+                // 只有删除是不可逆操作："应用到编辑区"不是破坏性动作，不应该染成红色
+                danger={writeConfirm?.kind === 'skill_delete'}
                 type={'primary'}
                 // 阶段 4b：删除类确认要求手输名称与后端下发的目标名完全一致才能点击（防误删）
                 disabled={
@@ -2373,6 +2558,8 @@ const AiChat = (props: AiChatProps) => {
               >
                 {writeConfirm?.kind === 'skill_delete'
                   ? l('datastudio.aiChat.confirm.deleteAccept')
+                  : writeConfirm?.kind === 'skill_file'
+                  ? l('datastudio.aiChat.confirm.applyToEditor')
                   : l('datastudio.aiChat.writeConfirm.accept')}
               </Button>
             </Authorized>
@@ -2409,7 +2596,7 @@ const AiChat = (props: AiChatProps) => {
                   <Typography.Text code>{writeConfirm.relativePath}</Typography.Text>
                 </>
               ) : null}
-              {writeConfirm?.kind === 'skill_file' && !writeConfirm?.beforeContent ? (
+              {writeConfirm?.kind === 'skill_file' && !skillConfirmBefore ? (
                 <Typography.Text type={'secondary'}>
                   {l('datastudio.aiChat.confirm.newFileHint')}
                 </Typography.Text>
@@ -2429,7 +2616,20 @@ const AiChat = (props: AiChatProps) => {
                 />
               </div>
             ) : null}
-            {writeConfirm?.kind === 'skill_file' ? (
+            {writeConfirm?.kind === 'skill_file' && skillConfirmBefore ? (
+              <>
+                <div style={{ fontSize: 12, color: 'rgba(0,0,0,0.45)', marginBottom: 4 }}>
+                  {l('datastudio.aiChat.confirm.skillDiffOriginal')}
+                  {' → '}
+                  {l('datastudio.aiChat.confirm.skillDiffModified')}
+                </div>
+                <SkillDiff
+                  original={skillConfirmBefore}
+                  modified={writeConfirm?.afterContent ?? ''}
+                  path={writeConfirm?.relativePath}
+                />
+              </>
+            ) : writeConfirm?.kind === 'skill_file' ? (
               <pre
                 style={{
                   maxHeight: '40vh',
@@ -2534,7 +2734,10 @@ export default connect(
     // P3b：语义树当前项目（切换语义项目不切 tab，见 model.tsx 的 saveCurrentSemanticProject 注释）
     currentSemanticProject: DataStudio.currentSemanticProject,
     // 批次 E：知识库面板当前选中的库（同一套绑定链路：model → 绑定 → 请求体 → 注入）
-    currentKbCollection: DataStudio.currentKbCollection
+    currentKbCollection: DataStudio.currentKbCollection,
+    // 批次 F：技能面板当前选中的技能（同上；「打开的文件所属技能」优先级更高，在解析层处理）
+    currentSkillId: DataStudio.currentSkillId,
+    currentSkillName: DataStudio.currentSkillName
   }),
   mapDispatchToProps
 )(AiChat);

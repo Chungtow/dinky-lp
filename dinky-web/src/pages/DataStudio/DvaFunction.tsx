@@ -101,6 +101,15 @@ export const mapDispatchToProps = (dispatch: Dispatch) => {
         collection,
         type: STUDIO_MODEL.saveCurrentKbCollection
       }),
+    /**
+     * 批次 F：记录技能面板当前选中的技能（目录/文件都算）。AI Chat 的
+     * 「当前正在编辑的技能」区块据此跟随左侧技能树切换（与语义项目/知识库同一套绑定链路）。
+     */
+    saveCurrentSkill: (payload: { skillId?: number; skillName?: string }) =>
+      dispatch({
+        ...payload,
+        type: STUDIO_MODEL.saveCurrentSkill
+      }),
     updateProject: (payload: ProjectDTO) =>
       dispatch({
         ...payload,

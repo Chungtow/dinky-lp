@@ -235,11 +235,18 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
     @Override
     @Transactional(rollbackFor = Exception.class)
     public Skill save(Long id, String content) {
+        return save(id, content, null);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Skill save(Long id, String content, Integer baseVersion) {
         Skill skill = getById(id);
         if (skill == null) {
             throw new BusException("skill 不存在");
         }
         checkOwner(skill, null);
+        checkVersion(skill, baseVersion);
         String text = StrUtil.nullToEmpty(content);
         if (StrUtil.utf8Bytes(text).length > SkillDocParser.MAX_DOC_SIZE) {
             throw new BusException("SKILL.md 过大（最多 " + SkillDocParser.MAX_DOC_SIZE + " 字节）");
@@ -366,6 +373,12 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
     @Override
     @Transactional(rollbackFor = Exception.class)
     public SkillFileNode writeFile(Long id, String relativePath, String content, Integer actorId) {
+        return writeFile(id, relativePath, content, actorId, null);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public SkillFileNode writeFile(Long id, String relativePath, String content, Integer actorId, Integer baseVersion) {
         Skill skill = requireOwnedSkill(id, actorId);
         String mainFile = mainFileOf(skill);
         String relative = StrUtil.trimToEmpty(relativePath);
@@ -377,6 +390,8 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
         String fullName = SkillPathGuard.resolve(skill.getDirFullName(), relative);
         boolean main = relative.equals(mainFile);
         if (main) {
+            // 批次 F：主文件才校验版本（附件不递增 version，用它判冲突只会误报）
+            checkVersion(skill, baseVersion);
             SkillDoc doc = SkillDocParser.parse(text);
             SkillDocParser.validate(doc, skill.getName());
         }
@@ -458,6 +473,65 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
         // 但「删除 skill 文件」在语义上必须真删，否则 HDFS 上会永久残留。
         removePhysical(skill, fullName);
         log.info("Skill file removed: name={}, relative={}", skill.getName(), relative);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public SkillFileNode renameFile(Long id, String relativePath, String newName, Integer actorId) {
+        Skill skill = requireOwnedSkill(id, actorId);
+        String mainFile = mainFileOf(skill);
+        String relative = StrUtil.trimToEmpty(relativePath);
+        String name = StrUtil.trimToEmpty(newName);
+        if (StrUtil.isBlank(relative)) {
+            throw new BusException("缺少待重命名的文件路径");
+        }
+        if (relative.equals(mainFile)) {
+            throw new BusException("主文件名固定，不能重命名；正文请直接在编辑器里修改");
+        }
+        if (StrUtil.isBlank(name)) {
+            throw new BusException("新文件名不能为空");
+        }
+        if (name.contains("/") || name.contains("\\") || name.contains("..")) {
+            throw new BusException("新文件名只能是文件名，不能包含路径");
+        }
+        String parent = SkillPathGuard.parentOf(relative);
+        String target = StrUtil.isBlank(parent) ? name : parent + "/" + name;
+        String fromFull = SkillPathGuard.resolve(skill.getDirFullName(), relative);
+        Resources resource = findResource(fromFull);
+        if (resource == null) {
+            throw new BusException("文件不存在：" + relative);
+        }
+        if (target.equals(relative)) {
+            return toFileNode(resource, relative, false);
+        }
+        if (Boolean.TRUE.equals(resource.getIsDirectory())) {
+            throw new BusException("目录暂不支持重命名，请新建目录后移动其中的文件");
+        }
+        // 扩展名白名单与写入同口径（.md/.txt/.json/.yaml），避免改出无法读取的文件
+        SkillPathGuard.checkExtension(target, mainFile);
+        if (findResource(SkillPathGuard.resolve(skill.getDirFullName(), target)) != null) {
+            throw new BusException("目标文件已存在：" + target);
+        }
+
+        // 顺序：读旧正文 → 写新路径 → 删旧路径。删除失败则把新文件删掉再抛出，
+        // 保证失败后不出现"新旧两份都在"的脏状态（资源存储没有真正的 rename 原语）。
+        String content = readFile(id, relative);
+        if (content == null) {
+            throw new BusException("读取原文件失败，未做任何变更");
+        }
+        SkillFileNode created = writeFile(id, target, content, actorId);
+        try {
+            removeFile(id, relative, actorId);
+        } catch (Exception e) {
+            try {
+                removeFile(id, target, actorId);
+            } catch (Exception ignore) {
+                log.warn("Rename rollback failed: skill={}, target={}", skill.getName(), target);
+            }
+            throw e instanceof BusException ? (BusException) e : new BusException("重命名失败：" + e.getMessage());
+        }
+        log.info("Skill file renamed: name={}, {} -> {}", skill.getName(), relative, target);
+        return created;
     }
 
     /**
@@ -547,6 +621,28 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
     private void checkOwner(Skill skill, Integer actorId) {
         if (!resolveActor(actorId).equals(skill.getOwnerId())) {
             throw new BusException("只有创建者可以修改或删除该 skill");
+        }
+    }
+
+    /**
+     * 批次 F：乐观锁校验。
+     *
+     * <p>{@code baseVersion} 为空表示"调用方不做冲突校验"（AI 工具、旧前端、脚本），保持向后兼容；
+     * 非空且与库里不一致时拒绝——因为 skill 既没有 git 历史，也没有语义层那样的 {@code .trash}，
+     * 一旦覆盖就无从找回。
+     *
+     * <p>比对的是"编辑起点"与"当前版本"，不是内容哈希：{@code content_hash} 只能判断"是否不同"，
+     * 无法判断"是不是基于旧版本改的"（A 改回原样仍会命中），而 {@code version} 每次主文件写入都前进，
+     * 正是这里需要的单调量。
+     */
+    private void checkVersion(Skill skill, Integer baseVersion) {
+        if (baseVersion == null) {
+            return;
+        }
+        int current = skill.getVersion() == null ? 0 : skill.getVersion();
+        if (current != baseVersion) {
+            throw new BusException(
+                    "该 skill 已被更新（当前版本 " + current + "，你正在编辑的是版本 " + baseVersion + "）。为避免覆盖他人的修改，本次保存已取消，请刷新后重试");
         }
     }
 

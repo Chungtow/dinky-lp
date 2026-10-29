@@ -21,6 +21,7 @@ package org.dinky.service.impl;
 
 import org.dinky.ai.AiChatRateLimiter;
 import org.dinky.ai.AiChatRunRegistry;
+import org.dinky.ai.AiConfirmDecision;
 import org.dinky.ai.AiToolCall;
 import org.dinky.ai.AiToolContext;
 import org.dinky.ai.AiToolLoop;
@@ -173,6 +174,14 @@ public class AiChatServiceImpl implements AiChatService {
     private static final int MAX_TOOL_RESULT_CHARS = 8000;
     /** 审计列 tool_calls 的字符上限 */
     private static final int MAX_TOOL_AUDIT_CHARS = 2000;
+
+    /**
+     * 批次 F：「当前绑定的技能」区块里最多列多少个文件路径。
+     *
+     * <p>只列路径不列正文，所以比正文预算宽松；但 references/ 可以有很多篇，
+     * 全列出来会把提示词撑长却几乎不增加信息量。
+     */
+    private static final int MAX_SKILL_FILE_HINTS = 12;
     /** 工具参数在一帧里展示的字符上限 */
     private static final int MAX_TOOL_ARGS_CHARS = 60;
     /** 阶段 2c-0：写语句二次确认的等待超时（秒），超时按「拒绝」处理；常量统一由 {@link AiChatRunRegistry} 持有 */
@@ -842,6 +851,17 @@ public class AiChatServiceImpl implements AiChatService {
                         context.getRepairAttempts().get(),
                         lastToolError.get());
             }
+
+            @Override
+            public AiConfirmDecision requestDecision(ConfirmPayload payload) {
+                return requestWriteConfirmationDecision(
+                        emitter,
+                        runId,
+                        run,
+                        payload,
+                        context.getRepairAttempts().get(),
+                        lastToolError.get());
+            }
         });
         // 阶段 2c-2：装配自动纠错上限（工具据此在失败达上限后停止重试）
         context.setMaxRepairAttempts(Math.max(config.getLlmToolAutoRepairMaxAttempts(), 1));
@@ -1174,6 +1194,25 @@ public class AiChatServiceImpl implements AiChatService {
             ConfirmPayload confirm,
             int attempt,
             String previousError) {
+        return requestWriteConfirmationDecision(emitter, runId, run, confirm, attempt, previousError)
+                .isApproved();
+    }
+
+    /**
+     * 三态版写确认（2026-10-29）：在「确认 / 拒绝」之外支持 {@link AiConfirmDecision#APPLY_ONLY}。
+     *
+     * <p>为什么需要第三种结局：用户明确要求"AI 的改写只进编辑区、由人自己点保存"。
+     * 前端收到 {@code kind=skill_file} 的确认框后，点确认会带上 {@code applyOnly=true}，
+     * 本方法据此把 {@code APPLY_ONLY} 投给正在等待的写工具——工具必须<b>跳过落盘</b>，
+     * 否则就会出现"版本号自己涨了、编辑区却没刷新"（批次 F UAT 2026-10-29）。
+     */
+    private AiConfirmDecision requestWriteConfirmationDecision(
+            SseEmitter emitter,
+            String runId,
+            AiChatRunRegistry.RunContext run,
+            ConfirmPayload confirm,
+            int attempt,
+            String previousError) {
         JSONObject payload = new JSONObject();
         payload.set("runId", runId);
         payload.set("kind", StrUtil.blankToDefault(confirm.getKind(), ConfirmPayload.KIND_SQL));
@@ -1219,25 +1258,30 @@ public class AiChatServiceImpl implements AiChatService {
         if (StrUtil.isNotBlank(previousError)) {
             payload.set("previousError", previousError);
         }
+        // 批次 F 补：告知前端该确认框支持"仅应用到编辑区"（只有能表达成正文的写工具才支持）
+        if (ConfirmPayload.KIND_SKILL_FILE.equals(StrUtil.blankToDefault(confirm.getKind(), ConfirmPayload.KIND_SQL))) {
+            payload.set("applyToEditorSupported", true);
+        }
         sendJsonFrame(emitter, "confirmRequest", payload);
-        Boolean approved = run.awaitConfirm(WRITE_CONFIRM_TIMEOUT_SECONDS);
-        if (approved == null) {
+        AiConfirmDecision decision = run.awaitConfirm(WRITE_CONFIRM_TIMEOUT_SECONDS);
+        if (decision == null) {
             log.info(
                     "Write confirmation timed out, runId={}, kind={}",
                     runId,
                     StrUtil.blankToDefault(confirm.getKind(), ConfirmPayload.KIND_SQL));
-            return false;
+            return AiConfirmDecision.REJECT;
         }
-        if (!Boolean.TRUE.equals(approved)) {
-            return false;
+        if (!decision.isApproved()) {
+            // REJECT 与 APPLY_ONLY 原样上抛：后者需要写工具跳过落盘并如实告知模型
+            return decision;
         }
         if (confirm.isRequireTypedName()
                 && !StrUtil.equals(
                         StrUtil.trimToEmpty(run.getConfirmTypedName()), StrUtil.trimToEmpty(confirm.getTargetName()))) {
             log.info("Typed-name confirmation mismatch, runId={}, expected={}", runId, confirm.getTargetName());
-            return false;
+            return AiConfirmDecision.REJECT;
         }
-        return true;
+        return AiConfirmDecision.APPROVE;
     }
 
     @Override
@@ -1246,8 +1290,14 @@ public class AiChatServiceImpl implements AiChatService {
             return false;
         }
         boolean approved = Boolean.TRUE.equals(request.getApprove());
+        // 批次 F（2026-10-29）：确认 + applyOnly = 「接收进编辑区但不落盘」，这是第三种结局
+        AiConfirmDecision decision = !approved
+                ? AiConfirmDecision.REJECT
+                : (Boolean.TRUE.equals(request.getApplyOnly())
+                        ? AiConfirmDecision.APPLY_ONLY
+                        : AiConfirmDecision.APPROVE);
         // 阶段 4b：把「用户手输的名称」一并投递给等待中的写操作（强化确认用；普通确认传 null）
-        return runRegistry.submitConfirm(request.getRunId(), request.getUserId(), approved, request.getConfirmName());
+        return runRegistry.submitConfirm(request.getRunId(), request.getUserId(), decision, request.getConfirmName());
     }
 
     @Override
@@ -1935,7 +1985,103 @@ public class AiChatServiceImpl implements AiChatService {
      *
      * <p>开关关闭 / 无可见 skill / 查询失败时返回空串——<b>任何情况都不阻断对话</b>。
      */
+    /**
+     * 批次 F：注入「左侧栏当前绑定的技能」。
+     *
+     * <p>绑定来源（前端按优先级算好再传 id）：
+     * <ol>
+     *   <li>中间编辑区正在编辑的 skill 文件所属 skill（{@code tabType='skillFile'}）；</li>
+     *   <li>左侧技能树当前选中的目录/文件所属 skill（dva model {@code currentSkillId}）。</li>
+     * </ol>
+     *
+     * <p><b>只介绍名字/说明/文件清单，不灌正文</b>：与 U-06 同一条红线——正文由模型按需
+     * 调 {@code read_skill} 取，否则一次问答就把一个 skill 的全部 references 吃光预算。
+     *
+     * <p><b>不可见不静默降级</b>（与 kb 的 D-K17 同口径）：被删/撤权/换租户后仍命令模型
+     * **先告知用户**，再决定是否基于其它可用技能作答。
+     */
+    private String buildDefaultSkillContext(AiChatRequest request) {
+        Long skillId = request.getDefaultSkillId();
+        if (skillId == null) {
+            return "";
+        }
+        if (!SystemConfiguration.getInstances().isLlmSkillEnable()) {
+            return "";
+        }
+        Skill hit = null;
+        try {
+            for (Skill skill : skillService.listVisible()) {
+                if (skill.getId() != null && skill.getId().equals(skillId)) {
+                    hit = skill;
+                    break;
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Resolve default skill failed: id={}, error={}", skillId, e.getMessage());
+            return "";
+        }
+        if (hit == null) {
+            log.info("Skill default binding denied: id={}", skillId);
+            return "- 当前绑定的技能（id=" + skillId + "）不可用（无访问权限或已被删除）。\n"
+                    + "  → **回答的第一句必须先告诉用户**：「你左侧栏选中的技能不可用，请重新选择或直接 @skill 指定」；"
+                    + "之后才可以选择（a）基于下列可用技能清单作答并注明来源，或（b）直接说明无法回答。"
+                    + "禁止假装已读取该技能。\n";
+        }
+        request.setEffectiveSkillDefault(hit.getId());
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("## 当前正在编辑的技能（左侧栏绑定，优先参考）\n");
+        sb.append("- ").append(hit.getName());
+        if (StrUtil.isNotBlank(hit.getDescription())) {
+            sb.append(" — ").append(hit.getDescription());
+        }
+        sb.append("\n");
+        // 文件清单只给路径，正文靠 read_skill 按需取（references/ 可能有很多篇）
+        try {
+            List<String> paths = new ArrayList<>();
+            collectSkillFilePaths(skillService.listFiles(hit.getId()), paths);
+            if (!paths.isEmpty()) {
+                sb.append("  文件：")
+                        .append(String.join("、", paths.subList(0, Math.min(paths.size(), MAX_SKILL_FILE_HINTS))))
+                        .append(paths.size() > MAX_SKILL_FILE_HINTS ? " 等" : "")
+                        .append("\n");
+            }
+        } catch (Exception e) {
+            log.warn("List skill files for binding failed: id={}, error={}", hit.getId(), e.getMessage());
+        }
+        sb.append("  → 该技能与本次问题相关时，**优先**调用 `read_skill` 读取它（用户正在这个技能里工作）；" + "其他技能仅在明确相关时使用，并在回答中注明引用了哪个技能。\n\n");
+        log.info("Skill default injected: id={}, name={}", hit.getId(), hit.getName());
+        return sb.toString();
+    }
+
+    /** 递归收集 skill 文件树里的文件相对路径（目录跳过） */
+    private void collectSkillFilePaths(List<SkillFileNode> nodes, List<String> out) {
+        if (CollUtil.isEmpty(nodes) || out.size() >= MAX_SKILL_FILE_HINTS * 2) {
+            return;
+        }
+        for (SkillFileNode node : nodes) {
+            if (node == null) {
+                continue;
+            }
+            if (node.isDirectory()) {
+                collectSkillFilePaths(node.getChildren(), out);
+            } else if (StrUtil.isNotBlank(node.getRelativePath())) {
+                out.add(node.getRelativePath());
+            }
+        }
+    }
+
     private String buildSkillListContext() {
+        return buildSkillListContext(null);
+    }
+
+    /**
+     * 注入「可用 skill 清单」。
+     *
+     * @param excludeSkillId 已在"当前绑定的技能"区块里单独介绍过的 skill，清单里跳过它
+     *                       （同一份 skill 出现两次会让模型怀疑是两个东西）
+     */
+    private String buildSkillListContext(Long excludeSkillId) {
         if (!SystemConfiguration.getInstances().isLlmSkillEnable()) {
             return "";
         }
@@ -1947,6 +2093,9 @@ public class AiChatServiceImpl implements AiChatService {
             StringBuilder sb = new StringBuilder();
             sb.append("## 可用的团队 Skill（如与本次问题相关，可在输入框用 @skill/<名> 引用其完整内容）\n");
             for (Skill skill : skills) {
+                if (excludeSkillId != null && excludeSkillId.equals(skill.getId())) {
+                    continue;
+                }
                 sb.append("- ").append(skill.getName());
                 if (StrUtil.isNotBlank(skill.getDescription())) {
                     sb.append(" — ").append(skill.getDescription());
@@ -2110,7 +2259,9 @@ public class AiChatServiceImpl implements AiChatService {
         // 阶段 4a：注入「当前用户可见 skill 清单」（name + description，渐进披露）。
         // 只给清单、不给正文——正文由 @skill/<名> 显式引用时才注入（见 appendAssetDetail）；
         // 内容受 llmSkillMaxChars 独立预算约束，且整体仍受末尾 schemaMaxChars 兜底。
-        sb.append(buildSkillListContext());
+        // 批次 F：左侧栏「技能」tab 绑定的那个 skill 单独介绍，并从清单里摘掉（避免重复占预算）。
+        sb.append(buildDefaultSkillContext(request));
+        sb.append(buildSkillListContext(request.getEffectiveSkillDefault()));
 
         if (databaseId == null) {
             // P0：FlinkSQL 作业本就没有数据源，它的库表来自 Flink Catalog —— 该信息由独立的

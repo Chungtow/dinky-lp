@@ -42,4 +42,11 @@ public class SkillSaveDTO implements Serializable {
             dataType = "String",
             notes = "SKILL.md 全文（含 frontmatter）。保存时会重新解析 name / description 并回写元数据")
     private String content;
+
+    @ApiModelProperty(
+            value = "Base Version",
+            dataType = "Integer",
+            example = "3",
+            notes = "批次 F 乐观锁：编辑起点的 version。非空且与库里不一致时拒绝保存（避免两处同时编辑静默覆盖）；" + "为空表示不做冲突校验（AI 工具与旧前端沿用此行为）")
+    private Integer baseVersion;
 }

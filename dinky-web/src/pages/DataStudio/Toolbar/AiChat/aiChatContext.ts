@@ -17,7 +17,7 @@
  *
  */
 
-export type EditorTabType = 'task' | 'dataSource' | 'resource' | 'semanticFile';
+export type EditorTabType = 'task' | 'dataSource' | 'resource' | 'semanticFile' | 'skillFile';
 
 /** 编辑区当前对象（绑定模型最内层：先认清「你正在看什么」） */
 export interface EditorContext {
@@ -34,6 +34,14 @@ export interface EditorContext {
   /** 语义文件 tab */
   semanticProject?: string;
   filePath?: string;
+  /**
+   * 批次 F：skill 文件 tab 所属技能。
+   *
+   * <p>它是「默认绑定技能」的第一优先级来源——用户正在这个技能里改文件，
+   * 比左侧树选中态更能代表"当前关注什么"（与语义文件 → 文件所属项目同口径）。
+   */
+  skillId?: number;
+  skillName?: string;
   /** 资源文件 tab */
   resourceId?: number;
   resourceName?: string;
@@ -82,6 +90,14 @@ export interface ContextBinding {
    * <b>不影响</b>表结构注入——与语义项目同构：都只声明"范围"，正文仍由工具按需召回。
    */
   kbCollection?: string;
+  /**
+   * 批次 F：默认绑定技能（打开的文件所属 > 左侧技能树选中）。
+   *
+   * <p>与 `kbCollection` / 语义项目同构：只说"优先参考哪个技能"，
+   * 正文一律由模型按需调 `read_skill` 取。
+   */
+  skillId?: number;
+  skillName?: string;
   /** 参与指纹计算的来源标记（顺序无关，内部会排序） */
   sources: string[];
   /** 降级/缺失说明，供摘要行展示 */
@@ -95,6 +111,10 @@ export interface ResolveBindingInput {
   currentSemanticProject?: string;
   /** 知识库面板当前选中的库（来自 DVA model 的 currentKbCollection，批次 E） */
   currentKbCollection?: string;
+  /** 左侧技能树当前选中的技能（来自 DVA model 的 currentSkillId，批次 F） */
+  currentSkillId?: number;
+  /** 当前选中技能的名字（仅摘要行展示用） */
+  currentSkillName?: string;
   /**
    * 用户在本会话内主动解除了知识库绑定（点 chip 上的 ×）。
    *
@@ -165,6 +185,15 @@ export function resolveEditorContext(tab: any): EditorContext | undefined {
         filePath: params.path,
         contentExcerpt: truncate(params.statement)
       };
+    case 'skillFile':
+      // 批次 F：skill 文件 tab 的参数是 {skillId, skillName, relativePath, statement, version, readOnly}
+      return {
+        ...common,
+        skillId: toNumber(params.skillId),
+        skillName: params.skillName,
+        filePath: params.relativePath,
+        contentExcerpt: truncate(params.statement)
+      };
     default:
       return undefined;
   }
@@ -197,6 +226,8 @@ export function resolveBinding(input: ResolveBindingInput): ContextBinding {
     activeTab,
     currentSemanticProject,
     currentKbCollection,
+    currentSkillId,
+    currentSkillName,
     kbBindingCleared,
     datasourceList = [],
     override
@@ -251,7 +282,19 @@ export function resolveBinding(input: ResolveBindingInput): ContextBinding {
     sources.push(`kb:${kbCollection}`);
   }
 
-  // 5) 溯源
+  // 5) 批次 F：默认绑定技能。
+  //    优先级与语义项目同构——「打开的文件所属技能」优先，其次「左侧树当前选中的技能」。
+  //    理由：正在改 SKILL.md 的用户关注的是那个技能，树上的选中可能只是浏览到那里。
+  //    进指纹：会话中途换技能必须触发重注入，否则模型仍拿着上一轮的技能说明作答。
+  const fileSkillId = editor?.tabType === 'skillFile' ? editor.skillId : undefined;
+  const skillId = fileSkillId ?? currentSkillId ?? undefined;
+  const skillName =
+    (fileSkillId ? editor?.skillName : currentSkillName) ?? currentSkillName ?? undefined;
+  if (skillId) {
+    sources.push(`skill:${skillId}`);
+  }
+
+  // 6) 溯源
   const lineage: ContextLineage = {};
   if (effectiveDatabaseId) {
     const hit = datasourceList.find(
@@ -277,6 +320,8 @@ export function resolveBinding(input: ResolveBindingInput): ContextBinding {
     semanticTreeConflict,
     override,
     kbCollection,
+    skillId,
+    skillName,
     sources,
     notices
   };
@@ -292,6 +337,11 @@ export function effectiveSemanticProjectOf(binding: ContextBinding): string | un
   }
   const sem = binding.sources.find((s) => s.startsWith('sem:'));
   return sem ? sem.substring('sem:'.length) : undefined;
+}
+
+/** 供请求体使用的「实际生效技能 id」（批次 F） */
+export function effectiveSkillIdOf(binding: ContextBinding): number | undefined {
+  return binding.skillId;
 }
 
 /**
@@ -341,6 +391,9 @@ export function describeBinding(binding: ContextBinding): {
     } else if (editor.tabType === 'semanticFile') {
       const file = [editor.semanticProject, editor.filePath].filter(Boolean).join(' / ');
       items.push({ key: 'semanticFile', value: file || '-' });
+    } else if (editor.tabType === 'skillFile') {
+      const file = [editor.skillName, editor.filePath].filter(Boolean).join(' / ');
+      items.push({ key: 'skillFile', value: file || '-' });
     }
   }
 
@@ -365,6 +418,15 @@ export function describeBinding(binding: ContextBinding): {
     items.push({ key: 'kbCollection', value: binding.kbCollection });
   }
 
+  // 批次 F：默认绑定技能。打开着 skill 文件时已由 skillFile 项表达，不重复列；
+  // 只有"仅树选中"时才单独显示，并用不同 key 让用户知道口径来自树而非正在编辑的文件。
+  if (binding.skillId && editor?.tabType !== 'skillFile') {
+    items.push({
+      key: 'skillFromTree',
+      value: binding.skillName || `#${binding.skillId}`
+    });
+  }
+
   return { items, empty: items.length === 0 };
 }
 
@@ -384,6 +446,8 @@ function buildEditorSource(editor: EditorContext): string {
       return `editor:res:${editor.resourceId ?? editor.resourceName ?? '-'}`;
     case 'semanticFile':
       return `editor:sem:${editor.semanticProject ?? '-'}:${editor.filePath ?? '-'}`;
+    case 'skillFile':
+      return `editor:skill:${editor.skillId ?? '-'}:${editor.filePath ?? '-'}`;
     default:
       return 'editor:unknown';
   }

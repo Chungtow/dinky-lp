@@ -98,6 +98,7 @@ export default {
   'menu.datastudio.aiChat': 'AI Chat',
   'menu.datastudio.semantic': '语义项目',
   'menu.datastudio.kb': '知识库',
+  'menu.datastudio.skill': '技能',
   'menu.datastudio.datasource': '数据源',
   'menu.datastudio.console': '控制台',
   'menu.datastudio.jobConfig': '作业配置',

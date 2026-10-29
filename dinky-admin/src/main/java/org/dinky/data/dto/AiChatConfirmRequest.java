@@ -45,6 +45,15 @@ public class AiChatConfirmRequest {
     @ApiModelProperty(value = "是否确认执行")
     private Boolean approve;
 
+    /**
+     * 批次 F（2026-10-29）：确认写 skill 文件时，是否<b>只应用到编辑区、不落盘</b>。
+     *
+     * <p>用户口径："AI 的改写放进编辑区就行，保存由人自己点"。为 true 且 {@link #approve} 为 true 时，
+     * 后端把 {@code APPLY_ONLY} 投给等待中的写工具，工具跳过持久化；前端负责把新正文塞进编辑器
+     * 并保持"未保存"状态。仅对 {@code kind=skill_file} 有意义，其余确认框忽略该字段。
+     */
+    private Boolean applyOnly;
+
     /** 服务端填充的当前用户 id（鉴权：仅创建者可确认/取消） */
     private Integer userId;
 

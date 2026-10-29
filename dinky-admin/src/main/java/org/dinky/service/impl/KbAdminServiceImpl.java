@@ -19,13 +19,13 @@
 
 package org.dinky.service.impl;
 
+import org.dinky.context.TenantContextHolder;
 import org.dinky.data.dto.KbCollectionSaveDTO;
 import org.dinky.data.dto.KbGrantSaveDTO;
 import org.dinky.data.exception.BusException;
 import org.dinky.data.model.KbCollection;
 import org.dinky.data.model.KbCollectionGrant;
 import org.dinky.data.vo.KbOrphanVO;
-import org.dinky.context.TenantContextHolder;
 import org.dinky.mapper.KbCollectionGrantMapper;
 import org.dinky.mapper.KbCollectionMapper;
 import org.dinky.service.KbAdminService;
@@ -34,8 +34,8 @@ import org.dinky.service.UserService;
 import org.dinky.service.kb.KbClient;
 
 import java.time.LocalDateTime;
-import java.util.Date;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -146,11 +146,12 @@ public class KbAdminServiceImpl implements KbAdminService {
     public List<KbOrphanVO> listOrphans() {
         requireSuperAdmin();
 
-        Set<String> registered = kbCollectionMapper
-                .selectList(new LambdaQueryWrapper<KbCollection>().select(KbCollection::getCode))
-                .stream()
-                .map(KbCollection::getCode)
-                .collect(Collectors.toSet());
+        Set<String> registered =
+                kbCollectionMapper
+                        .selectList(new LambdaQueryWrapper<KbCollection>().select(KbCollection::getCode))
+                        .stream()
+                        .map(KbCollection::getCode)
+                        .collect(Collectors.toSet());
 
         JSONObject body = kbClient.listCollections();
         JSONArray items = body.getJSONArray("items");
@@ -300,7 +301,11 @@ public class KbAdminServiceImpl implements KbAdminService {
         }
         Integer actorId = currentUserId();
         if (!isSuperAdmin(actorId) && !actorId.equals(collection.getOwnerId())) {
-            log.warn("KB manage denied: user={}, collection={}, owner={}", actorId, collectionId, collection.getOwnerId());
+            log.warn(
+                    "KB manage denied: user={}, collection={}, owner={}",
+                    actorId,
+                    collectionId,
+                    collection.getOwnerId());
             throw BusException.of("只有属主或超级管理员可以修改该知识库");
         }
         return collection;

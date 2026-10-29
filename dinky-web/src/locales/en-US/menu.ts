@@ -98,6 +98,7 @@ export default {
   'menu.datastudio.aiChat': 'AI Chat',
   'menu.datastudio.semantic': 'Semantic',
   'menu.datastudio.kb': 'Knowledge Base',
+  'menu.datastudio.skill': 'Skills',
   'menu.datastudio.datasource': 'Data Source',
   'menu.datastudio.console': 'Console',
   'menu.datastudio.jobConfig': 'Job Config',

@@ -229,6 +229,7 @@ export enum API_CONSTANTS {
   SKILL_FILE_READ = '/api/skill/file/read',
   SKILL_FILE_WRITE = '/api/skill/file/write',
   SKILL_FILE_MKDIR = '/api/skill/file/mkdir',
+  SKILL_FILE_RENAME = '/api/skill/file/rename',
   SKILL_FILE_REMOVE = '/api/skill/file/remove',
 
   // ------------------------------------ system log ------------------------------------

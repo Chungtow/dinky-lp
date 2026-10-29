@@ -58,7 +58,9 @@ const SkillOverView = () => {
    */
   const [createAssetType, setCreateAssetType] = useState<'skill' | 'doc'>('skill');
   const [createForm] = Form.useForm();
-  const [editing, setEditing] = useState<{ id: number; name: string; content: string }>();
+  // 批次 F：editing 里带上 version——保存时作为乐观锁的编辑起点，
+  // 避免"注册中心弹窗"与"数据开发 skill tab"同时编辑时静默覆盖。
+  const [editing, setEditing] = useState<{ id: number; name: string; content: string; version?: number }>();
   const [saving, setSaving] = useState(false);
   // 阶段 4b：文件面板（管理 skill 目录树与 references/ 子文件）
   const [filePanel, setFilePanel] = useState<{
@@ -99,7 +101,12 @@ const SkillOverView = () => {
       Modal.info({ title: row.name, content: detail?.content ?? '' });
       return;
     }
-    setEditing({ id: row.id, name: row.name, content: detail?.content ?? '' });
+    setEditing({
+      id: row.id,
+      name: row.name,
+      content: detail?.content ?? '',
+      version: detail?.skill?.version ?? row.version
+    });
   };
 
   /** 阶段 4b：打开文件面板（先取详情拿 editable——非属主只读查看） */
@@ -166,7 +173,7 @@ const SkillOverView = () => {
     }
     setSaving(true);
     try {
-      await saveSkill({ id: editing.id, content: editing.content }, () => {
+      await saveSkill({ id: editing.id, content: editing.content, baseVersion: editing.version }, () => {
         setEditing(undefined);
       });
       await load();

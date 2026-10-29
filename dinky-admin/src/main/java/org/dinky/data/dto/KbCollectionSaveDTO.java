@@ -52,9 +52,7 @@ public class KbCollectionSaveDTO implements Serializable {
     @ApiModelProperty(value = "Description", notes = "一句话说明（@ 候选里显示）")
     private String description;
 
-    @ApiModelProperty(
-            value = "Is Public",
-            notes = "是否公开给全体登录用户。<b>公开只影响可见，不影响可写</b>（写权限恒需属主或 write 授权）")
+    @ApiModelProperty(value = "Is Public", notes = "是否公开给全体登录用户。<b>公开只影响可见，不影响可写</b>（写权限恒需属主或 write 授权）")
     private Boolean isPublic;
 
     @ApiModelProperty(value = "Enabled", notes = "false = 停用（草稿态，不参与候选与检索；不是删除）")

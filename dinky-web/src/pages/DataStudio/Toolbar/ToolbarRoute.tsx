@@ -29,6 +29,7 @@ import {
   RobotOutlined,
   SettingOutlined,
   TableOutlined,
+  ThunderboltOutlined,
   ToolOutlined
 } from '@ant-design/icons';
 import React, { lazy, ReactElement, ReactNode, Suspense } from 'react';
@@ -49,6 +50,7 @@ const FlinkSqlClient = lazy(() => import('@/pages/DataStudio/Toolbar/FlinkSqlCli
 const Resource = lazy(() => import('@/pages/DataStudio/Toolbar/Resource'));
 const Semantic = lazy(() => import('@/pages/DataStudio/Toolbar/Semantic'));
 const Kb = lazy(() => import('@/pages/DataStudio/Toolbar/Kb'));
+const Skill = lazy(() => import('@/pages/DataStudio/Toolbar/Skill'));
 export const ToolbarRoutes: ToolbarRoute[] = [
   {
     key: 'quick-start',
@@ -136,6 +138,16 @@ export const ToolbarRoutes: ToolbarRoute[] = [
     icon: <BookOutlined />,
     position: 'leftTop',
     content: () => lazyComponent(<Kb />)
+  },
+  {
+    // 批次 F：技能（skill）编辑入口。**创建 / 可见性 / 删除整库仍在注册中心**，
+    // 这里只做"挑一个已有 skill → 编辑它的某个文件 → 保存"，
+    // 让 skill 与语义项目、知识库并列成为数据开发期的上下文来源。
+    key: 'skill',
+    title: () => l('menu.datastudio.skill'),
+    icon: <ThunderboltOutlined />,
+    position: 'leftTop',
+    content: () => lazyComponent(<Skill />)
   }
 ];
 

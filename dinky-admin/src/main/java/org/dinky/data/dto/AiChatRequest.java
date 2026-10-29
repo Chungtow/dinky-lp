@@ -158,6 +158,24 @@ public class AiChatRequest {
     private String semanticProject;
 
     /**
+     * 批次 F：数据开发左侧栏「技能」tab 当前绑定（打开的文件所属 / 选中的目录所属）的 skill id。
+     *
+     * <p>与 {@code semanticProject}、批次 E 的 {@code defaultCollection} 同构：它只是"默认范围"，
+     * 不是命令——显式 {@code @skill/<名>} 永远优先；不可见（被删/撤权/换租户）时**显式拒绝**，
+     * 绝不静默回落成"整个可用清单"，否则用户以为模型读了 A skill、实际读的是别的。
+     */
+    private Long defaultSkillId;
+
+    /**
+     * 校验通过的生效 skill id（{@code @JsonIgnore}，不回传前端）。
+     *
+     * <p>用途：从随后注入的"可用技能清单"里摘掉它，避免同一份 skill 既单独介绍又重复出现；
+     * 同时给审计/排障留一个"本轮绑定生效"的判断依据。
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private Long effectiveSkillDefault;
+
+    /**
      * 上下文指纹（P4 一期）：由前端按「当前绑定来源」计算，形如 {@code ctx_1a2b3c4d5e6f7a8b}。
      *
      * <p>用途：自动绑定后，切换 tab / 换语义项目都会让上下文变化，但 {@code sessionId} 不变。

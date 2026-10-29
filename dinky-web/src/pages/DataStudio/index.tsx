@@ -60,6 +60,7 @@ const DataSourceDetail = lazy(() => import('@/pages/DataStudio/CenterTabContent/
 const ResourceDetail = lazy(() => import('@/pages/DataStudio/CenterTabContent/ResourceDetail'));
 const SemanticFile = lazy(() => import('@/pages/DataStudio/CenterTabContent/SemanticFile'));
 const KbFile = lazy(() => import('@/pages/DataStudio/CenterTabContent/KbFile'));
+const SkillFile = lazy(() => import('@/pages/DataStudio/CenterTabContent/SkillFile'));
 
 let didMount = false;
 const DataStudio: React.FC = (props: any) => {
@@ -446,6 +447,10 @@ const DataStudio: React.FC = (props: any) => {
           break;
         case 'kbFile':
           content = <KbFile tabData={tabData} />;
+          break;
+        case 'skillFile':
+          // 批次 F：skill 内文件编辑（正文在 tab params.statement，AI Chat 因此能读到）
+          content = <SkillFile tabData={tabData} />;
           break;
       }
       return {

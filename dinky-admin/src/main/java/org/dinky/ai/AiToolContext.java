@@ -195,6 +195,17 @@ public class AiToolContext {
         default boolean request(ConfirmPayload payload) {
             return request(payload == null ? null : payload.getSql(), payload == null ? null : payload.getRisk());
         }
+
+        /**
+         * 三态确认入口（2026-10-29）：除"确认落盘 / 拒绝"外，还要能表达"仅应用到编辑区"。
+         *
+         * <p>默认实现降级为二态（{@link #request(ConfirmPayload)}），因此<b>SQL 执行、删除类工具
+         * 一行都不用改</b>；只有 {@code write_skill_file} 会真正走到装配侧的覆盖实现，
+         * 并在拿到 {@link AiConfirmDecision#APPLY_ONLY} 时跳过落盘。
+         */
+        default AiConfirmDecision requestDecision(ConfirmPayload payload) {
+            return request(payload) ? AiConfirmDecision.APPROVE : AiConfirmDecision.REJECT;
+        }
     }
 
     public static AiToolContext create(
