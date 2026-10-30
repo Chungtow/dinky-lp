@@ -793,6 +793,7 @@ export default {
   'datastudio.aiChat.mention.groupJob': 'Job',
   'datastudio.aiChat.mention.groupSelection': 'Selection',
   'datastudio.aiChat.mention.groupSkill': 'Skill',
+  'datastudio.aiChat.mention.groupDoc': 'Doc',
   'datastudio.aiChat.mention.groupSource': 'Datasource (cross-source)',
   'datastudio.aiChat.mention.groupSourceDb': 'Database (cross-source)',
   'datastudio.aiChat.mention.groupSourceTable': 'Table (cross-source)',

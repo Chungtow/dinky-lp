@@ -1557,6 +1557,11 @@ public class AiChatServiceImpl implements AiChatService {
      * （否则无法确定所属 schema），不在此兜底，避免误判。
      */
     private List<AiChatMention> resolveMentions(AiChatRequest request) {
+        // D2（2026-10-30）：引用条数上限。上方注释里的「不被预算裁剪」指的是不被
+        // schema / 字段预算挤掉，**不是**"可以无限注入"——每个 skill 各自享有
+        // llmSkillMaxChars 预算，一次性 @ 几十个就绕过了整体约束。上限取 20：
+        // 正常提问引用个数远低于它，而 20 个句柄已足够触发预算告警。
+        final int maxMentions = 20;
         List<AiChatMention> mentions = request.getMentions();
         List<AiChatMention> result = mentions == null ? new ArrayList<>() : new ArrayList<>(mentions);
         String message = StrUtil.nullToEmpty(request.getMessage());
@@ -1598,6 +1603,11 @@ public class AiChatServiceImpl implements AiChatService {
             result.add(mention);
             log.info("Path mention recovered from message text: type={}, name={}", type, name);
         }
+        // D2：超限裁剪必须留痕——静默丢弃会让用户误以为"引用了但模型没看见"
+        if (result.size() > maxMentions) {
+            log.info("Mentions truncated: {} -> {}（超出上限的引用不再注入，请在提问中减少 @ 个数）", result.size(), maxMentions);
+            return new ArrayList<>(result.subList(0, maxMentions));
+        }
         return result;
     }
 
@@ -1627,6 +1637,18 @@ public class AiChatServiceImpl implements AiChatService {
      */
     private void appendSemanticDetail(StringBuilder sb, String handlePath) {
         String handle = StrUtil.nullToEmpty(handlePath);
+        // D1（2026-10-30）：注入路径此前**没有权限校验**——句柄是纯文本，手打
+        // @semantic/<任意项目> 即可读到正文；前端候选过滤只是减少干扰，不是安全边界。
+        // 这里与 buildSemanticProjectContext 同源双检（开关 + datastudio:semantic:view），
+        // 拒绝时静默返回（不把"项目存在但你没权限"回显给模型，避免信息泄漏）。
+        if (!Boolean.TRUE.equals(
+                SystemConfiguration.getInstances().getSemanticEnable().getValue())) {
+            return;
+        }
+        if (!hasSemanticPermission()) {
+            log.info("Semantic mention skipped (no semantic:view permission): handle={}", handle);
+            return;
+        }
         try {
             SemanticAssetRef ref = semanticAssetProvider.resolve(handle);
             int budget = SystemConfiguration.getInstances().getLlmSkillMaxChars();
@@ -1649,6 +1671,21 @@ public class AiChatServiceImpl implements AiChatService {
         } catch (RuntimeException e) {
             log.warn("Semantic mention failed: handle={}", handle, e);
             sb.append("- @semantic/").append(handle).append("（语义资产读取失败，已忽略）\n");
+        }
+    }
+
+    /**
+     * 当前用户是否具备语义资产读权限。
+     *
+     * <p>注入链路可能跑在异步线程（Sa-Token 上下文已丢失），此时 {@code StpUtil} 会抛异常；
+     * 一律按<b>无权限</b>处理——不降级、不放行，避免"上下文丢失"变成"权限检查失效"。
+     */
+    private boolean hasSemanticPermission() {
+        try {
+            return StpUtil.hasPermission(PermissionConstants.DATASTUDIO_SEMANTIC_VIEW);
+        } catch (Exception e) {
+            log.debug("Semantic permission check failed: {}", e.getMessage());
+            return false;
         }
     }
 
