@@ -66,8 +66,13 @@ public class KbAssetProvider implements MentionCandidateProvider {
             if (brief == null || StrUtil.isBlank(brief.getCode())) {
                 continue;
             }
-            refs.add(AssetRef.of(
-                    AssetType.KB, brief.getCode(), StrUtil.blankToDefault(brief.getName(), brief.getCode())));
+            String displayName = StrUtil.blankToDefault(brief.getName(), brief.getCode());
+            AssetRef ref = AssetRef.of(AssetType.KB, brief.getCode(), displayName);
+            // 副标题必须是**库名**：候选左侧只能显示库编码（要写进 filter.collection，
+            // 不能替换成显示名），用户靠右侧这行才知道 ima_kb_62blyRRR 到底是哪个库。
+            // 多个库名字都带"运维"时，这一行是唯一的区分依据。
+            ref.setSubtitle(displayName);
+            refs.add(ref);
         }
         return refs;
     }

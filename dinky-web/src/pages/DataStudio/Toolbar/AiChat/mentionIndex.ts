@@ -26,6 +26,13 @@ export type MentionCandidatePayload = {
   types?: string[];
   codes?: string[];
   titles?: string[];
+  /**
+   * 副标题列（与 {@code codes} 下标对齐，元素可能为 {@code null}）。
+   *
+   * <p>kb 是库名、skill/doc 是描述、semantic 是版本规模。服务端在条目过多时会整列留空，
+   * 前端据此退化为"只显示分组名"。
+   */
+  subs?: (string | null)[];
 };
 
 /**

@@ -272,6 +272,18 @@ export type AiChatMentionItem = {
    * 该字段只在本地判定用，**不进请求体**（后端 {@code AiChatMention} 无此字段）。
    */
   chainable?: boolean;
+  /**
+   * 候选面板右侧的**提示信息**（不参与插入、不进请求体）。
+   *
+   * <p>存在的理由：有些候选的 {@code name} 天生不可读——知识库的 name 必须是库编码
+   * （{@code ima_kb_62blyRRR}，要写进 {@code filter.collection}），而用户认的是库名
+   * "Traccar 运维教程（IMA）"。没有这一行提示时，多个名字带"运维"的库完全无从选择。
+   *
+   * <p>取值来源：索引条目的 {@code subs} 列（kb=库名、skill/doc=描述、semantic=版本规模），
+   * 或既有候选的 {@code content}（kb 的库名、skill/doc 的描述）。<b>不用于</b>
+   * job / selection（它们的 content 是 SQL 正文，不能出现在浮层）。
+   */
+  hint?: string;
 };
 
 /** 对话请求体：只携带元数据定位信息，绝不携带业务数据 */

@@ -65,7 +65,10 @@ public class DocAssetProvider implements MentionCandidateProvider {
             if (skill == null || StrUtil.isBlank(skill.getName()) || !SkillAssetSnapshot.isDoc(skill)) {
                 continue;
             }
-            refs.add(AssetRef.of(AssetType.DOC, skill.getName(), skill.getName()));
+            AssetRef ref = AssetRef.of(AssetType.DOC, skill.getName(), skill.getName());
+            // 副标题 = 文档一句话说明（候选面板右侧提示，与 skill 同源）
+            ref.setSubtitle(skill.getDescription());
+            refs.add(ref);
         }
         return refs;
     }

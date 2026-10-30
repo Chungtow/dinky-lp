@@ -70,6 +70,22 @@ public class MentionCandidateVO implements Serializable {
     @ApiModelProperty(value = "Titles", notes = "展示名")
     private List<String> titles;
 
+    /**
+     * 副标题列（与 {@code codes} 下标对齐，允许 {@code null} 元素）。
+     *
+     * <p><b>为什么原本不下发、现在又加了</b>：最初为了把常驻内存压到 6~8MB，副标题改成
+     * "选中后再拉"（{@code /mention/detail}）。但实测发现候选面板里<b>没有副标题就无法区分
+     * 同名/编码式候选</b>——典型是知识库：{@code name} 必须是库编码（{@code ima_kb_62blyRRR}，
+     * 系统生成、可安全写进 {@code filter.collection}），而用户认的是库名
+     * "Traccar 运维教程（IMA）"。只显示编码时，多个名字带"运维"的库完全无从选择。
+     *
+     * <p>因此改为<b>预取时一并下发轻量副标题</b>（kb=库名、skill/doc=一句话描述、
+     * semantic=版本与资产数），并设条目阈值 {@code MAX_SUB_ITEMS}：超过阈值时整列留空，
+     * 回到"选中后再拉"的老路——保证内存预算在条目膨胀时不会失守。
+     */
+    @ApiModelProperty(value = "Subtitles", notes = "副标题；超出阈值时为空")
+    private List<String> subs;
+
     public static final String MODE_PREFETCH = "prefetch";
 
     public static final String MODE_SEARCH = "search";

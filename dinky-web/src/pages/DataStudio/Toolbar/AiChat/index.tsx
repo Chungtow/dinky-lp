@@ -150,6 +150,31 @@ const mentionGroupOfType = (type: string): string => {
 };
 
 /**
+ * 候选面板右侧的提示文案（2026-10-30）。
+ *
+ * <p><b>为什么需要</b>：部分候选的 {@code name} 天生不可读——kb 的 name 必须是库编码
+ * （{@code ima_kb_62blyRRR}，系统生成、要写进 {@code filter.collection}），而用户认的是库名。
+ * 只显示编码时，多个名字都带"运维"的库根本无从选择。
+ *
+ * <p>取值优先级：索引下发的 {@code hint}（kb=库名 / skill·doc=描述 / semantic=版本规模）
+ * → 既有候选的 {@code content} 兜底（前缀路径 {@code @kb/}、{@code @skill/} 走的是老来源，
+ * 那里 content 放的正是库名/描述）。
+ *
+ * <p>⚠️ <b>只对 kb / skill / doc 兜底</b>：job 与 selection 的 {@code content} 是 SQL 正文，
+ * 出现在浮层里既无意义、又可能把整段 SQL 摆到屏幕上。
+ */
+const mentionHintOf = (item: AiChatMentionItem): string | undefined => {
+  if (item.hint) {
+    return item.hint;
+  }
+  if (item.type === 'kb' || item.type === 'skill' || item.type === 'doc') {
+    const text = `${item.content ?? ''}`.trim();
+    return text || undefined;
+  }
+  return undefined;
+};
+
+/**
  * C1：一级前缀入口（`source/`、`semantic/`…）。
  *
  * <p>无类型前缀输入时也参与本地匹配——打 {@code sou} 就能看到 {@code source/}，
@@ -1123,12 +1148,16 @@ const AiChat = (props: AiChatProps) => {
         continue;
       }
       const type = `${indexTypes[i] ?? ''}`;
+      const subtitle = `${assetIndex?.subs?.[i] ?? ''}`.trim();
       pool.push({
         type: type as AiChatMentionItem['type'],
         name,
         // 索引的 title 是展示名（kb 是库名、不是编码 c_xxx）。放进 content 而不是 name，
         // 与既有 listKbCollections 的约定一致：name 存可寻址标识，content 存展示/描述。
         content: indexTitles[i],
+        // 右侧提示：优先服务端副标题（kb=库名 / skill·doc=描述 / semantic=版本规模）；
+        // 服务端因条目超阈值整列省略时，kb 退回 title（title 本身就是库名）
+        hint: subtitle || (type === 'kb' ? indexTitles[i] : undefined),
         group: mentionGroupOfType(type)
       });
     }
@@ -2446,7 +2475,15 @@ const AiChat = (props: AiChatProps) => {
                     background: index === mentionIndex ? 'rgba(22,119,255,0.10)' : 'transparent'
                   }}
                 >
-                  <span style={{ fontSize: 12 }}>
+                  <span
+                    style={{
+                      fontSize: 12,
+                      maxWidth: '46%',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
                     {item.type === 'column'
                       ? `${item.name}.${item.columnName}`
                       : // 中间层级在列表里就带 `/`：让「选中后会进下一级」这件事可见，
@@ -2455,10 +2492,32 @@ const AiChat = (props: AiChatProps) => {
                         ? `${item.name}/`
                         : item.name}
                   </span>
-                  <span style={{ fontSize: 11, color: 'rgba(0,0,0,0.45)', flexShrink: 0 }}>
+                  {/*
+                    右侧 = 分组 + 名称/说明。知识库的 name 是库编码（写进 filter.collection 用），
+                    只显示编码时用户分不清是哪个库——这一行就是区分依据（2026-10-30 反馈）。
+                    title 属性保留完整文案：超长被省略号截断时，悬停仍可看全。
+                  */}
+                  <span
+                    title={
+                      mentionHintOf(item)
+                        ? `${item.group} · ${mentionHintOf(item)}`
+                        : item.group
+                    }
+                    style={{
+                      fontSize: 11,
+                      color: 'rgba(0,0,0,0.45)',
+                      flexShrink: 0,
+                      maxWidth: '52%',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
                     {recentMentions.includes(item.name)
                       ? l('datastudio.aiChat.mention.recent')
-                      : item.group}
+                      : mentionHintOf(item)
+                        ? `${item.group} · ${mentionHintOf(item)}`
+                        : item.group}
                   </span>
                 </div>
               ))

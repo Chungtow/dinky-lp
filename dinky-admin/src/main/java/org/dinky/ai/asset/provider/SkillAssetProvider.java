@@ -72,7 +72,10 @@ public class SkillAssetProvider implements MentionCandidateProvider {
             if (SkillAssetSnapshot.isDoc(skill)) {
                 continue;
             }
-            refs.add(AssetRef.of(AssetType.SKILL, skill.getName(), skill.getName()));
+            AssetRef ref = AssetRef.of(AssetType.SKILL, skill.getName(), skill.getName());
+            // 副标题 = 一句话描述：候选面板右侧据此区分名字相近的 skill
+            ref.setSubtitle(skill.getDescription());
+            refs.add(ref);
         }
         return refs;
     }

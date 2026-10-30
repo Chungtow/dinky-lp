@@ -78,6 +78,13 @@ public class SemanticProjectProvider implements MentionCandidateProvider {
                 continue;
             }
             AssetRef ref = AssetRef.of(AssetType.SEMANTIC, project.getName(), project.getName());
+            // 副标题 = 版本 + 资产规模：项目名往往很像（dw / dw_dev / dw_uat），
+            // 版本与表/指标数是最直接的区分依据
+            ref.setSubtitle(StrUtil.format(
+                    "v{} · {} table / {} metric",
+                    StrUtil.nullToEmpty(project.getVersion()),
+                    project.getTableCount(),
+                    project.getMetricCount()));
             refs.add(ref);
         }
         return refs;

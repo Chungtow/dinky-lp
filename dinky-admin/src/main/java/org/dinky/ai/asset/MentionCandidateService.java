@@ -78,6 +78,15 @@ public class MentionCandidateService {
 
     private static final int MAX_SEARCH_LIMIT = 200;
 
+    /**
+     * 副标题列的条目阈值：超过则整列留空。
+     *
+     * <p>候选总量在百级~千级时，副标题（库名/描述）是"能不能选中"的关键信息；
+     * 但若某天 doc 涨到万级，副标题会让载荷与常驻内存翻倍——那时退回
+     * "选中后再拉 {@code /mention/detail}"。阈值取 2000（约 2×100B×2000 ≈ 0.4MB）。
+     */
+    private static final int MAX_SUB_ITEMS = 2_000;
+
     private final List<MentionCandidateProvider> providers;
 
     private final Map<String, Snapshot> cache = new ConcurrentHashMap<>();
@@ -222,15 +231,20 @@ public class MentionCandidateService {
         List<String> types = new ArrayList<>(size);
         List<String> codes = new ArrayList<>(size);
         List<String> titles = new ArrayList<>(size);
+        List<String> subs = new ArrayList<>(size);
+        boolean withSubs = size <= MAX_SUB_ITEMS;
         for (int i = 0; i < size; i++) {
             AssetRef ref = refs.get(i);
             types.add(ref.getType());
             codes.add(ref.getCode());
             titles.add(ref.getTitle());
+            // 副标题只在阈值内下发；超出时整列为 null，前端按"无提示"渲染
+            subs.add(withSubs ? ref.getSubtitle() : null);
         }
         vo.setTypes(types);
         vo.setCodes(codes);
         vo.setTitles(titles);
+        vo.setSubs(subs);
         return vo;
     }
 
