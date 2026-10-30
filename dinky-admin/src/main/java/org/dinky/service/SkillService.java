@@ -57,6 +57,15 @@ public interface SkillService extends ISuperService<Skill> {
      */
     Skill findVisibleByName(String name);
 
+    /**
+     * 按 name 取 skill / doc 资产，<b>不判可见性</b>；不存在返回 null。
+     *
+     * <p><b>只给校验端点用</b>（{@code POST /api/skill/validate}）：那里必须区分
+     * 「资源不存在」与「存在但当前用户不可见」——两者给用户的修正动作完全不同（改名 vs 找属主授权）。
+     * 业务读路径<b>不允许</b>调用本方法，一律走 {@link #findVisibleByName(String)}。
+     */
+    Skill findAnyByName(String name);
+
     /** 读取 skill 的 {@code SKILL.md} 正文（可见性校验后按路径直读资源存储） */
     String readContent(Skill skill);
 

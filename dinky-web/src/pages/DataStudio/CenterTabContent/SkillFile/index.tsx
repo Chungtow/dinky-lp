@@ -19,13 +19,19 @@
 
 import { connect } from '@@/exports';
 import CodeEdit from '@/components/CustomEditor/CodeEdit';
+import {
+  hashContent,
+  registerMentionCompletion,
+  registerMentionHover,
+  setMentionMarkers
+} from '@/components/CustomEditor/mentionCompletion';
 import { CenterTab, DataStudioState } from '@/pages/DataStudio/model';
 import { mapDispatchToProps } from '@/pages/DataStudio/DvaFunction';
 import { DataStudioContext } from '@/pages/DataStudio/DataStudioContext';
 import { skillEditorKey } from '@/pages/DataStudio/editorKey';
-import { detailSkill, writeSkillFile } from '@/pages/RegCenter/Skills/service';
+import { detailSkill, validateSkillContent, writeSkillFile } from '@/pages/RegCenter/Skills/service';
 import { l } from '@/utils/intl';
-import { SuccessMessage, WarningMessage } from '@/utils/messages';
+import { InfoMessage, SuccessMessage, WarningMessage } from '@/utils/messages';
 import { SaveOutlined } from '@ant-design/icons';
 import ThemeChip from '@/components/ThemeChip';
 import { Space, Tooltip, Typography } from 'antd';
@@ -33,6 +39,9 @@ import { editor } from 'monaco-editor';
 import React, { useContext, useEffect, useRef, useState } from 'react';
 
 const { Text } = Typography;
+
+/** skill / doc 正文的语言模式（`@` 补全与句柄校验只在这个模式下生效） */
+const MARKDOWN = 'markdown';
 
 /** 按扩展名给 monaco 语言模式（SKILL.md 走 markdown，yaml/json 照旧） */
 const languageOf = (path?: string): string => {
@@ -83,6 +92,24 @@ const SkillFile = (props: { tabData: CenterTab; updateCenterTab: (payload: any) 
    */
   const incomingRef = useRef<string>(statement ?? '');
 
+  /** 只有 markdown 正文才注册 `@` 补全 / 悬停 / 校验标记（yaml/json/sql 附件不涉及句柄） */
+  const isMarkdown = languageOf(relativePath || 'SKILL.md') === MARKDOWN;
+
+  const monacoRef = useRef<any>(null);
+
+  const modelRef = useRef<editor.ITextModel | null>(null);
+
+  /** provider 必须在卸载时 dispose，否则重开同一个 tab 会叠出多份候选 */
+  const disposablesRef = useRef<{ dispose: () => void }[]>([]);
+
+  /** 最近一次成功校验的正文指纹（同一份正文不重复打接口，计划风险 12） */
+  const validatedHashRef = useRef<string>('');
+
+  /** 最近一次正文（校验返回时判断结果是否已过期，计划风险 8） */
+  const latestCodeRef = useRef<string>(statement ?? '');
+
+  const validateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   /**
    * 外部正文 / 版本同步（UAT 2026-10-29：关掉再打开还是旧版本、旧正文）。
    *
@@ -98,6 +125,7 @@ const SkillFile = (props: { tabData: CenterTab; updateCenterTab: (payload: any) 
     const incoming = statement ?? '';
     if (incoming !== incomingRef.current) {
       incomingRef.current = incoming;
+      latestCodeRef.current = incoming;
       setCode(incoming);
       setDirty(false);
     }
@@ -112,20 +140,87 @@ const SkillFile = (props: { tabData: CenterTab; updateCenterTab: (payload: any) 
     };
   }, [editorKey]);
 
-  const onMount = (instance: editor.IStandaloneCodeEditor) => {
+  /**
+   * 卸载清理：provider 不 dispose 会一直挂在 monaco 的 markdown 语言上
+   * （tab 每开一次就多一份候选，最终表现为"同一个表出现 5 次"）。
+   */
+  useEffect(() => {
+    return () => {
+      disposablesRef.current.forEach((item) => item.dispose());
+      disposablesRef.current = [];
+      if (validateTimerRef.current) {
+        clearTimeout(validateTimerRef.current);
+        validateTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  const onMount = (instance: editor.IStandaloneCodeEditor, monacoIns: any) => {
     if (editorKey) {
       editorRegistry?.register(editorKey, instance);
+    }
+    if (!isMarkdown || !monacoIns) {
+      return;
+    }
+    // 只在 markdown 的 skill 正文上注册：既有 SQL / FlinkSQL 补全按 language 隔离，不受影响
+    monacoRef.current = monacoIns;
+    modelRef.current = instance.getModel();
+    disposablesRef.current.push(
+      registerMentionCompletion(monacoIns, { languageId: MARKDOWN }),
+      registerMentionHover(monacoIns, { languageId: MARKDOWN })
+    );
+  };
+
+  /**
+   * 保存后 / 停手 800ms 后的句柄校验。
+   *
+   * <p><b>为什么要比对指纹</b>：校验结果是"提交那一刻的行列"，用户在校验返回前继续敲字就会标错位置
+   * （计划风险 8）。这里用 hash 双向去重：同一份正文不重复请求，回来的结果与当前正文不一致就丢弃。
+   */
+  const runValidate = async (value: string) => {
+    if (!isMarkdown) {
+      return;
+    }
+    const hash = hashContent(value);
+    if (hash === validatedHashRef.current) {
+      return;
+    }
+    validatedHashRef.current = hash;
+    const result = await validateSkillContent(value, hash);
+    if (!result) {
+      return;
+    }
+    if (result.contentHash && result.contentHash !== hashContent(latestCodeRef.current)) {
+      // 结果已过期（正文又变了）：不打 marker，等下一轮
+      validatedHashRef.current = '';
+      return;
+    }
+    setMentionMarkers(monacoRef.current, modelRef.current, result);
+    if (result.summary.bareOnly > 0) {
+      // 裸写只提示一次汇总，不逐个画波浪线（否则存量 skill 一打开满屏黄线）
+      await InfoMessage(l('datastudio.skill.validate.bareHint', undefined, { count: result.summary.bareOnly }));
     }
   };
 
   const onChange = (value?: string) => {
     const next = value ?? '';
     setCode(next);
+    latestCodeRef.current = next;
     // 自己敲的键也要记进 ref，否则同步 effect 会把这次改动当成"外部换内容"而清掉 dirty
     incomingRef.current = next;
     setDirty(next !== (statement ?? ''));
     // 与语义文件同款：正文实时写回 tab params，AI Chat 读到的就是"用户正在编辑的内容"
     updateCenterTab({ ...tabData, isUpdate: true, params: { ...tabData.params, statement: next } });
+    // 停手 800ms 后静默校验一次（与保存后那次共用指纹去重，不会打两次接口）
+    if (isMarkdown && !readOnly) {
+      if (validateTimerRef.current) {
+        clearTimeout(validateTimerRef.current);
+      }
+      validateTimerRef.current = setTimeout(() => {
+        validateTimerRef.current = null;
+        runValidate(next);
+      }, 800);
+    }
   };
 
   const onSave = async () => {
@@ -161,6 +256,11 @@ const SkillFile = (props: { tabData: CenterTab; updateCenterTab: (payload: any) 
         params: { ...tabData.params, statement: code, version: nextVersion }
       });
       await SuccessMessage(l('datastudio.skill.saved'));
+      // 保存已成功 → 再跑一次校验打 marker（警告不阻断，失败也不打扰用户）
+      if (isMarkdown) {
+        validatedHashRef.current = '';
+        await runValidate(code);
+      }
     } catch (e: any) {
       await WarningMessage(e?.message ?? l('datastudio.skill.saveFailed'));
     } finally {
