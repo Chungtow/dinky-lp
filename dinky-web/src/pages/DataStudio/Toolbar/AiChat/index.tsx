@@ -175,6 +175,29 @@ const mentionHintOf = (item: AiChatMentionItem): string | undefined => {
 };
 
 /**
+ * 候选右侧的完整文案：**名称/说明在前，分组（或「最近用过」）在后**。
+ *
+ * <p><b>顺序为什么不能反</b>：右侧可用宽度只有一半，超长时从<b>尾部</b>截断。
+ * 把「最近用过」这类可有可无的标记放尾部，截断先丢它；把库名放最前，
+ * 才能保证 `ima_kb_62blyRRR` 一定带出「Traccar 运维教程（IMA）」。
+ *
+ * <p><b>为什么单独抽这个函数</b>（2026-10-30 UAT 反馈）：第一版把「最近用过」写成了
+ * 独立三元分支（recent ? 最近用过 : hint ? …），于是<b>最近用过的知识库永远看不到库名</b>
+ * ——用户截图里正是这个现象：`ima_kb_62blyRRR` 右侧只有「最近用过」。
+ * 现在两者并存，且名称优先。
+ *
+ * <p>hint 与 name 完全相同时不重复展示（如库名恰好等于编码、skill 无描述）。
+ */
+const mentionRightText = (item: AiChatMentionItem, recent: boolean): string => {
+  const hint = mentionHintOf(item);
+  const tail = recent ? l('datastudio.aiChat.mention.recent') : item.group;
+  if (!hint || hint === item.name) {
+    return tail;
+  }
+  return `${hint} · ${tail}`;
+};
+
+/**
  * C1：一级前缀入口（`source/`、`semantic/`…）。
  *
  * <p>无类型前缀输入时也参与本地匹配——打 {@code sou} 就能看到 {@code source/}，
@@ -2498,11 +2521,7 @@ const AiChat = (props: AiChatProps) => {
                     title 属性保留完整文案：超长被省略号截断时，悬停仍可看全。
                   */}
                   <span
-                    title={
-                      mentionHintOf(item)
-                        ? `${item.group} · ${mentionHintOf(item)}`
-                        : item.group
-                    }
+                    title={mentionRightText(item, recentMentions.includes(item.name))}
                     style={{
                       fontSize: 11,
                       color: 'rgba(0,0,0,0.45)',
@@ -2513,11 +2532,7 @@ const AiChat = (props: AiChatProps) => {
                       whiteSpace: 'nowrap'
                     }}
                   >
-                    {recentMentions.includes(item.name)
-                      ? l('datastudio.aiChat.mention.recent')
-                      : mentionHintOf(item)
-                        ? `${item.group} · ${mentionHintOf(item)}`
-                        : item.group}
+                    {mentionRightText(item, recentMentions.includes(item.name))}
                   </span>
                 </div>
               ))
