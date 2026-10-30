@@ -21,10 +21,10 @@ import { connect } from '@@/exports';
 import CodeEdit from '@/components/CustomEditor/CodeEdit';
 import {
   hashContent,
-  registerMentionCompletion,
   registerMentionHover,
   setMentionMarkers
 } from '@/components/CustomEditor/mentionCompletion';
+import { attachMentionController } from '@/components/CustomEditor/mentionController';
 import { CenterTab, DataStudioState } from '@/pages/DataStudio/model';
 import { mapDispatchToProps } from '@/pages/DataStudio/DvaFunction';
 import { DataStudioContext } from '@/pages/DataStudio/DataStudioContext';
@@ -165,10 +165,10 @@ const SkillFile = (props: { tabData: CenterTab; updateCenterTab: (payload: any) 
     // 只在 markdown 的 skill 正文上注册：既有 SQL / FlinkSQL 补全按 language 隔离，不受影响
     monacoRef.current = monacoIns;
     modelRef.current = instance.getModel();
-    disposablesRef.current.push(
-      registerMentionCompletion(monacoIns, { languageId: MARKDOWN }),
-      registerMentionHover(monacoIns, { languageId: MARKDOWN })
-    );
+    // `@` 候选面板：照搬 AI Chat 的做法（自管开合/键盘/插入），不用 Monaco 的 suggest widget。
+    // 详见 components/CustomEditor/mentionController.ts 顶部说明。
+    attachMentionController(monacoIns, instance, { languageId: MARKDOWN });
+    disposablesRef.current.push(registerMentionHover(monacoIns, { languageId: MARKDOWN }));
   };
 
   /**
@@ -303,7 +303,22 @@ const SkillFile = (props: { tabData: CenterTab; updateCenterTab: (payload: any) 
           readOnly={Boolean(readOnly)}
           onChange={onChange}
           editorDidMount={onMount}
-          options={{ wordWrap: 'on', minimap: { enabled: false } }}
+          // 关掉编辑器自带的"按文档分词"补全：它会和 `@` 句柄候选混在一起，
+          // 且在 skill 场景下会一直卡在 Loading（详见 CodeEdit 的 wordSuggestionsEnabled 注释）
+          wordSuggestionsEnabled={false}
+          options={{
+            wordWrap: 'on',
+            minimap: { enabled: false },
+            // CodeEdit 默认把 quickSuggestions 关掉（enableSuggestions=false），而这会连带
+            // 关掉「输入触发字符自动弹候选」——`@` 敲下去毫无反应就是这个原因（UAT 2026-10-30）。
+            // 这里只给 skill 正文打开自动候选，且关掉词补全，避免文档里的词混进 @ 候选列表。
+            quickSuggestions: { other: true, comments: false, strings: false },
+            suggestOnTriggerCharacters: true,
+            wordBasedSuggestions: 'off',
+            suggest: { quickSuggestions: { other: true, comments: false, strings: false } },
+            // 补全 widget 默认被编辑器容器裁剪；技能 tab 的父容器有 overflow，需固定定位才不被截断
+            fixedOverflowWidgets: true
+          }}
         />
       </div>
     </div>
