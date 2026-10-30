@@ -28,6 +28,8 @@ import {
 import { decideMentionBackspace } from './mentionBackspace';
 import type { MentionBackspaceArm } from './mentionBackspace';
 import { finalizePathMention, isMentionTrigger, replaceMentionToken } from './mentionPath';
+import { parseMentionScope, scoreMention } from './mentionIndex';
+import type { MentionCandidatePayload } from './mentionIndex';
 // 注意与本文件 './service' 里的 `listSkills`（@ 候选用的轻量列表）重名，这里显式起别名
 import {
   detailSkill as fetchSkillDetail,
@@ -61,6 +63,7 @@ import {
   aiChatStream,
   cancelAiChat,
   confirmAiChat,
+  fetchMentionCandidates,
   getAiChatConfig,
   listFlinkSqlEnvs,
   listMentionTopics,
@@ -124,6 +127,91 @@ const resolveSourceDs = (list: any[], typed: string) => {
     list.find((item: any) => `${item.name}`.toLowerCase() === typed.toLowerCase())
   );
 };
+
+/**
+ * C1：统一索引的类型 → 候选分组词条。
+ *
+ * <p>索引条目只带协议值（{@code skill}/{@code doc}/…），分组文案在前端映射，
+ * 避免后端为了一个展示串引入 i18n 依赖（后端返回的 group 也无法本地化）。
+ */
+const mentionGroupOfType = (type: string): string => {
+  switch (type) {
+    case 'skill':
+      return l('datastudio.aiChat.mention.groupSkill');
+    case 'doc':
+      return l('datastudio.aiChat.mention.groupDoc');
+    case 'semantic':
+      return l('datastudio.aiChat.mention.groupSemantic');
+    case 'kb':
+      return l('datastudio.aiChat.mention.groupKb');
+    default:
+      return l('datastudio.aiChat.mention.groupTable');
+  }
+};
+
+/**
+ * 候选面板右侧的提示文案（2026-10-30）。
+ *
+ * <p><b>为什么需要</b>：部分候选的 {@code name} 天生不可读——kb 的 name 必须是库编码
+ * （{@code ima_kb_62blyRRR}，系统生成、要写进 {@code filter.collection}），而用户认的是库名。
+ * 只显示编码时，多个名字都带"运维"的库根本无从选择。
+ *
+ * <p>取值优先级：索引下发的 {@code hint}（kb=库名 / skill·doc=描述 / semantic=版本规模）
+ * → 既有候选的 {@code content} 兜底（前缀路径 {@code @kb/}、{@code @skill/} 走的是老来源，
+ * 那里 content 放的正是库名/描述）。
+ *
+ * <p>⚠️ <b>只对 kb / skill / doc 兜底</b>：job 与 selection 的 {@code content} 是 SQL 正文，
+ * 出现在浮层里既无意义、又可能把整段 SQL 摆到屏幕上。
+ */
+const mentionHintOf = (item: AiChatMentionItem): string | undefined => {
+  if (item.hint) {
+    return item.hint;
+  }
+  if (item.type === 'kb' || item.type === 'skill' || item.type === 'doc') {
+    const text = `${item.content ?? ''}`.trim();
+    return text || undefined;
+  }
+  return undefined;
+};
+
+/**
+ * 候选右侧的完整文案：**名称/说明在前，分组（或「最近用过」）在后**。
+ *
+ * <p><b>顺序为什么不能反</b>：右侧可用宽度只有一半，超长时从<b>尾部</b>截断。
+ * 把「最近用过」这类可有可无的标记放尾部，截断先丢它；把库名放最前，
+ * 才能保证 `ima_kb_62blyRRR` 一定带出「Traccar 运维教程（IMA）」。
+ *
+ * <p><b>为什么单独抽这个函数</b>（2026-10-30 UAT 反馈）：第一版把「最近用过」写成了
+ * 独立三元分支（recent ? 最近用过 : hint ? …），于是<b>最近用过的知识库永远看不到库名</b>
+ * ——用户截图里正是这个现象：`ima_kb_62blyRRR` 右侧只有「最近用过」。
+ * 现在两者并存，且名称优先。
+ *
+ * <p>hint 与 name 完全相同时不重复展示（如库名恰好等于编码、skill 无描述）。
+ */
+const mentionRightText = (item: AiChatMentionItem, recent: boolean): string => {
+  const hint = mentionHintOf(item);
+  const tail = recent ? l('datastudio.aiChat.mention.recent') : item.group;
+  if (!hint || hint === item.name) {
+    return tail;
+  }
+  return `${hint} · ${tail}`;
+};
+
+/**
+ * C1：一级前缀入口（`source/`、`semantic/`…）。
+ *
+ * <p>无类型前缀输入时也参与本地匹配——打 {@code sou} 就能看到 {@code source/}，
+ * 选中即收敛到该类型（与 `@` 空输入时的入口完全等价）。
+ */
+const MENTION_PREFIX_ENTRIES: { name: string; groupKey: string }[] = [
+  { name: 'source/', groupKey: 'datastudio.aiChat.mention.groupSource' },
+  { name: 'skill/', groupKey: 'datastudio.aiChat.mention.groupSkill' },
+  { name: 'doc/', groupKey: 'datastudio.aiChat.mention.groupDoc' },
+  { name: 'semantic/', groupKey: 'datastudio.aiChat.mention.groupSemantic' },
+  { name: 'kb/', groupKey: 'datastudio.aiChat.mention.groupKb' },
+  { name: 'topic/', groupKey: 'datastudio.aiChat.mention.groupTopic' },
+  { name: 'env/', groupKey: 'datastudio.aiChat.mention.groupEnv' }
+];
 
 type AiChatProps = {
   tabs: any[];
@@ -418,6 +506,14 @@ const AiChat = (props: AiChatProps) => {
 
   /** 知识库 @kb 接入 v1.0：{@code @kb/} 候选（当前用户可见的库，name 存库编码） */
   const [kbOptions, setKbOptions] = useState<AiChatMentionItem[]>([]);
+  /**
+   * C1：{@code @} 候选统一索引（列式，含 skill / doc / semantic 项目 / kb）。
+   *
+   * <p>只在**首次打开浮层**时拉一次（后端另有 60s 快照），此后所有按键都在本地打分，
+   * 这正是"输入任意字符串跨类型匹配"与"每键 0 请求"的落点。
+   * 空索引（未部署/无可见资产）也照常落地，避免每次打开浮层都重试。
+   */
+  const [assetIndex, setAssetIndex] = useState<MentionCandidatePayload | null>(null);
   // P1：跨源引用（@source/ / @env/）的候选与懒加载缓存。
   // @source/ 是四级渐进披露（数据源 → 库 → 表），只在用户逐层往下敲时才拉下一层，
   // 避免"刚敲 @source/ 就把全部数据源的全部库表都拉下来"。
@@ -673,6 +769,17 @@ const AiChat = (props: AiChatProps) => {
       .then((items) => setKbOptions(items))
       .catch(() => setKbOptions([]));
   }, [config?.kbEnable]);
+
+  // C1：候选统一索引——首次打开浮层时拉一次（列式快照），之后本地匹配，按键 0 请求。
+  // 失败也不影响其它 @ 类型：索引为空时，表 / 数据源 / 环境等候选照旧由各自的 provider 给出。
+  useEffect(() => {
+    if (!mentionOpen || assetIndex) {
+      return;
+    }
+    fetchMentionCandidates()
+      .then((payload) => setAssetIndex(payload ?? {}))
+      .catch(() => setAssetIndex({}));
+  }, [mentionOpen, assetIndex]);
 
   // P1：{@code @source/} 第一层候选——数据源清单（首次用到时才拉，且只拉一次）
   useEffect(() => {
@@ -1049,28 +1156,64 @@ const AiChat = (props: AiChatProps) => {
         .filter((c) => c.type === assetPrefix && c.name?.toLowerCase().includes(assetKey))
         .slice(0, 20);
     }
-    const matched = q
-      ? mentionCandidates.filter((c) =>
-          c.type === 'column'
-            ? `${c.name}.${c.columnName}`.toLowerCase().includes(q)
-            : c.name?.toLowerCase().includes(q)
-        )
-      : mentionCandidates;
-    return [...matched]
-      .sort((a, b) => {
-        const ra = recentMentions.indexOf(a.name);
-        const rb = recentMentions.indexOf(b.name);
-        if (ra !== -1 || rb !== -1) {
-          return (
-            (ra === -1 ? Number.MAX_SAFE_INTEGER : ra) - (rb === -1 ? Number.MAX_SAFE_INTEGER : rb)
-          );
+    // ---- 无类型前缀：跨类型混合匹配（C1 核心）----
+    // 改造前这里只有「上下文候选（当前 schema 表 / 已开作业 / 选区）」，输入任意串时
+    // 表里没有就空白；现在把统一索引（skill / doc / semantic 项目 / kb）并进来，
+    // 于是 `@ord` 能同时命中表名、文档名与 skill 名。
+    const pool: (AiChatMentionItem & { group?: string })[] = [...mentionCandidates];
+    const indexCodes = assetIndex?.codes ?? [];
+    const indexTypes = assetIndex?.types ?? [];
+    const indexTitles = assetIndex?.titles ?? [];
+    const indexCount = Math.min(indexCodes.length, indexTypes.length, indexTitles.length);
+    for (let i = 0; i < indexCount; i += 1) {
+      const name = `${indexCodes[i] ?? ''}`;
+      if (!name) {
+        continue;
+      }
+      const type = `${indexTypes[i] ?? ''}`;
+      const subtitle = `${assetIndex?.subs?.[i] ?? ''}`.trim();
+      pool.push({
+        type: type as AiChatMentionItem['type'],
+        name,
+        // 索引的 title 是展示名（kb 是库名、不是编码 c_xxx）。放进 content 而不是 name，
+        // 与既有 listKbCollections 的约定一致：name 存可寻址标识，content 存展示/描述。
+        content: indexTitles[i],
+        // 右侧提示：优先服务端副标题（kb=库名 / skill·doc=描述 / semantic=版本规模）；
+        // 服务端因条目超阈值整列省略时，kb 退回 title（title 本身就是库名）
+        hint: subtitle || (type === 'kb' ? indexTitles[i] : undefined),
+        group: mentionGroupOfType(type)
+      });
+    }
+    if (!q) {
+      return pool.slice(0, 20);
+    }
+    // 前缀入口也参与匹配：打 `sou` 就能看到 `source/`，选中即收敛到该类型。
+    // （只在有关键字时追加——空输入时 mentionCandidates 已给出完整入口列表。）
+    MENTION_PREFIX_ENTRIES.forEach((entry) => {
+      pool.push({ type: 'prefix', name: entry.name, group: l(entry.groupKey) });
+    });
+    // 本地打分：全等 > 前缀 > 子串 > 子序列；最近用过的稳定置顶
+    const scored = pool
+      .map((item) => ({
+        item,
+        score: scoreMention([item.name, item.content, item.columnName], q),
+        recent: recentMentions.indexOf(item.name)
+      }))
+      .filter((row) => row.score > 0);
+    scored.sort((a, b) => {
+      if (a.recent !== b.recent) {
+        if (a.recent === -1) {
+          return 1;
         }
-        const pa = a.name?.toLowerCase().startsWith(q) ? 0 : 1;
-        const pb = b.name?.toLowerCase().startsWith(q) ? 0 : 1;
-        return pa - pb;
-      })
-      .slice(0, 20);
-  }, [mentionCandidates, mentionQuery, recentMentions]);
+        if (b.recent === -1) {
+          return -1;
+        }
+        return a.recent - b.recent;
+      }
+      return b.score - a.score;
+    });
+    return scored.slice(0, 20).map((row) => row.item);
+  }, [mentionCandidates, mentionQuery, recentMentions, assetIndex]);
 
   /**
    * 键盘上下选择时让高亮项跟随滚动（UAT 2026-10-29）。
@@ -2355,7 +2498,15 @@ const AiChat = (props: AiChatProps) => {
                     background: index === mentionIndex ? 'rgba(22,119,255,0.10)' : 'transparent'
                   }}
                 >
-                  <span style={{ fontSize: 12 }}>
+                  <span
+                    style={{
+                      fontSize: 12,
+                      maxWidth: '46%',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
                     {item.type === 'column'
                       ? `${item.name}.${item.columnName}`
                       : // 中间层级在列表里就带 `/`：让「选中后会进下一级」这件事可见，
@@ -2364,10 +2515,24 @@ const AiChat = (props: AiChatProps) => {
                         ? `${item.name}/`
                         : item.name}
                   </span>
-                  <span style={{ fontSize: 11, color: 'rgba(0,0,0,0.45)', flexShrink: 0 }}>
-                    {recentMentions.includes(item.name)
-                      ? l('datastudio.aiChat.mention.recent')
-                      : item.group}
+                  {/*
+                    右侧 = 分组 + 名称/说明。知识库的 name 是库编码（写进 filter.collection 用），
+                    只显示编码时用户分不清是哪个库——这一行就是区分依据（2026-10-30 反馈）。
+                    title 属性保留完整文案：超长被省略号截断时，悬停仍可看全。
+                  */}
+                  <span
+                    title={mentionRightText(item, recentMentions.includes(item.name))}
+                    style={{
+                      fontSize: 11,
+                      color: 'rgba(0,0,0,0.45)',
+                      flexShrink: 0,
+                      maxWidth: '52%',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    {mentionRightText(item, recentMentions.includes(item.name))}
                   </span>
                 </div>
               ))

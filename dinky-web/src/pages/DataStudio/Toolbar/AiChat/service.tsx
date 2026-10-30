@@ -22,6 +22,8 @@ import { queryDataByParams } from '@/services/BusinessCrud';
 import { API_CONSTANTS } from '@/services/endpoints';
 import { buildTenantHeader } from '@/utils/function';
 
+import type { MentionCandidatePayload } from './mentionIndex';
+
 /**
  * ⚠️ 本文件含**原生 fetch**（对话流 / 写确认 / 中断），它们**绕开 umi-request 拦截器**：
  * 每个 fetch 的 headers **必须**合并 `buildTenantHeader()`，否则后端租户上下文为空 →
@@ -270,6 +272,18 @@ export type AiChatMentionItem = {
    * 该字段只在本地判定用，**不进请求体**（后端 {@code AiChatMention} 无此字段）。
    */
   chainable?: boolean;
+  /**
+   * 候选面板右侧的**提示信息**（不参与插入、不进请求体）。
+   *
+   * <p>存在的理由：有些候选的 {@code name} 天生不可读——知识库的 name 必须是库编码
+   * （{@code ima_kb_62blyRRR}，要写进 {@code filter.collection}），而用户认的是库名
+   * "Traccar 运维教程（IMA）"。没有这一行提示时，多个名字带"运维"的库完全无从选择。
+   *
+   * <p>取值来源：索引条目的 {@code subs} 列（kb=库名、skill/doc=描述、semantic=版本规模），
+   * 或既有候选的 {@code content}（kb 的库名、skill/doc 的描述）。<b>不用于</b>
+   * job / selection（它们的 content 是 SQL 正文，不能出现在浮层）。
+   */
+  hint?: string;
 };
 
 /** 对话请求体：只携带元数据定位信息，绝不携带业务数据 */
@@ -481,6 +495,72 @@ export const listKbCollections = async (): Promise<AiChatMentionItem[]> => {
   } catch (e) {
     // 批次 A 的开关默认关闭 / 后端未升级时，候选缺失不应影响其他 @ 功能
     return [];
+  }
+};
+
+/**
+ * C1：{@code @} 候选统一索引——**一次预取，本地匹配**。
+ *
+ * <p>无 {@code q} 时返回全量列式快照（skill / doc / semantic 项目 / kb），
+ * 之后每个按键都在浏览器本地打分，不再打后端；有 {@code q} 时走服务端过滤
+ * （条目超阈值或预取失败时的降级路径）。
+ *
+ * <p><b>失败不抛错</b>：候选浮层是辅助功能，索引拉取失败时返回空索引，
+ * 其它 {@code @} 类型（表 / 数据源 / 环境…）照旧可用——绝不能让"新端点没部署好"
+ * 变成"整个 @ 用不了"。
+ */
+export const fetchMentionCandidates = async (
+  types?: string[],
+  q?: string,
+  limit?: number
+): Promise<MentionCandidatePayload> => {
+  const params = new URLSearchParams();
+  if (types && types.length > 0) {
+    params.set('types', types.join(','));
+  }
+  if (q) {
+    params.set('q', q);
+  }
+  if (limit) {
+    params.set('limit', String(limit));
+  }
+  const suffix = params.toString();
+  try {
+    const res: any = await getData(
+      `${API_CONSTANTS.AI_MENTION_CANDIDATES}${suffix ? `?${suffix}` : ''}`
+    );
+    return (res?.data ?? res ?? {}) as MentionCandidatePayload;
+  } catch (e) {
+    return { types: [], codes: [], titles: [], count: 0 };
+  }
+};
+
+/**
+ * C1：候选详情（副标题 / 摘要）——预取不携带 subtitle，选中后再按需拉一条。
+ *
+ * <p>服务端此时会**再判一次可见性**（不看候选缓存），因此"权限刚被撤销"的用户拿不到详情。
+ */
+export const fetchMentionDetail = async (
+  type: string,
+  code: string
+): Promise<AiChatMentionItem | null> => {
+  try {
+    const res: any = await getData(
+      `${API_CONSTANTS.AI_MENTION_DETAIL}?type=${encodeURIComponent(type)}&code=${encodeURIComponent(
+        code
+      )}`
+    );
+    const row = res?.data ?? res;
+    if (!row || !row.code) {
+      return null;
+    }
+    return {
+      type: `${row.type ?? type}` as AiChatMentionItem['type'],
+      name: row.code,
+      content: row.subtitle ?? undefined
+    };
+  } catch (e) {
+    return null;
   }
 };
 

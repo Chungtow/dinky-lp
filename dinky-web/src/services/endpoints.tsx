@@ -196,6 +196,17 @@ export enum API_CONSTANTS {
   /** P1-A：{@code @topic/} 候选（名册版，零连接 Kafka） */
   AI_CHAT_MENTION_TOPICS = '/api/aiChat/mentionTopics',
 
+  /** --------------------------------------------  @ 候选统一索引（C1）  ------------------------------------------------------- */
+  /**
+   * {@code @} 候选（列式）：无 `q` = 全量预取（skill/doc/semantic/kb），有 `q` = 服务端搜索。
+   *
+   * <p>替代原先按类型分派的多个接口（skill/list、semantic/published/*、kb/collections）；
+   * 那些接口<b>仍然保留</b>（其它页面在用），只是浮层不再直接调。
+   */
+  AI_MENTION_CANDIDATES = '/api/ai/mention/candidates',
+  /** {@code @} 候选详情（副标题/摘要，选中后再拉） */
+  AI_MENTION_DETAIL = '/api/ai/mention/detail',
+
   /** --------------------------------------------  知识库（@kb 接入 v1.0）  ------------------------------------------------------- */
   /** 当前用户可见的知识库列表（{@code @kb/} 候选来源；只返回 code / name / description） */
   KB_COLLECTIONS = '/api/kb/collections',

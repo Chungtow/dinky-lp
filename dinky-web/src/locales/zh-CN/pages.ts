@@ -721,6 +721,8 @@ export default {
   'datastudio.aiChat.mention.groupJob': '作业',
   'datastudio.aiChat.mention.groupSelection': '选中片段',
   'datastudio.aiChat.mention.groupSkill': 'Skill（团队技能）',
+  // C1：@ 候选统一索引里的 doc 分组（此前 doc 借用 skill 分组，混在一起分不清）
+  'datastudio.aiChat.mention.groupDoc': '文档（知识文档）',
   'datastudio.aiChat.mention.groupSource': '数据源（跨源引用）',
   'datastudio.aiChat.mention.groupSourceDb': '库（跨源引用）',
   'datastudio.aiChat.mention.groupSourceTable': '表（跨源引用）',
