@@ -19,6 +19,7 @@
 
 package org.dinky.controller;
 
+import org.dinky.ai.skill.SkillHandleValidator;
 import org.dinky.data.annotations.Log;
 import org.dinky.data.constant.PermissionConstants;
 import org.dinky.data.dto.SkillCreateDTO;
@@ -26,6 +27,7 @@ import org.dinky.data.dto.SkillFileRemoveDTO;
 import org.dinky.data.dto.SkillFileRenameDTO;
 import org.dinky.data.dto.SkillFileWriteDTO;
 import org.dinky.data.dto.SkillSaveDTO;
+import org.dinky.data.dto.SkillValidateDTO;
 import org.dinky.data.dto.SkillVisibilityDTO;
 import org.dinky.data.enums.BusinessType;
 import org.dinky.data.exception.BusException;
@@ -33,6 +35,7 @@ import org.dinky.data.model.Skill;
 import org.dinky.data.result.Result;
 import org.dinky.data.vo.SkillDetailVO;
 import org.dinky.data.vo.SkillFileNode;
+import org.dinky.data.vo.SkillHandleValidationVO;
 import org.dinky.service.SkillService;
 import org.dinky.service.impl.SkillServiceImpl;
 
@@ -85,6 +88,8 @@ public class SkillController {
 
     private final SkillService skillService;
 
+    private final SkillHandleValidator skillHandleValidator;
+
     @GetMapping("/list")
     @ApiOperation("List Visible Skills")
     @SaCheckPermission(
@@ -135,6 +140,34 @@ public class SkillController {
         // 批次 F：带上编辑起点的 version 做乐观锁（为空则不校验，兼容旧前端与脚本）
         return Result.succeed(
                 skillService.save(skillSaveDTO.getId(), skillSaveDTO.getContent(), skillSaveDTO.getBaseVersion()));
+    }
+
+    /**
+     * 校验正文里的 {@code @} 句柄（保存后校验 / E4）。
+     *
+     * <p><b>为什么不复用 {@code /save}</b>：save 的返回是 {@code Result<Skill>}，塞 warnings 属改契约；
+     * 且 RegCenter 三处保存入口与 DataStudio 编辑器都要用同一份结果。
+     *
+     * <p><b>权限</b>：与写入口同口径（save / file / 资源上传任一），因为它读的是"用户能编辑的正文"，
+     * 不需要额外授权；端点<b>只读</b>，不落库。
+     *
+     * <p><b>永不阻断保存</b>：业务失败（不存在 / 无权限 / 未知类型）一律表达为
+     * {@code handles[].status}，端点本身仍返回成功。
+     */
+    @PostMapping("/validate")
+    @ApiOperation("Validate @ handles inside skill content")
+    @SaCheckPermission(
+            value = {
+                PermissionConstants.REGISTRATION_SKILL_SAVE,
+                PermissionConstants.REGISTRATION_SKILL_FILE,
+                PermissionConstants.REGISTRATION_RESOURCE_UPLOAD
+            },
+            mode = SaMode.OR)
+    public Result<SkillHandleValidationVO> validate(@RequestBody SkillValidateDTO skillValidateDTO) {
+        SkillHandleValidationVO vo = skillHandleValidator.validate(skillValidateDTO.getContent());
+        // 原样回显指纹：前端据此丢弃"用户已继续编辑"的过期结果（行列会错位）
+        vo.setContentHash(skillValidateDTO.getContentHash());
+        return Result.succeed(vo);
     }
 
     @PostMapping("/visibility")

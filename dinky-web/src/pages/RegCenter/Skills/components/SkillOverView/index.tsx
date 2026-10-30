@@ -34,6 +34,7 @@ import {
   updateSkillVisibility
 } from '../../service';
 import SkillFilePanel from '../SkillFilePanel';
+import { notifyHandleValidation } from '../handleValidation';
 import type { SkillInfo } from '@/types/RegCenter/skill';
 
 /** 可见性展示（2026-10-14 三档）：文案 + Tag 颜色 */
@@ -176,6 +177,8 @@ const SkillOverView = () => {
       await saveSkill({ id: editing.id, content: editing.content, baseVersion: editing.version }, () => {
         setEditing(undefined);
       });
+      // 保存已成功 → 再校验正文里的 @ 句柄（警告不阻断；失败静默）
+      await notifyHandleValidation(editing.content);
       await load();
     } finally {
       setSaving(false);

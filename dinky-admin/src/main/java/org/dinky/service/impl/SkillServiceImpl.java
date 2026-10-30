@@ -114,6 +114,18 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
     }
 
     @Override
+    public Skill findAnyByName(String name) {
+        if (StrUtil.isBlank(name)) {
+            return null;
+        }
+        // 只按名字取一条，**不加可见性条件**：校验端点靠它区分 not_found 与 denied
+        List<Skill> candidates = list(new LambdaQueryWrapper<Skill>()
+                .eq(Skill::getName, StrUtil.trim(name))
+                .last("limit 1"));
+        return candidates.isEmpty() ? null : candidates.get(0);
+    }
+
+    @Override
     public Skill getVisibleById(Long id) {
         Skill skill = getById(id);
         if (skill == null) {

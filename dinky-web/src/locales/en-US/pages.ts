@@ -770,6 +770,8 @@ export default {
   'datastudio.skill.saved': 'Saved',
   'datastudio.skill.saveFailed': 'Save failed',
   'datastudio.skill.pathMissing': 'Missing file path — reopen the file from the skill tree',
+  'datastudio.skill.validate.bareHint':
+    '{count} handle(s) are not wrapped in backticks; prefer `@type/code` (no functional impact)',
   'datastudio.skill.openFailed': 'Failed to open the file',
   'datastudio.skill.nameRequired': 'Name is required',
   'datastudio.skill.dirCreated': 'Directory {path} created',
@@ -831,6 +833,10 @@ export default {
   'pages.skill.file.remove': 'Delete file',
   'pages.skill.create': 'Create Skill',
   'pages.skill.save': 'Save Skill',
+  'pages.skill.validate.title': 'Reference validation',
+  'pages.skill.validate.bareHint':
+    '{count} handle(s) are not wrapped in backticks; prefer `@type/code` (no functional impact)',
+  'pages.skill.validate.line': 'Line {line}',
   'pages.skill.createTitle': 'Create Skill',
   // Stage 4b (UAT R2): knowledge doc shares the same table & permission model as skill
   'pages.skill.createDoc': 'New knowledge doc',

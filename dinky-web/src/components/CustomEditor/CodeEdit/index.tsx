@@ -58,6 +58,15 @@ export type CodeEditFormProps = {
   enableSuggestions?: boolean;
   enableSuggestionPreview?: boolean;
   monacoRef?: any;
+  /**
+   * 是否注册「按文档分词」的编辑器自带补全（默认 true，保持既有行为）。
+   *
+   * <p>skill 正文里这个 provider 有两个副作用（UAT 2026-10-30 实测）：
+   * ① 它返回的是 Promise，在 {@code suggestionsData} 缺席时链式 Promise 不 settle，
+   * 补全浮层一直卡在 "Loading..."；② 它按"当前词"匹配，敲 {@code @sema} 会把文档里的
+   * 无关词条混进 `@` 候选。因此 skill 编辑器显式关掉它，只留句柄候选。
+   */
+  wordSuggestionsEnabled?: boolean;
 };
 
 const CodeEdit = (props: CodeEditFormProps) => {
@@ -85,6 +94,7 @@ const CodeEdit = (props: CodeEditFormProps) => {
     lineNumbers, // show lineNumbers
     enableSuggestions = false, // enable suggestions
     enableSuggestionPreview = false, // enable suggestion preview
+    wordSuggestionsEnabled = true, // 是否注册"按文档分词"的自带补全
     // @ts-ignore
     suggestionsData, // suggestions data
     autoWrap = 'on', // auto wrap
@@ -102,7 +112,8 @@ const CodeEdit = (props: CodeEditFormProps) => {
    * build all suggestions
    */
   const buildAllSuggestions = (model: ITextModel, position: monaco.Position) => {
-    return buildAllSuggestionsToEditor(model, position, suggestionsData);
+    // suggestionsData 由 dva 注入，首帧可能还没有；此前直接透传 undefined 会在 provider 内抛错
+    return buildAllSuggestionsToEditor(model, position, suggestionsData ?? []);
   };
 
   const buildAllSuggestionsCallback = useCallback(
@@ -180,6 +191,10 @@ const CodeEdit = (props: CodeEditFormProps) => {
 
     let timeoutId: NodeJS.Timeout | null = null;
     editor.onDidChangeModelContent((e) => {
+      if (!wordSuggestionsEnabled) {
+        // 关掉自带分词补全的编辑器（如 skill 正文）不再注册 provider，避免覆盖 `@` 候选
+        return;
+      }
       if (timeoutId !== null) {
         return;
       }
@@ -204,7 +219,7 @@ const CodeEdit = (props: CodeEditFormProps) => {
       }
     });
 
-    if (enableSuggestions) {
+    if (enableSuggestions && wordSuggestionsEnabled) {
       reloadCompilation(monacoInstance.current, []);
     }
     editor.layout();

@@ -699,6 +699,7 @@ export default {
   'datastudio.skill.saved': '保存成功',
   'datastudio.skill.saveFailed': '保存失败',
   'datastudio.skill.pathMissing': '缺少文件路径，请从左侧技能树重新打开该文件',
+  'datastudio.skill.validate.bareHint': '有 {count} 处句柄未用反引号包裹，建议规范为 `@type/code`（不影响使用）',
   'datastudio.skill.openFailed': '打开文件失败',
   'datastudio.skill.nameRequired': '请输入名称',
   'datastudio.skill.dirCreated': '已创建目录 {path}',
@@ -760,6 +761,9 @@ export default {
   'pages.skill.file.remove': '删除文件',
   'pages.skill.create': '新建 Skill',
   'pages.skill.save': '保存 Skill',
+  'pages.skill.validate.title': '引用校验',
+  'pages.skill.validate.bareHint': '有 {count} 处句柄未用反引号包裹，建议规范为 `@type/code`（不影响使用）',
+  'pages.skill.validate.line': '第 {line} 行',
   'pages.skill.createTitle': '新建 Skill',
   // 阶段 4b 补（UAT R2）：知识文档（doc）——与 skill 共用一张表与权限模型，
   // 目录落在 docs/<name>/、主文件为 DOC.md

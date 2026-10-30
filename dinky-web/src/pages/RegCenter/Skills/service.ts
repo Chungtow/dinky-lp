@@ -18,6 +18,7 @@
  */
 
 import { handleOption, handleRemoveById, queryDataByParams } from '@/services/BusinessCrud';
+import { postAll } from '@/services/api';
 import { API_CONSTANTS } from '@/services/endpoints';
 import {
   SkillCreateParams,
@@ -26,6 +27,7 @@ import {
   SkillFileRenameParams,
   SkillFileTargetParams,
   SkillFileWriteParams,
+  SkillHandleValidation,
   SkillInfo,
   SkillSaveParams,
   SkillVisibilityParams
@@ -59,6 +61,28 @@ export const updateSkillVisibility = async (params: SkillVisibilityParams, cb?: 
 /** 保存 SKILL.md 正文（仅属主；后端会重新解析 frontmatter 并回写元数据） */
 export const saveSkill = async (params: SkillSaveParams, cb?: () => void) =>
   handleOption(API_CONSTANTS.SKILL_SAVE, l('pages.skill.save'), params, cb);
+
+/**
+ * 校验正文里的 `@` 句柄（保存后校验 / E4）。
+ *
+ * <p><b>只读、不阻断</b>：后端把"业务失败"表达为 `handles[].status`，接口本身恒成功；
+ * 前端拿到结果后只做提示（Monaco marker / 通知），**绝不影响保存结果**。
+ *
+ * @param content     SKILL.md 全文
+ * @param contentHash 正文指纹（原样回显，用于丢弃"用户已继续编辑"的过期结果）
+ */
+export const validateSkillContent = async (
+  content: string,
+  contentHash?: string
+): Promise<SkillHandleValidation | undefined> => {
+  try {
+    const res: any = await postAll(API_CONSTANTS.SKILL_VALIDATE, { content, contentHash });
+    return res?.code === 0 ? (res.data as SkillHandleValidation) : undefined;
+  } catch (e) {
+    // 校验是"加分项"：失败不打扰用户（保存已经成功）
+    return undefined;
+  }
+};
 
 /** 删除 skill（同时删除其资源目录与文件；前端需二次确认） */
 export const removeSkill = async (id: number, cb?: () => void) =>

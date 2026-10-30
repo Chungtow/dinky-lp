@@ -242,6 +242,8 @@ export enum API_CONSTANTS {
   SKILL_FILE_MKDIR = '/api/skill/file/mkdir',
   SKILL_FILE_RENAME = '/api/skill/file/rename',
   SKILL_FILE_REMOVE = '/api/skill/file/remove',
+  /** 保存后校验 `@` 句柄（只读；警告不阻断保存） */
+  SKILL_VALIDATE = '/api/skill/validate',
 
   // ------------------------------------ system log ------------------------------------
   SYSTEM_ROOT_LOG = '/api/system/getRootLog',
