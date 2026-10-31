@@ -108,6 +108,15 @@ const CODE_BLOCK_REGEX = /```[a-zA-Z]*\s*\n?([\s\S]*?)```/g;
 /** 「最近使用」的 @ 引用名（localStorage key） */
 const RECENT_MENTION_KEY = 'dinky.ai-chat.recent-mentions';
 
+/**
+ * `@` 统一候选索引的**本地续期周期**（毫秒）。
+ *
+ * <p>与后端 `MentionCandidateService` 的快照 TTL（60s）同口径：本地索引超过该时长后，
+ * 再次打开 `@` 浮层会重新拉取。取值过大 → 资产改名后在本会话内长期不可见；
+ * 过小 → 频繁回源（虽有后端快照兜底，但没必要）。
+ */
+const MENTION_INDEX_TTL_MILLIS = 60_000;
+
 /** 纯修饰键（按下它们不算"打断 @串两下删除"） */
 const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Dead']);
 
@@ -509,11 +518,16 @@ const AiChat = (props: AiChatProps) => {
   /**
    * C1：{@code @} 候选统一索引（列式，含 skill / doc / semantic 项目 / kb）。
    *
-   * <p>只在**首次打开浮层**时拉一次（后端另有 60s 快照），此后所有按键都在本地打分，
-   * 这正是"输入任意字符串跨类型匹配"与"每键 0 请求"的落点。
-   * 空索引（未部署/无可见资产）也照常落地，避免每次打开浮层都重试。
+   * <p>**按 TTL 续期**（2026-10-31 修复）：早期是"只在首次打开浮层时拉一次，此后整个组件
+   * 生命周期内不再拉"，导致资产改名后即便服务端已更新，关闭再打开浮层仍是旧名称
+   * （SPA 内切页面也不会重建组件）。现改为与后端快照同口径的 60s TTL：超过 TTL 再次打开
+   * 浮层即重新拉取；未超时则沿用本地索引，保持"每键 0 请求"的既有收益。
+   *
+   * <p>空索引（未部署 / 无可见资产）也照常落地，避免每次打开浮层都重试。
    */
   const [assetIndex, setAssetIndex] = useState<MentionCandidatePayload | null>(null);
+  /** 上次成功拉取统一索引的时间戳（配合 {@link MENTION_INDEX_TTL_MILLIS} 决定是否续期） */
+  const assetIndexAtRef = useRef(0);
   // P1：跨源引用（@source/ / @env/）的候选与懒加载缓存。
   // @source/ 是四级渐进披露（数据源 → 库 → 表），只在用户逐层往下敲时才拉下一层，
   // 避免"刚敲 @source/ 就把全部数据源的全部库表都拉下来"。
@@ -770,14 +784,23 @@ const AiChat = (props: AiChatProps) => {
       .catch(() => setKbOptions([]));
   }, [config?.kbEnable]);
 
-  // C1：候选统一索引——首次打开浮层时拉一次（列式快照），之后本地匹配，按键 0 请求。
+  // C1：候选统一索引——列式快照，按键在本地匹配（0 请求）。
+  // 续期策略（2026-10-31 修复）：与后端快照同口径 60s TTL，超时后再次打开浮层就重拉；
+  // 未超时沿用本地索引。早期"整个组件生命周期只拉一次"会让资产改名在 SPA 内永不生效。
   // 失败也不影响其它 @ 类型：索引为空时，表 / 数据源 / 环境等候选照旧由各自的 provider 给出。
   useEffect(() => {
-    if (!mentionOpen || assetIndex) {
+    if (!mentionOpen) {
+      return;
+    }
+    const fresh = assetIndex != null && Date.now() - assetIndexAtRef.current < MENTION_INDEX_TTL_MILLIS;
+    if (fresh) {
       return;
     }
     fetchMentionCandidates()
-      .then((payload) => setAssetIndex(payload ?? {}))
+      .then((payload) => {
+        assetIndexAtRef.current = Date.now();
+        setAssetIndex(payload ?? {});
+      })
       .catch(() => setAssetIndex({}));
   }, [mentionOpen, assetIndex]);
 

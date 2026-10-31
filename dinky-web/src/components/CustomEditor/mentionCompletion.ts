@@ -86,6 +86,15 @@ const MAX_ITEMS = 60;
 /** 候选快照的本地 TTL：与后端 60s 进程内快照对齐 */
 const CANDIDATE_TTL = 60_000;
 
+/**
+ * 候选拉取**失败**后的重试退避（毫秒）。
+ *
+ * <p>早期失败也会写 60s 空缓存，导致网络抖一下编辑器整整一分钟"什么候选都没有"，
+ * 且表象与"后端没数据"完全一样，极难排查。现在：失败只说"这次没有"，5s 后按键即重试；
+ * 成功才写 {@link CANDIDATE_TTL} 缓存。
+ */
+const CANDIDATE_FAIL_BACKOFF = 5_000;
+
 /** 候选快照请求超时 */
 const CANDIDATE_TIMEOUT = 1500;
 
@@ -120,6 +129,9 @@ type CandidateItem = {
 
 let candidateCache: { at: number; payload: MentionCandidatePayload } | null = null;
 
+/** 上次候选拉取失败的时间戳（0 = 无失败记录）；用于短期退避，避免每次按键都重试 */
+let candidateFailAt = 0;
+
 let dataSourceCache: any[] | null = null;
 
 const sourceTreeCache = new Map<string, any[]>();
@@ -135,6 +147,9 @@ async function httpGetJson(url: string): Promise<any> {
   const res = await fetch(url, {
     method: 'GET',
     credentials: 'include',
+    // 候选是用户态数据，且服务端已声明 `Cache-Control: no-store`；这里再显式关掉
+    // 浏览器缓存，避免历史缓存条目（旧 ETag）在修复后仍被复用。
+    cache: 'no-store',
     headers: { ...buildTenantHeader() }
   });
   if (!res.ok) {
@@ -143,11 +158,16 @@ async function httpGetJson(url: string): Promise<any> {
   return res.json();
 }
 
-/** 拉一次候选快照（60s 内复用；失败也缓存空结果，避免每次按键都重试） */
+/** 拉一次候选快照（成功缓存 60s；失败只退避 5s，不再写空缓存） */
 async function loadCandidates(): Promise<CandidateItem[]> {
   const now = Date.now();
   if (candidateCache && now - candidateCache.at < CANDIDATE_TTL) {
     return toItems(candidateCache.payload);
+  }
+  // 失败退避窗口内直接返回空：避免每次按键都打一次注定失败的请求，
+  // 同时不像旧实现那样把"空"锁死 60s。
+  if (candidateFailAt && now - candidateFailAt < CANDIDATE_FAIL_BACKOFF) {
+    return [];
   }
   try {
     let body: any = await withTimeout(httpGetJson(API_CONSTANTS.AI_MENTION_CANDIDATES), CANDIDATE_TIMEOUT, null);
@@ -157,17 +177,18 @@ async function loadCandidates(): Promise<CandidateItem[]> {
     }
     if (!body) {
       lastMentionDiagnostic = '候选接口无响应（fetch + umi 均超时）';
-      candidateCache = { at: now, payload: {} };
+      candidateFailAt = Date.now();
     } else {
       const payload = (body?.data ?? body ?? {}) as MentionCandidatePayload;
       lastMentionDiagnostic = payload?.codes?.length ? '' : '候选接口返回 0 条（检查是否有可见的 skill/doc/kb）';
       candidateCache = { at: now, payload };
+      candidateFailAt = 0;
     }
   } catch (e: any) {
     lastMentionDiagnostic = `候选接口失败：${e?.message ?? e}`;
-    candidateCache = { at: now, payload: {} };
+    candidateFailAt = Date.now();
   }
-  return toItems(candidateCache.payload);
+  return candidateCache ? toItems(candidateCache.payload) : [];
 }
 
 /** 预热候选快照（编辑器挂载时调一次，第一个 `@` 就不用等网络） */

@@ -25,6 +25,7 @@ import org.dinky.data.constant.PermissionConstants;
 import org.dinky.data.result.Result;
 import org.dinky.data.vo.MentionCandidateVO;
 
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -70,7 +71,14 @@ public class MentionController {
      * 候选列表。
      *
      * <p>无 {@code q} → 预取模式（列式全量 + ETag）；有 {@code q} → 服务端搜索（同快照过滤）。
-     * 客户端回传 {@code If-None-Match} 且内容未变时返回 <b>304</b>，浏览器直接复用本地缓存。
+     * 客户端回传 {@code If-None-Match} 且内容未变时返回 <b>304</b>。
+     *
+     * <p><b>必须声明 {@code Cache-Control: no-store}</b>（2026-10-31 修复）：候选是<b>用户态</b>数据
+     * （内容由 {@code tenantId}/{@code userId} 与授权决定），本就不该进浏览器 HTTP 缓存。此前只发
+     * {@code ETag} 不发缓存头，浏览器会自行做条件请求；而 {@code ETag} 曾<b>只哈希 {@code type+code}</b>，
+     * 资产改名（kb 库名 / skill 描述）不改变它 → 恒 304 → 浏览器把旧响应体交回前端，表现为
+     * 「改名后 `@` 候选永远是旧名、刷新/重登/重启全无效」。ETag 语义已同步修正（见
+     * {@code MentionCandidateService#etagOf}），两者缺一不可。
      */
     @GetMapping("/candidates")
     @ApiOperation("List @ mention candidates (prefetch or search)")
@@ -86,10 +94,16 @@ public class MentionController {
             // 客户端可能带回 W/ 前缀或带引号的原值，统一去掉再比
             String client = ifNoneMatch.trim().replace("W/", "").replace("\"", "");
             if (client.equals(etag)) {
-                return ResponseEntity.status(HttpStatus.NOT_MODIFIED).eTag(etag).build();
+                return ResponseEntity.status(HttpStatus.NOT_MODIFIED)
+                        .eTag(etag)
+                        .cacheControl(CacheControl.noStore())
+                        .build();
             }
         }
-        return ResponseEntity.ok().eTag(etag).body(vo);
+        return ResponseEntity.ok()
+                .eTag(etag)
+                .cacheControl(CacheControl.noStore())
+                .body(vo);
     }
 
     /**
