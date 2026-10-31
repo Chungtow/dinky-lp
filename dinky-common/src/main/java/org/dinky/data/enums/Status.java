@@ -491,6 +491,15 @@ public enum Status {
     /** 阶段 4a：skill 注入预算（字符） */
     SYS_LLM_SETTINGS_SKILLMAXCHARS(276, "sys.llm.settings.skillMaxChars"),
     SYS_LLM_SETTINGS_SKILLMAXCHARS_NOTE(277, "sys.llm.settings.skillMaxChars.note"),
+    /**
+     * 句柄闭环（S1 装配，2026-10-31）：skill 正文 {@code @} 句柄装配块预算（字符）。
+     *
+     * <p><b>为什么必须独立于 {@link #SYS_LLM_SETTINGS_SKILLMAXCHARS}</b>：正文预算是 4000，
+     * 装配块与正文共享同一个上限时，一个大表结构就能把正文挤没；反之正文写满 3999 也会
+     * 让装配只剩 1 个字符。两者各管一层，互不挤占（实施计划 H5 / 纲领 T3）。
+     */
+    SYS_LLM_SETTINGS_SKILLASSETMAXCHARS(464, "sys.llm.settings.skillAssetMaxChars"),
+    SYS_LLM_SETTINGS_SKILLASSETMAXCHARS_NOTE(465, "sys.llm.settings.skillAssetMaxChars.note"),
     /** 阶段 4b：skill 只读工具开关（list_skills / read_skill） */
     SYS_LLM_SETTINGS_TOOLSKILLENABLE(278, "sys.llm.settings.toolSkillEnable"),
     SYS_LLM_SETTINGS_TOOLSKILLENABLE_NOTE(279, "sys.llm.settings.toolSkillEnable.note"),

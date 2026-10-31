@@ -584,6 +584,18 @@ public class SystemConfiguration {
             .note(Status.SYS_LLM_SETTINGS_SKILLMAXCHARS_NOTE);
 
     /**
+     * skill 正文 {@code @} 句柄的<b>装配块</b>预算（字符，2026-10-31 / S1 装配）。
+     *
+     * <p><b>独立预算项</b>：正文仍受 {@link #llmSkillMaxChars}（4000）约束，装配资源另走上限，
+     * 两者互不挤占——否则"正文写满"会把装配挤没，或"引用一张宽表"会把正文挤没
+     * （实施计划 H5 / 纲领 T3）。同样是防爆上限，不是省 token 的手段。
+     */
+    private final Configuration<Integer> skillAssetMaxChars = key(Status.SYS_LLM_SETTINGS_SKILLASSETMAXCHARS)
+            .intType()
+            .defaultValue(3000)
+            .note(Status.SYS_LLM_SETTINGS_SKILLASSETMAXCHARS_NOTE);
+
+    /**
      * 知识库（{@code @kb}）检索开关（2026-10-27 引入；v1.9 起属 {@code sys.kb.settings} 独立分组）。
      *
      * <p><b>默认关闭</b>：关闭时 {@code kb_search} 工具不下发、{@code @kb} 不注入任何内容，
@@ -1088,6 +1100,13 @@ public class SystemConfiguration {
         return Asserts.isNull(llmSkillMaxChars.getValue())
                 ? llmSkillMaxChars.getDefaultValue()
                 : llmSkillMaxChars.getValue();
+    }
+
+    /** @return skill 句柄装配块预算（字符，2026-10-31）：与正文预算独立，防爆上限 */
+    public int getSkillAssetMaxChars() {
+        return Asserts.isNull(skillAssetMaxChars.getValue())
+                ? skillAssetMaxChars.getDefaultValue()
+                : skillAssetMaxChars.getValue();
     }
 
     /** @return 是否开启知识库检索能力（2026-10-27）：关闭时 {@code kb_search} 不下发、{@code @kb} 不注入 */
