@@ -528,6 +528,15 @@ const AiChat = (props: AiChatProps) => {
   const [assetIndex, setAssetIndex] = useState<MentionCandidatePayload | null>(null);
   /** 上次成功拉取统一索引的时间戳（配合 {@link MENTION_INDEX_TTL_MILLIS} 决定是否续期） */
   const assetIndexAtRef = useRef(0);
+  /**
+   * C1.5（2026-10-31）：**表名服务端搜索结果**。
+   *
+   * <p>表是万级、{@code prefetchable=false}，永远不进 {@link assetIndex} 预取快照；宿主要
+   * "记不住表在哪个库"，只能在输入 ≥2 字符且无类型前缀时按需问后端（后端 5 分钟缓存 +
+   * 单源超时，见 {@code TableNameSearchService}）。命中项 type 恒为 {@code source}，
+   * name/code 为 {@code <数据源>/<库>/<表>}，与路径式下钻产出的东西完全同构。
+   */
+  const [remoteTables, setRemoteTables] = useState<(AiChatMentionItem & { group?: string })[]>([]);
   // P1：跨源引用（@source/ / @env/）的候选与懒加载缓存。
   // @source/ 是四级渐进披露（数据源 → 库 → 表），只在用户逐层往下敲时才拉下一层，
   // 避免"刚敲 @source/ 就把全部数据源的全部库表都拉下来"。
@@ -803,6 +812,57 @@ const AiChat = (props: AiChatProps) => {
       })
       .catch(() => setAssetIndex({}));
   }, [mentionOpen, assetIndex]);
+
+  // C1.5（2026-10-31）：表名搜索——**只**在"无类型前缀且 ≥2 字符"时触发。
+  //
+  // 为什么不能按键就查：`getSchemasAndTables` 是真实连接操作（Hive / Presto 上可能秒级），
+  // 每键一请求正是 C1 之前被吐槽的行为。这里三道闸：① 无前缀（`@source/` 等走路径式下钻）；
+  // ② 关键词 ≥2 字符；③ debounce 250ms。后端还有 5 分钟缓存 + 单源超时兜底。
+  useEffect(() => {
+    const raw = mentionQuery.trim();
+    const hasTypePrefix = /^[A-Za-z]+[-/]/.test(raw);
+    if (!mentionOpen || hasTypePrefix || raw.length < 2) {
+      setRemoteTables([]);
+      return undefined;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      fetchMentionCandidates(undefined, raw, 10)
+        .then((payload) => {
+          if (cancelled) {
+            return;
+          }
+          const types = payload?.types ?? [];
+          const codes = payload?.codes ?? [];
+          const titles = payload?.titles ?? [];
+          const subs = payload?.subs ?? [];
+          const list: (AiChatMentionItem & { group?: string })[] = [];
+          for (let i = 0; i < codes.length; i += 1) {
+            // 只接表命中：快照类（skill/doc/semantic/kb）本地索引里已有，重复出现会抢排序
+            if (`${types[i] ?? ''}` !== 'source' || !codes[i]) {
+              continue;
+            }
+            list.push({
+              type: 'source' as const,
+              name: codes[i],
+              content: titles[i] || codes[i],
+              hint: subs[i] ?? undefined,
+              group: l('datastudio.aiChat.mention.groupTable')
+            });
+          }
+          setRemoteTables(list);
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setRemoteTables([]);
+          }
+        });
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [mentionOpen, mentionQuery]);
 
   // P1：{@code @source/} 第一层候选——数据源清单（首次用到时才拉，且只拉一次）
   useEffect(() => {
@@ -1207,6 +1267,12 @@ const AiChat = (props: AiChatProps) => {
         group: mentionGroupOfType(type)
       });
     }
+    // C1.5：表名服务端命中（索引里没有表，因此不会与之重复；仍按 name+type 去掉同一张表）
+    remoteTables.forEach((item) => {
+      if (!pool.some((row) => row.type === item.type && row.name === item.name)) {
+        pool.push(item);
+      }
+    });
     if (!q) {
       return pool.slice(0, 20);
     }
@@ -1236,7 +1302,7 @@ const AiChat = (props: AiChatProps) => {
       return b.score - a.score;
     });
     return scored.slice(0, 20).map((row) => row.item);
-  }, [mentionCandidates, mentionQuery, recentMentions, assetIndex]);
+  }, [mentionCandidates, mentionQuery, recentMentions, assetIndex, remoteTables]);
 
   /**
    * 键盘上下选择时让高亮项跟随滚动（UAT 2026-10-29）。

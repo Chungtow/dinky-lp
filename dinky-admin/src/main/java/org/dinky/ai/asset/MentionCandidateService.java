@@ -32,6 +32,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.stereotype.Service;
 
 import cn.dev33.satoken.stp.StpUtil;
+import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.convert.Convert;
 import cn.hutool.core.util.StrUtil;
 import lombok.RequiredArgsConstructor;
@@ -79,6 +80,14 @@ public class MentionCandidateService {
     private static final int MAX_SEARCH_LIMIT = 200;
 
     /**
+     * 触发"表名实时搜索"的最小关键词长度。
+     *
+     * <p>1 个字符几乎命中全部表（还要连库），既慢又没有区分度——这正是 C1 反对"每键一请求"的原因，
+     * 所以阈值卡在 2 个字符（实施计划 C1.5 判据）。
+     */
+    private static final int MIN_TABLE_KEYWORD = 2;
+
+    /**
      * 副标题列的条目阈值：超过则整列留空。
      *
      * <p>候选总量在百级~千级时，副标题（库名/描述）是"能不能选中"的关键信息；
@@ -88,6 +97,12 @@ public class MentionCandidateService {
     private static final int MAX_SUB_ITEMS = 2_000;
 
     private final List<MentionCandidateProvider> providers;
+
+    /**
+     * C1.5 轻量表名搜索（2026-10-31）：表是万级、{@code prefetchable=false}，不进快照；
+     * 只在<b>搜索模式</b>（{@code ?q=}）且关键词 ≥2 字符时按需实时查（内部带 5 分钟缓存 + 超时）。
+     */
+    private final TableNameSearchService tableNameSearchService;
 
     private final Map<String, Snapshot> cache = new ConcurrentHashMap<>();
 
@@ -107,7 +122,42 @@ public class MentionCandidateService {
             return toVO(snapshot, MentionCandidateVO.MODE_PREFETCH, MAX_PREFETCH_ITEMS);
         }
         int max = limit == null || limit <= 0 ? DEFAULT_SEARCH_LIMIT : Math.min(limit, MAX_SEARCH_LIMIT);
-        return toVO(search(snapshot.getRefs(), keyword, max), MentionCandidateVO.MODE_SEARCH, max);
+        List<AssetRef> hits = new ArrayList<>(search(snapshot.getRefs(), keyword, max));
+        // C1.5（2026-10-31）：快照里没有表（万级、prefetchable=false），搜索引擎模式补一层
+        // "按表名实时搜"。命中项仍是 source 类型（code=<ds>/<db>/<tbl>），插入即 @source/...，
+        // 因此解析 / 校验 / 装配全走既有链路，不引入新协议。
+        if (wantsTables(requested) && hits.size() < max && keyword.length() >= MIN_TABLE_KEYWORD) {
+            for (AssetRef ref : tableNameSearchService.search(keyword, max - hits.size())) {
+                if (hits.size() >= max) {
+                    break;
+                }
+                if (!containsCode(hits, ref.getCode())) {
+                    hits.add(ref);
+                }
+            }
+        }
+        return toVO(hits, MentionCandidateVO.MODE_SEARCH, max);
+    }
+
+    /** 表名搜索是否参与本次搜索：{@code types} 为空（全类型）或显式包含 source / table。 */
+    private boolean wantsTables(List<AssetType> requested) {
+        if (CollUtil.isEmpty(requested)) {
+            return true;
+        }
+        return requested.contains(AssetType.SOURCE) || requested.contains(AssetType.TABLE);
+    }
+
+    /** 去重：快照命中与表名命中共用同一 code 时只保留快照那条（副标题更丰富）。 */
+    private boolean containsCode(List<AssetRef> refs, String code) {
+        if (StrUtil.isBlank(code)) {
+            return false;
+        }
+        for (AssetRef ref : refs) {
+            if (ref != null && StrUtil.equals(ref.getCode(), code)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

@@ -248,9 +248,28 @@ public class SkillHandleValidator {
         }
     }
 
+    /**
+     * 语义句柄：{@code <project>} / {@code <project>/<asset>} / {@code <project>/table|metric/<asset>}。
+     *
+     * <p><b>为什么不能只按第一个 {@code /} 切</b>（2026-10-31 修复）：长式句柄是 AI Chat 在
+     * "表与指标同名"时插入的消歧形态（{@code AiChat/index.tsx} 的 U23 场景）。原先按第一个
+     * 分隔符切分，{@code project/table/tc_devices} 会被切成 asset={@code table/tc_devices}，
+     * 永远匹配不到资产名 → 每个长式句柄都被判 {@code not_found}（假阳性）。
+     *
+     * <p>现在与 {@code SemanticAssetProvider#resolve} 同源：中间段 {@code table|metric}
+     * 只用于限定资产类型，不参与名字匹配。
+     */
     private void resolveSemantic(SkillHandleValidationVO.Handle handle) {
-        String project = StrUtil.subBefore(handle.getCode(), "/", false);
-        String asset = StrUtil.subAfter(handle.getCode(), "/", false);
+        String code = StrUtil.nullToEmpty(handle.getCode());
+        String project = StrUtil.subBefore(code, "/", false);
+        String rest = StrUtil.subAfter(code, "/", false);
+        String kind = null;
+        String asset = rest;
+        String firstSegment = StrUtil.subBefore(rest, "/", false);
+        if (StrUtil.equalsAnyIgnoreCase(firstSegment, "table", "metric")) {
+            kind = firstSegment.toLowerCase(Locale.ROOT);
+            asset = StrUtil.subAfter(rest, "/", false);
+        }
         try {
             SemanticPublishedProjectVO hit = null;
             for (SemanticPublishedProjectVO item : safeProjects()) {
@@ -269,10 +288,16 @@ public class SkillHandleValidator {
                 return;
             }
             for (SemanticPublishedAssetVO item : safeAssets(project)) {
-                if (item != null && StrUtil.equals(item.getName(), asset)) {
-                    markOk(handle, item.getName(), null);
-                    return;
+                if (item == null || !StrUtil.equals(item.getName(), asset)) {
+                    continue;
                 }
+                String assetType = StrUtil.nullToEmpty(item.getType()).toLowerCase(Locale.ROOT);
+                if (kind != null && !assetType.startsWith(kind)) {
+                    // 名字对了但类型不符（同名表 + 指标，长式指定了另一种）
+                    continue;
+                }
+                markOk(handle, item.getName(), null);
+                return;
             }
             handle.setStatus(STATUS_NOT_FOUND);
             handle.setMessage("语义资产不存在（项目已发布，但该项目下没有这个表 / 指标）");

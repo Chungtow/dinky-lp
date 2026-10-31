@@ -25,7 +25,13 @@ import type {
   MentionScope,
   MentionScopeName
 } from '@/pages/DataStudio/Toolbar/AiChat/mentionIndex';
-import { fetchMentionDetail, listFlinkSqlEnvs, listMentionTopics } from '@/pages/DataStudio/Toolbar/AiChat/service';
+import {
+  fetchMentionCandidates,
+  fetchMentionDetail,
+  listFlinkSqlEnvs,
+  listMentionTopics,
+  listPublishedSemanticAssets
+} from '@/pages/DataStudio/Toolbar/AiChat/service';
 import { getDataSourceList, showDataSourceTable } from '@/pages/DataStudio/Toolbar/DataSource/service';
 import { getData } from '@/services/api';
 import { API_CONSTANTS } from '@/services/endpoints';
@@ -325,7 +331,7 @@ export async function collectMentionItems(query: string): Promise<MentionItem[]>
     // 无前缀：类型入口 + 跨类型模糊匹配（与 AI Chat 的空输入体验一致）
     const items = await loadCandidates();
     const keyword = (query ?? '').trim();
-    const matched = items
+    const matched: MentionItem[] = items
       .filter((it) => SINGLE_LEVEL_TYPES.includes(it.type) || it.type === 'semantic')
       .map((it) => ({ it, score: scoreMention([it.code, it.title, it.subtitle ?? ''], keyword) }))
       .filter(({ score }) => score > 0)
@@ -338,9 +344,13 @@ export async function collectMentionItems(query: string): Promise<MentionItem[]>
         code: it.code,
         title: it.code,
         right: it.subtitle ?? it.title,
-        chainable: false
+        // 语义项目是中间层级（选中继续列资产）；其余单级类型选中即完成
+        chainable: it.type === 'semantic'
       }));
-    return [...prefixItems(), ...matched];
+    // C1.5：表名服务端搜索（表不在预取索引里，≥2 字符才触发；失败静默，不影响其它候选）
+    const tables = await searchTableItems(keyword);
+    const merged = tables.filter((item) => !matched.some((hit) => hit.code === item.code));
+    return [...prefixItems(), ...matched, ...merged].slice(0, MAX_ITEMS + PREFIX_ENTRIES.length);
   }
 
   // `@table/` 已下线（`column` 不在 MentionScopeName 里，只会走无前缀分支）
@@ -368,9 +378,9 @@ export async function collectMentionItems(query: string): Promise<MentionItem[]>
 
   const items = await loadCandidates();
   const wanted = scope.scope;
-  if (wanted === 'semantic' && scope.parts.length > 1) {
-    // 项目内资产未预取（C1 边界），编辑器只到项目层
-    return [];
+  if (wanted === 'semantic') {
+    // 路径式下钻（项目 → 资产）：与 AI Chat 同一份数据、同一套同名消歧规则
+    return semanticItems(scope);
   }
   const keyword = scope.keyword;
   return items
@@ -456,6 +466,161 @@ async function sourceItems(scope: MentionScope): Promise<MentionItem[]> {
       right: `${dsName}/${schema.name}`,
       chainable: false
     }));
+}
+
+/** 语义项目内资产（与 AI Chat 的 `semanticAssets` 同形：`name` + `kind`） */
+type SemanticAssetItem = {
+  /** 资产名（句柄的最后一段） */
+  name: string;
+  /** 资产类别：决定同名消歧时用 `table` 还是 `metric` */
+  kind: 'table' | 'metric';
+  /** 一句话说明（右侧提示，没有就不显示） */
+  oneLiner?: string;
+};
+
+/** 语义项目 → 资产清单缓存（60s，与候选快照同口径） */
+const semanticAssetCache = new Map<string, { at: number; items: SemanticAssetItem[] }>();
+
+/**
+ * 读取某个已发布项目的资产清单（`@semantic/<项目>/` 的第二级）。
+ *
+ * <p><b>为什么必须懒加载</b>：后端 `SemanticProjectProvider` 只预取<b>项目级</b>——
+ * 每个项目的资产清单都要读一次 HDFS（N 个项目 = N 次），不能塞进 60s 快照
+ * （`SemanticProjectProvider:41-46`）。用户敲到 `/` 之后才拉，且按项目缓存。
+ */
+async function loadSemanticAssets(project: string): Promise<SemanticAssetItem[]> {
+  const cached = semanticAssetCache.get(project);
+  if (cached && Date.now() - cached.at < 60_000) {
+    return cached.items;
+  }
+  const rows = await withTimeout(listPublishedSemanticAssets(project), METADATA_TIMEOUT, [] as any[]);
+  const items: SemanticAssetItem[] = (rows ?? [])
+    .filter((row: any) => `${row?.name ?? ''}`.trim() !== '')
+    .map((row: any) => ({
+      name: `${row.name}`.trim(),
+      kind: `${row?.type ?? ''}`.toUpperCase() === 'METRIC' ? ('metric' as const) : ('table' as const),
+      oneLiner: `${row?.oneLiner ?? ''}`.trim() || undefined
+    }));
+  if (items.length > 0) {
+    semanticAssetCache.set(project, { at: Date.now(), items });
+  }
+  return items;
+}
+
+/**
+ * `@semantic/` 路径下钻：**已发布项目（chainable）→ 项目内资产（叶子）**。
+ *
+ * <p><b>口径与 AI Chat 逐条一致</b>（用户 2026-10-31 原则）：同一份资产接口
+ * （`/api/semantic/published/assets`）、同一套同名消歧规则——表与指标同名时生成长式句柄
+ * `<项目>/table|metric/<名>`，否则用短式 `<项目>/<名>`（对照 `AiChat/index.tsx:1060-1075`）。
+ *
+ * <p><b>修掉的两个缺陷</b>：
+ *
+ * <ol>
+ *   <li>`@semantic/<项目>/`（带尾斜杠）此前会落到通用打分分支，关键字里带着 `/` 必然 0 分 → 面板空白；
+ *   <li>`@semantic/<项目>/<资产>` 此前被 `parts.length > 1` 硬拦成 `[]`（C1 边界）。
+ * </ol>
+ */
+async function semanticItems(scope: MentionScope): Promise<MentionItem[]> {
+  const parts = scope.parts;
+  const projects = (await loadCandidates()).filter((it) => it.type === 'semantic');
+  // 第一层：项目名（含"在项目名上继续筛选"）
+  if (parts.length === 0 || (parts.length === 1 && !scope.trailing)) {
+    const keyword = `${parts[0] ?? ''}`.toLowerCase();
+    return projects
+      .filter((it) => !keyword || it.code.toLowerCase().includes(keyword))
+      .slice(0, MAX_ITEMS)
+      .map((it) => ({
+        id: `semantic:${it.code}`,
+        kind: 'resource' as const,
+        type: 'semantic' as const,
+        code: it.code,
+        title: it.code,
+        right: it.subtitle ?? null,
+        // 项目是中间层级：选中补 `/` 并保持面板打开，继续列资产（与 AI Chat 一致）
+        chainable: true
+      }));
+  }
+  const projectName = `${parts[0] ?? ''}`;
+  const project =
+    projects.find((it) => it.code === projectName) ??
+    projects.find((it) => it.code.toLowerCase() === projectName.toLowerCase());
+  if (!project) {
+    lastMentionDiagnostic = `已发布语义项目里没有「${projectName}」`;
+    return [];
+  }
+  const assets = await loadSemanticAssets(project.code);
+  if (assets.length === 0) {
+    lastMentionDiagnostic = `项目「${project.code}」下没有可引用资产（或资产索引未就绪 / 无 semantic:view 权限）`;
+    return [];
+  }
+  // 第二层：资产（`<项目>/` = 全部；`<项目>/<kw>` = 过滤；`<项目>/table|metric/...` = 长式）
+  const rest = parts.slice(1);
+  let kind: '' | 'table' | 'metric' = '';
+  let keyword = scope.trailing ? '' : `${rest[0] ?? ''}`;
+  if (rest.length > 0 && /^(table|metric)$/i.test(rest[0])) {
+    kind = rest[0].toLowerCase() as 'table' | 'metric';
+    keyword = scope.trailing ? '' : `${rest[1] ?? ''}`;
+  }
+  const lowered = keyword.toLowerCase();
+  const counts = new Map<string, number>();
+  assets.forEach((asset) => counts.set(asset.name, (counts.get(asset.name) ?? 0) + 1));
+  return assets
+    .filter((asset) => !kind || asset.kind === kind)
+    .filter((asset) => !lowered || asset.name.toLowerCase().includes(lowered))
+    .slice(0, MAX_ITEMS)
+    .map((asset) => {
+      // 同名（表与指标）或用户已经在长式路径上：句柄要带上类别段，否则两边不可区分
+      const longForm = kind !== '' || (counts.get(asset.name) ?? 0) > 1;
+      const code = longForm ? `${project.code}/${asset.kind}/${asset.name}` : `${project.code}/${asset.name}`;
+      return {
+        id: `semantic:${code}`,
+        kind: 'resource' as const,
+        type: 'semantic' as const,
+        code,
+        title: asset.name,
+        right: asset.oneLiner ?? (asset.kind === 'metric' ? '指标' : '表'),
+        chainable: false
+      };
+    });
+}
+
+/**
+ * C1.5 轻量表名搜索（2026-10-31）：表是万级、不进预取索引，只能按需问后端。
+ *
+ * <p>命中项仍是 `source` 类型（`code=<数据源>/<库>/<表>`），因此插入的是
+ * `@source/<ds>/<db>/<tbl>`——与手工路径式下钻完全同构，校验 / 装配都不需要新分支。
+ */
+async function searchTableItems(keyword: string): Promise<MentionItem[]> {
+  if (keyword.length < 2) {
+    return [];
+  }
+  const payload: any = await withTimeout(
+    fetchMentionCandidates(undefined, keyword, 10),
+    METADATA_TIMEOUT,
+    null
+  );
+  const types: string[] = payload?.types ?? [];
+  const codes: string[] = payload?.codes ?? [];
+  const titles: string[] = payload?.titles ?? [];
+  const subs: string[] = payload?.subs ?? [];
+  const items: MentionItem[] = [];
+  for (let i = 0; i < codes.length; i += 1) {
+    // 只保留表命中：快照类命中（skill/doc/semantic/kb）本地已有一份，重复出现会干扰排序
+    if (`${types[i] ?? ''}` !== 'source' || !codes[i]) {
+      continue;
+    }
+    items.push({
+      id: `source:${codes[i]}`,
+      kind: 'resource' as const,
+      type: 'source' as const,
+      code: codes[i],
+      title: titles[i] || codes[i],
+      right: subs[i] ?? '跨数据源表',
+      chainable: false
+    });
+  }
+  return items;
 }
 
 /** `@topic/` `@env/`：名册接口（零连接） */

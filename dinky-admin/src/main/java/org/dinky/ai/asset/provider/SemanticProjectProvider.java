@@ -24,6 +24,7 @@ import org.dinky.ai.asset.AssetType;
 import org.dinky.ai.asset.MentionCandidateProvider;
 import org.dinky.data.constant.PermissionConstants;
 import org.dinky.data.model.SystemConfiguration;
+import org.dinky.data.vo.SemanticPublishedAssetVO;
 import org.dinky.data.vo.SemanticPublishedProjectVO;
 import org.dinky.service.SemanticFileService;
 
@@ -90,21 +91,79 @@ public class SemanticProjectProvider implements MentionCandidateProvider {
         return refs;
     }
 
+    /**
+     * 单条详情：<b>项目级与资产级都支持</b>（2026-10-31 修复）。
+     *
+     * <p><b>修的是什么</b>：此前只拿 {@code code} 与<b>项目名</b>全等比较，于是
+     * {@code @semantic/<project>/<asset>} 这类<b>合法</b>的资产级句柄一律返回 {@code null}，
+     * 编辑器悬停就显示"资源不存在，或当前用户不可见"——假阳性。编辑器补上资产级下钻后，
+     * 这个假阳性会直接落在用户刚插入的句柄上，比不给候选更糟。
+     *
+     * <p><b>支持的三种形态</b>（与 {@code SemanticAssetProvider#resolve} 同源）：
+     *
+     * <ul>
+     *   <li>{@code <project>} —— 项目级（原逻辑）
+     *   <li>{@code <project>/<asset>} —— 资产级（表与指标同名时无法区分，属历史短式）
+     *   <li>{@code <project>/table|metric/<asset>} —— 长式（AI Chat 在同名时插入的形态）
+     * </ul>
+     */
     @Override
     public AssetRef detail(String code) {
         if (!hasSemanticPermission()) {
             return null;
         }
-        for (SemanticPublishedProjectVO project : semanticFileService.listPublishedProjects()) {
-            if (project == null || !StrUtil.equals(project.getName(), code)) {
-                continue;
+        String path = StrUtil.trimToEmpty(code);
+        if (StrUtil.isBlank(path)) {
+            return null;
+        }
+        String projectName = StrUtil.subBefore(path, "/", false);
+        String rest = StrUtil.subAfter(path, "/", false);
+        SemanticPublishedProjectVO project = null;
+        for (SemanticPublishedProjectVO item : semanticFileService.listPublishedProjects()) {
+            if (item != null && StrUtil.equals(item.getName(), projectName)) {
+                project = item;
+                break;
             }
+        }
+        if (project == null) {
+            return null;
+        }
+        if (StrUtil.isBlank(rest)) {
             AssetRef ref = AssetRef.of(AssetType.SEMANTIC, project.getName(), project.getName());
             ref.setSubtitle(StrUtil.format(
                     "v{} · {} table / {} metric",
                     StrUtil.nullToEmpty(project.getVersion()),
                     project.getTableCount(),
                     project.getMetricCount()));
+            return ref;
+        }
+        // 长式去掉中间的 table|metric 段（该段只用于消歧，不进资产名）
+        String kind = null;
+        String asset = rest;
+        String firstSegment = StrUtil.subBefore(rest, "/", false);
+        if (StrUtil.equalsAnyIgnoreCase(firstSegment, "table", "metric")) {
+            kind = firstSegment.toLowerCase();
+            asset = StrUtil.subAfter(rest, "/", false);
+        }
+        if (StrUtil.isBlank(asset)) {
+            return null;
+        }
+        for (SemanticPublishedAssetVO item : semanticFileService.listPublishedAssets(projectName)) {
+            if (item == null || !StrUtil.equals(item.getName(), asset)) {
+                continue;
+            }
+            String assetType = StrUtil.nullToEmpty(item.getType());
+            if (kind != null && !assetType.toLowerCase().startsWith(kind)) {
+                continue;
+            }
+            AssetRef ref = AssetRef.of(AssetType.SEMANTIC, path, item.getName());
+            String oneLiner = StrUtil.nullToEmpty(item.getOneLiner());
+            ref.setSubtitle(StrUtil.format(
+                    "{} · {} · v{}{}",
+                    projectName,
+                    "metric".equalsIgnoreCase(kind) || assetType.equalsIgnoreCase("METRIC") ? "指标" : "表",
+                    StrUtil.nullToEmpty(project.getVersion()),
+                    StrUtil.isBlank(oneLiner) ? "" : " · " + oneLiner));
             return ref;
         }
         return null;

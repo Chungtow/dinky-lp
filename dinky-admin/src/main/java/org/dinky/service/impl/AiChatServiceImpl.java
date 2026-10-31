@@ -51,6 +51,7 @@ import org.dinky.ai.mention.TopicRefRenderer;
 import org.dinky.ai.semantic.SemanticAssetProvider;
 import org.dinky.ai.semantic.SemanticAssetRef;
 import org.dinky.ai.skill.MarkdownSkillRenderer;
+import org.dinky.ai.skill.SkillAssetAssembler;
 import org.dinky.ai.skill.SkillBrief;
 import org.dinky.ai.skill.SkillDoc;
 import org.dinky.ai.skill.SkillDocParser;
@@ -223,6 +224,14 @@ public class AiChatServiceImpl implements AiChatService {
 
     /** 阶段 4a：Markdown 渲染器（默认实现；也是查不到 asset_type 实现时的回落目标） */
     private final MarkdownSkillRenderer markdownSkillRenderer;
+
+    /**
+     * 2026-10-31（S1 装配）：skill 正文 {@code @} 句柄的确定性装配器。
+     *
+     * <p>装配块<b>追加</b>在正文之后，不改写用户正文；所有判定（可见性 / 存在性）都复用
+     * {@code SkillHandleValidator}，避免"校验说不可见、装配却读了"的口径漂移。
+     */
+    private final SkillAssetAssembler skillAssetAssembler;
 
     /** 阶段 4b：全部渲染器实现（Spring 自动注入，按 {@code assetType} 分派） */
     private final List<SkillRenderer> skillRendererList;
@@ -1950,6 +1959,10 @@ public class AiChatServiceImpl implements AiChatService {
             // references/conventions.md，该文件其实不存在）。清单 token 成本极低，
             // 却是「渐进披露 + 按需读取 references/」能真正落地的前提。
             sb.append(buildAssetFileList(skill));
+            // 2026-10-31（S1 装配）：正文里的 explicit @ 句柄 → 确定性装配块。
+            // 三条约束在 SkillAssetAssembler 内部落实：深度 1 / 独立预算 / 显式失败。
+            // 装配自身绝不抛异常（内部已兜底），这里不再套 try——外层 catch 只兜 IO 类故障。
+            sb.append(skillAssetAssembler.assemble(content));
         } catch (Exception e) {
             log.warn("Append asset detail failed: name={}, msg={}", name, e.getMessage());
         }
