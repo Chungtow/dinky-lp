@@ -19,6 +19,7 @@
 
 package org.dinky.service.impl;
 
+import org.dinky.ai.asset.MentionCandidateService;
 import org.dinky.ai.skill.SkillDoc;
 import org.dinky.ai.skill.SkillDocParser;
 import org.dinky.ai.skill.SkillPathGuard;
@@ -42,6 +43,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -86,6 +88,30 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
     public static final long MAX_TOTAL_SIZE = 2L * 1024 * 1024;
 
     private final ResourcesService resourcesService;
+
+    /**
+     * {@code @} 候选快照失效器。
+     *
+     * <p><b>为什么用 {@code ObjectProvider} 而不是直接注入</b>：存在构造器循环依赖
+     * {@code SkillServiceImpl → MentionCandidateService → SkillAssetProvider → SkillService}
+     * （Spring Boot 2.6+ 默认禁止循环引用）。{@code ObjectProvider} 延迟到调用时解析，
+     * 失效是旁路操作，取不到就不做（后端 60s TTL 兜底）。
+     */
+    private final ObjectProvider<MentionCandidateService> mentionCandidateService;
+
+    /**
+     * 技能写操作后失效 {@code @} 候选快照。
+     *
+     * <p>技能候选的 {@code title = name}、{@code subtitle = description}，二者都参与 ETag 计算；
+     * 但"浏览器是否拿得到新内容"取决于后端是否已经产生新快照——所以列表类写操作（新建 /
+     * 正文含 description / 可见性 / 删除）都必须在这里主动失效，否则最长 60s 内候选仍是旧值。
+     */
+    private void invalidateMentionIndex() {
+        MentionCandidateService service = mentionCandidateService.getIfAvailable();
+        if (service != null) {
+            service.invalidate(Convert.toInt(TenantContextHolder.get(), null));
+        }
+    }
 
     @Override
     public List<Skill> listVisible() {
@@ -241,6 +267,8 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
         skill.setContentHash(SecureUtil.sha256(content));
         save(skill);
         log.info("Asset created: name={}, dir={}, owner={}, assetType={}", skillName, dirFullName, me, type);
+        // 新增 skill / doc → 候选多一条
+        invalidateMentionIndex();
         return skill;
     }
 
@@ -278,6 +306,8 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
         skill.setContentHash(SecureUtil.sha256(text));
         updateById(skill);
         log.info("Skill saved: name={}, version={}", skill.getName(), skill.getVersion());
+        // 正文里的 frontmatter 会同步 description（= 候选副标题），必须失效
+        invalidateMentionIndex();
         return skill;
     }
 
@@ -310,6 +340,8 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
         }
         updateById(skill);
         log.info("Skill visibility updated: id={}, name={}, visibility={}", id, skill.getName(), vis);
+        // 可见性变更 → 候选可见集合变化
+        invalidateMentionIndex();
         return skill;
     }
 
@@ -332,6 +364,8 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
         removePhysical(skill, skill.getDirFullName());
         removeById(id);
         log.info("Skill removed: name={}, dir={}", skill.getName(), skill.getDirFullName());
+        // 删除 → 候选少一条
+        invalidateMentionIndex();
     }
 
     // ==================== 文件管理（阶段 4b：人与 AI 共用同一组能力） ====================

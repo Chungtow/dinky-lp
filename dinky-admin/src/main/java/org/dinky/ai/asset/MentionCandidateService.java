@@ -139,9 +139,31 @@ public class MentionCandidateService {
         return null;
     }
 
-    /** 清空全部候选快照（资产写路径调用；未接钩子时靠 TTL 自然过期） */
+    /** 清空全部候选快照（兜底；常规路径优先用 {@link #invalidate(Integer)} 按租户清） */
     public void invalidateAll() {
         cache.clear();
+    }
+
+    /**
+     * 失效指定租户的候选快照（资产写路径调用）。
+     *
+     * <p><b>谁该调</b>：任何改变「候选可见集合」或「候选展示内容」的写操作——kb 的新建/改名/
+     * 启停/授权变更、skill 的新建/正文（含 description）/可见性/删除。**新增资产写接口时
+     * 必须同步接线**，否则该接口的变更要等 {@code CACHE_TTL_MILLIS}（60s）才可见。
+     *
+     * <p><b>为什么按租户前缀清</b>：缓存 key 形如 {@code tenantId:userId:types}（见
+     * {@link #cacheKey(String)}），同一租户的所有用户/类型组合共享同一批资产。只清本租户
+     * 既能做到"改名即时生效"，又不会让其它租户的快照被迫回源。
+     *
+     * @param tenantId 租户 ID；为 {@code null}（无租户上下文）时退化为全量清
+     */
+    public void invalidate(Integer tenantId) {
+        if (tenantId == null) {
+            cache.clear();
+            return;
+        }
+        String prefix = tenantId + ":";
+        cache.keySet().removeIf(key -> key.startsWith(prefix));
     }
 
     private Snapshot snapshotOf(String typesCsv, List<AssetType> requested) {
@@ -200,16 +222,29 @@ public class MentionCandidateService {
     /**
      * 内容指纹：{@code <hex>-<count>}。
      *
-     * <p>用「条目顺序 + type/code 内容」的滚动哈希，而不是 {@code max(updated_at)}：
+     * <p>用「条目顺序 + type/code + 展示字段」的滚动哈希，而不是 {@code max(updated_at)}：
      * provider 侧的 DTO（{@code SkillBrief} / {@code KbCollectionBrief}）并不都带时间戳，
      * 强行补一个会让契约多出一个"没人用但会漂"的字段；而内容变则 etag 必变，
      * 这已经满足「变了才重传」的唯一用途。
+     *
+     * <p><b>为什么 title / subtitle 必须参与哈希</b>（2026-10-31 修复）：最初只哈希
+     * {@code type+code}，而这两者都是<b>不可变地址</b>；可变的展示内容（kb 库名、skill 描述）
+     * 落不进指纹。于是"改名"这类纯展示变更的 ETag 恒定不变 → 客户端（浏览器）带
+     * {@code If-None-Match} 时被判定"内容未变"→ <b>304</b> → 浏览器复用旧响应体，
+     * 表现为「改名后候选永远显示旧名、刷新/清缓存/重启都无效」。
+     *
+     * <p>口径：**凡是会出现在响应体里的字段，都必须影响 ETag**；后续新增列（如将来补
+     * {@code icons} / {@code badges}）要同步加进这里。
      */
     private String etagOf(List<AssetRef> refs) {
         long hash = 1125899906842597L;
         for (AssetRef ref : refs) {
             hash = 31 * hash + (ref.getType() == null ? 0 : ref.getType().hashCode());
             hash = 31 * hash + (ref.getCode() == null ? 0 : ref.getCode().hashCode());
+            // 展示字段：改名 / 改描述必须换 ETag（否则客户端 304 复用旧名称）
+            hash = 31 * hash + (ref.getTitle() == null ? 0 : ref.getTitle().hashCode());
+            hash = 31 * hash
+                    + (ref.getSubtitle() == null ? 0 : ref.getSubtitle().hashCode());
         }
         return Long.toHexString(hash) + "-" + refs.size();
     }
