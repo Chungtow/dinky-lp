@@ -49,7 +49,7 @@ import lombok.extern.slf4j.Slf4j;
  * 渲染，因此 MySQL 数据源给出 mysql-cdc/jdbc 模板、Doris 数据源给出 doris connector 模板，
  * 与"数据源详情页生成 SQL"口径完全一致（无需另写生成器）。
  *
- * <p><b>为什么不复用 {@code metadata_schema} 缓存</b>：该缓存无 TTL，陈旧 schema 会直接污染
+ * <p><b>为什么不复用 {@code MetadataSchemaCache} 缓存</b>：该缓存有 60s TTL，陈旧 schema 会直接污染
  * 生成的 SQL；用户显式 {@code @} 引用即代表"我要此刻的最新结构"，故直连 driver（P1 决策 D5）。
  *
  * @since 2026/10/08
