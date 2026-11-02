@@ -126,11 +126,15 @@ export function setCookieByKey(key: string, value: string, options?: {}) {
  *
  * @param tenantId tenant id
  */
-export function setCurrentTenant(tenantId: number) {
+export function setCurrentTenant(tenantId: number, options: { dropLegacyCookie?: boolean } = {}) {
+  const { dropLegacyCookie = true } = options;
   // save to localStorage (origin-scoped)
   setKeyToLocalStorage(TENANT_ID, tenantId.toString());
   // drop the legacy tenant cookie, so that the backend fallback chain never reads a stale tenant
-  cookies.remove(TENANT_ID, { path: '/' });
+  // 仅在显式要求时清理：Cookie 作用域不含端口，该删除会跨槽生效（见租户修复计划 §3.5 / D6）
+  if (dropLegacyCookie) {
+    cookies.remove(TENANT_ID, { path: '/' });
+  }
 }
 
 /**
