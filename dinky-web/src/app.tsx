@@ -24,6 +24,7 @@ import { AccessContextProvider } from '@/hooks/useAccess';
 import { UnAccessible } from '@/pages/Other/403';
 import { API_CONSTANTS } from '@/services/endpoints';
 import { SysMenu } from '@/types/AuthCenter/data';
+import { getTenantByLocalStorage, setCurrentTenant } from '@/utils/function';
 import { l } from '@/utils/intl';
 import { PageLoading, Settings as LayoutSettings } from '@ant-design/pro-components';
 import type { RunTimeLayoutConfig } from '@umijs/max';
@@ -102,6 +103,14 @@ export async function getInitialState(): Promise<{
     const currentUser = await fetchUserInfo();
     if (currentUser?.menuList) {
       extraRoutes = currentUser?.menuList;
+    }
+
+    // 租户兜底：localStorage 缺失时（换端口首次访问 / 清缓存 / 未走选租户流程），
+    // 用后端返回的 currentTenant 补齐，否则 buildTenantHeader() 返回 {}，
+    // 所有租户隔离查询（数据源列表、@source 元数据、AI Chat 元数据）都会静默返回空。
+    // 只补空值不覆盖用户显式选择；dropLegacyCookie:false —— 不碰 Cookie，避免跨端口误删兼容 Cookie。
+    if (!getTenantByLocalStorage() && currentUser?.currentTenant?.id) {
+      setCurrentTenant(currentUser.currentTenant.id, { dropLegacyCookie: false });
     }
 
     return {
