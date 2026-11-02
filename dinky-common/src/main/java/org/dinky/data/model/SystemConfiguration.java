@@ -480,6 +480,38 @@ public class SystemConfiguration {
             .note(Status.SYS_LLM_SETTINGS_TOOLEXECSQLENABLE_NOTE);
 
     /**
+     * FlinkSQL 规则引擎总开关（M1）。
+     *
+     * <p>默认<b>开启</b>：写入前校验是本批的核心价值；关掉只用于规则误报时的紧急回滚
+     * （关掉后提示词红线仍在，只是不再拦写入）。
+     */
+    private final Configuration<Boolean> llmRuleEngineEnable = key(Status.SYS_LLM_SETTINGS_RULEENGINEENABLE)
+            .booleanType()
+            .defaultValue(true)
+            .note(Status.SYS_LLM_SETTINGS_RULEENGINEENABLE_NOTE);
+
+    /**
+     * 写类工具 {@code create_task} 开关（M1）。
+     *
+     * <p>默认<b>关闭</b>，与 {@code toolExecSqlEnable} 同一保守口径：关闭时它<b>不会出现在下发给模型的
+     * tools 清单</b>里（而非下发后再拒绝）。
+     */
+    private final Configuration<Boolean> llmToolWriteTaskEnable = key(Status.SYS_LLM_SETTINGS_TOOLWRITETASKENABLE)
+            .booleanType()
+            .defaultValue(false)
+            .note(Status.SYS_LLM_SETTINGS_TOOLWRITETASKENABLE_NOTE);
+
+    /**
+     * 试跑前的最小空闲 slot（M1）。
+     *
+     * <p>标杆作业常驻占 9~11 / 24 slots；不设下限时 AI 试跑会把生产作业挤下线。
+     */
+    private final Configuration<Integer> llmTrialSlotsFloor = key(Status.SYS_LLM_SETTINGS_TRIALSLOTSFLOOR)
+            .intType()
+            .defaultValue(4)
+            .note(Status.SYS_LLM_SETTINGS_TRIALSLOTSFLOOR_NOTE);
+
+    /**
      * 自动纠错的最大尝试次数（阶段 2c-2）。
      *
      * <p>针对「执行失败 → 模型改稿 → 再执行」的自动循环：一次对话内累计失败达到该值时，
@@ -1182,6 +1214,27 @@ public class SystemConfiguration {
         return Asserts.isNull(llmToolExecSqlEnable.getValue())
                 ? llmToolExecSqlEnable.getDefaultValue()
                 : llmToolExecSqlEnable.getValue();
+    }
+
+    /** @return FlinkSQL 规则引擎是否启用（M1，默认开启） */
+    public boolean isLlmRuleEngineEnable() {
+        return Asserts.isNull(llmRuleEngineEnable.getValue())
+                ? llmRuleEngineEnable.getDefaultValue()
+                : llmRuleEngineEnable.getValue();
+    }
+
+    /** @return 是否开放写类工具 create_task（M1，默认关闭） */
+    public boolean isLlmToolWriteTaskEnable() {
+        return Asserts.isNull(llmToolWriteTaskEnable.getValue())
+                ? llmToolWriteTaskEnable.getDefaultValue()
+                : llmToolWriteTaskEnable.getValue();
+    }
+
+    /** @return 试跑前的最小空闲 slot（M1，默认 4） */
+    public int getLlmTrialSlotsFloor() {
+        return Asserts.isNull(llmTrialSlotsFloor.getValue())
+                ? llmTrialSlotsFloor.getDefaultValue()
+                : llmTrialSlotsFloor.getValue();
     }
 
     /** @return 自动纠错的最大尝试次数（阶段 2c-2，默认 3） */

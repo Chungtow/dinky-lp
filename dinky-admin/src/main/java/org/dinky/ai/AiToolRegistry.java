@@ -84,7 +84,11 @@ public class AiToolRegistry {
             // 知识库（@kb 接入 v1.0）：检索范围由请求线程算好的 visibleCollections 决定，
             // 与"当前绑定的数据源"无关。若不在白名单，FlinkSQL 对话（无数据源）就永远
             // 用不了知识库——而"写 FlinkSQL 时查规范"恰好是最需要它的场景。
-            "kb_search");
+            "kb_search",
+            // M1 审作业：FlinkSQL 作业本就没有绑定数据源，而这两个工具正是为它准备的。
+            // 不在白名单 = FlinkSQL 对话里永远调不到（validate_task_draft 就白做了）。
+            "validate_task_draft",
+            "create_task");
 
     /**
      * 阶段 4b：按「是否绑定数据源」过滤后的工具清单。

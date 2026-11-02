@@ -384,6 +384,46 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
     editor.trigger('ai-chat', 'type', { text: sql });
   }, [props?.action?.actionType, props?.action?.params]);
 
+  /**
+   * AI Chat：把四段式草稿写入当前任务（M1-D）。
+   * 与 TASK_INSERT_SQL 的差别：**覆盖**而不是追加，且把 customConfig 合并进 configJson，
+   * 让「自定义配置」面板立即可见（否则用户改完 SQL 仍会漏配 min-pause 这类必须项）。
+   */
+  useEffect(() => {
+    const currentAction = props?.action;
+    if (currentAction?.actionType !== DataStudioActionType.TASK_APPLY_DRAFT) {
+      return;
+    }
+    const sql: string | undefined = currentAction?.params?.sql;
+    const customConfig: { key: string; value: string }[] | undefined = currentAction?.params?.customConfig;
+    updateAction({ actionType: null, params: null });
+    if (!sql || activeTab !== id || !editorInstance.current) {
+      return;
+    }
+    const editor = editorInstance.current;
+    editor.focus();
+    editor.setValue(sql);
+    const merged = [...(currentState.configJson?.customConfig ?? [])];
+    (customConfig ?? []).forEach((item) => {
+      if (!item?.key) {
+        return;
+      }
+      const index = merged.findIndex((exist) => exist.key === item.key);
+      if (index >= 0) {
+        merged[index] = { ...merged[index], value: item.value };
+      } else {
+        merged.push({ key: item.key, value: item.value });
+      }
+    });
+    const nextState = {
+      ...currentState,
+      statement: sql,
+      configJson: { ...(currentState.configJson ?? {}), customConfig: merged }
+    } as TaskState;
+    setCurrentState(nextState);
+    updateCenterTab({ ...props.tabData, isUpdate: true, params: nextState });
+  }, [props?.action?.actionType, props?.action?.params]);
+
   const onEditorChange = (value: string | undefined, ev: editor.IModelContentChangedEvent) => {
     updateCenterTab({
       ...props.tabData,

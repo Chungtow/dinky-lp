@@ -583,6 +583,19 @@ public enum Status {
     SYS_LLM_SETTINGS_HISTORYMAXMESSAGES(454, "sys.llm.settings.historyMaxMessages"),
     SYS_LLM_SETTINGS_HISTORYMAXMESSAGES_NOTE(455, "sys.llm.settings.historyMaxMessages.note"),
     /**
+     * M1：FlinkSQL 规则引擎总开关（2026-11-02）。
+     *
+     * <p>关掉即回到"纯提示词"时代（提示词红线仍在，但写入前不再拦）—— 用于规则误报时的紧急回滚。
+     */
+    SYS_LLM_SETTINGS_RULEENGINEENABLE(466, "sys.llm.settings.ruleEngineEnable"),
+    SYS_LLM_SETTINGS_RULEENGINEENABLE_NOTE(467, "sys.llm.settings.ruleEngineEnable.note"),
+    /** M1：{@code create_task} 写类工具开关（默认关闭，与 toolExecSqlEnable 同一保守口径） */
+    SYS_LLM_SETTINGS_TOOLWRITETASKENABLE(468, "sys.llm.settings.toolWriteTaskEnable"),
+    SYS_LLM_SETTINGS_TOOLWRITETASKENABLE_NOTE(469, "sys.llm.settings.toolWriteTaskEnable.note"),
+    /** M1：试跑前的最小空闲 slot（低于此值拒绝提交，避免把常驻作业挤下线） */
+    SYS_LLM_SETTINGS_TRIALSLOTSFLOOR(470, "sys.llm.settings.trialSlotsFloor"),
+    SYS_LLM_SETTINGS_TRIALSLOTSFLOOR_NOTE(471, "sys.llm.settings.trialSlotsFloor.note"),
+    /**
      * 知识库（{@code @kb}）连接与检索能力（2026-10-27 引入，v1.9 迁出 LLM 命名空间）。
      *
      * <p><b>为什么独立成组</b>（{@code sys.kb.settings.*}）：这四项描述的是「Dinky 连哪个 RAG 服务、

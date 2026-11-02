@@ -1,0 +1,62 @@
+# B4 few-shot 静态语料（M1-C，随 jar 打包；与线上作业解耦）
+# 由 jobs/traccar_realtime/benchmarks/B4_fewshot.md 提炼，字段顺序固定：id/title/topics/tables/keywords/sql/customConfig/ddl/precheck
+- id: bench_04_event_minute
+  title: 双 topic 分钟窗口聚合（canal + filebeat 日志归一）
+  topics: [traccar-cdc, traccar-logs]
+  tables: [traccar.dws_event_minute]
+  keywords: [分钟窗口, 双源, 日志, idle-timeout, 时区]
+  sql: |
+    -- 流 1：canal 侧（北京时间挂钟字符串）
+    CREATE TABLE src_events_cdc (
+        payload STRING,
+        event_type AS JSON_VALUE(payload,'$.data[0].type'),
+        event_time AS TO_TIMESTAMP(JSON_VALUE(payload,'$.data[0].eventtime'),'yyyy-MM-dd HH:mm:ss'),
+        WATERMARK FOR event_time AS event_time - INTERVAL '10' SECOND
+    ) WITH ('connector'='kafka','topic'='traccar-cdc','format'='raw',
+            'properties.group.id'='bench_04_event_minute_cdc_v1');
+
+    -- 流 2：filebeat ECS JSON，@timestamp 是 **UTC ISO** → +8h 才是北京时间
+    CREATE TABLE src_logs (
+        payload STRING,
+        event_time AS TO_TIMESTAMP(
+                        CONCAT(SUBSTR(JSON_VALUE(payload,'$."@timestamp"'),1,10),' ',
+                               SUBSTR(JSON_VALUE(payload,'$."@timestamp"'),12,8)),
+                        'yyyy-MM-dd HH:mm:ss') + INTERVAL '8' HOUR,
+        WATERMARK FOR event_time AS event_time - INTERVAL '10' SECOND
+    ) WITH ('connector'='kafka','topic'='traccar-logs','format'='raw',
+            'properties.group.id'='bench_04_event_minute_log_v1');
+
+    -- UNION ALL 必须先落视图：TUMBLE 的 TABLE 参数不接受内联子查询
+    CREATE TEMPORARY VIEW v_events_unified AS
+    SELECT event_time, event_type, 'cdc' AS source FROM src_events_cdc
+    WHERE JSON_VALUE(payload,'$.table')='tc_events' AND event_type IS NOT NULL AND event_type <> ''
+    UNION ALL
+    SELECT event_time,
+           COALESCE(REGEXP_EXTRACT(JSON_VALUE(payload,'$.message'),'type: ([a-zA-Z]+)',1),''),
+           'log'
+    FROM src_logs
+    WHERE JSON_VALUE(payload,'$."@timestamp"') IS NOT NULL;
+
+    INSERT INTO ch_event_minute
+    SELECT window_start, window_end, event_type, source, COUNT(*) AS event_cnt
+    FROM TABLE(TUMBLE(TABLE v_events_unified, DESCRIPTOR(event_time), INTERVAL '1' MINUTE))
+    WHERE event_type <> ''
+    GROUP BY window_start, window_end, event_type, source;
+  customConfig: |
+    {"customConfig":[{"key":"execution.checkpointing.min-pause","value":"10s"}],"taskParams":[]}
+  ddl: |
+    CREATE TABLE traccar.dws_event_minute (
+        window_start DateTime64(3,'Asia/Shanghai'), window_end DateTime64(3,'Asia/Shanghai'),
+        event_type String, source String, event_cnt UInt64,
+        ver UInt64 DEFAULT toUnixTimestamp64Milli(now64(3)),
+        _ingest_time DateTime64(3,'Asia/Shanghai') DEFAULT now64(3)
+    ) ENGINE = ReplacingMergeTree(ver)
+    PARTITION BY toYYYYMM(window_start) ORDER BY (window_start, event_type, source);
+  precheck: |
+    | 检查 | 判据 |
+    |---|---|
+    | 两个 topic 都有数据 | `kafka-get-offsets.sh --topic traccar-cdc / traccar-logs` 两次采样有增量 |
+    | **idle-timeout 必设** | `SET 'table.exec.source.idle-timeout'='30s'`；否则慢的一侧（日志）把整个 union 水位线钉死，窗口永不触发、sink 一行不写（本次实测踩到） |
+    | 两路 group.id 独立 | `bench_04_event_minute_cdc_v1` / `bench_04_event_minute_log_v1`，不能复用 |
+    | 落库验证 | `SELECT source, count() FROM traccar.dws_event_minute GROUP BY source`；`cdc` 应很快有行，`log` 依赖日志频率 |
+    | 口径对照 | 同一分钟同一 event_type 的 `cdc` 与 `log` 计数不同是**正常**，不要当 bug |

@@ -1,0 +1,56 @@
+# B3 few-shot 静态语料（M1-C，随 jar 打包；与线上作业解耦）
+# 由 jobs/traccar_realtime/benchmarks/B3_fewshot.md 提炼，字段顺序固定：id/title/topics/tables/keywords/sql/customConfig/ddl/precheck
+- id: bench_03_events_enriched
+  title: 流 + MySQL 维表 lookup join（事件补设备名）
+  topics: [traccar-cdc]
+  tables: [traccar.dws_events_enriched, traccar.tc_devices]
+  keywords: [维表, lookup, join, 事件, 设备名]
+  sql: |
+    -- 事实流：raw + JSON_VALUE（不用 canal-json，理由同 B2）
+    CREATE TABLE src_tc_events (
+        payload STRING,
+        event_id   AS CAST(JSON_VALUE(payload,'$.data[0].id') AS BIGINT),
+        event_type AS JSON_VALUE(payload,'$.data[0].type'),
+        event_time AS TO_TIMESTAMP(JSON_VALUE(payload,'$.data[0].eventtime'),'yyyy-MM-dd HH:mm:ss'),
+        device_id  AS CAST(JSON_VALUE(payload,'$.data[0].deviceid') AS INT),   -- ← INT 不是 BIGINT
+        proc_time  AS PROCTIME(),                                             -- ← lookup 必需
+        WATERMARK FOR event_time AS event_time - INTERVAL '10' SECOND
+    ) WITH ('connector'='kafka','topic'='traccar-cdc','format'='raw',
+            'properties.group.id'='bench_03_events_enriched_v1');
+
+    -- 维表：id 必须与 MySQL tc_devices.id（int）同类型，否则 lookup 抛 ClassCastException
+    CREATE TABLE dim_tc_devices (
+        id INT, name STRING, uniqueid STRING, model STRING,
+        PRIMARY KEY (id) NOT ENFORCED
+    ) WITH ('connector'='jdbc','url'='jdbc:mysql://manager:33306/traccar?...',
+            'table-name'='tc_devices',
+            'lookup.cache.max-rows'='1000','lookup.cache.ttl'='10min','lookup.max-retries'='3');
+
+    INSERT INTO ch_dwd_events
+    SELECT /*+ LOOKUP('table' = 'd') */ ...,
+           COALESCE(d.name,'') , COALESCE(d.uniqueid,''), COALESCE(d.model,'')
+    FROM src_tc_events AS e
+    LEFT JOIN dim_tc_devices FOR SYSTEM_TIME AS OF e.proc_time AS d
+           ON e.device_id = d.id
+    WHERE e.device_id IS NOT NULL
+      AND JSON_VALUE(e.payload,'$.table') = 'tc_events'
+      AND e.event_type IN ('deviceOnline','deviceOffline','deviceMoving','deviceStopped',
+                           'alarm','geofenceEnter','geofenceExit','deviceUnknown');
+  customConfig: |
+    {"customConfig":[{"key":"execution.checkpointing.min-pause","value":"10s"}],"taskParams":[]}
+  ddl: |
+    CREATE TABLE traccar.dwd_tc_events_enriched (
+        event_id Int64, event_type String, event_time DateTime64(3,'Asia/Shanghai'),
+        device_id Int64, position_id Nullable(Int64), geofence_id Nullable(Int64),
+        device_name String, device_unique_id String, device_model String, attributes String,
+        ver UInt64 DEFAULT toUnixTimestamp64Milli(now64(3)),
+        _ingest_time DateTime64(3,'Asia/Shanghai') DEFAULT now64(3)
+    ) ENGINE = ReplacingMergeTree(ver) PARTITION BY toYYYYMM(event_time) ORDER BY event_id;
+  precheck: |
+    | 检查 | 判据 |
+    |---|---|
+    | MySQL 连通 | 从 TM 节点 `nc -z manager 33306`；口令来自 Dinky 数据源 `traccar-mysql`（tenant2 id=22） |
+    | 维表 PK | `PRIMARY KEY (id) NOT ENFORCED` + 关联键 = PK，否则 lookup 不成立 |
+    | 计划真的是 lookup | Flink 计划里应有 `LookupJoin[...]` 顶点，**不能**是 `Join(InnerJoin)` + 两个 `TableSourceScan` |
+    | 时区 | 实测 `event_time` 与 MySQL `tc_events.eventtime` 同为 CST，无 8 小时偏差 |
+    | 落库验证 | `count() FROM traccar.dwd_tc_events_enriched` 递增；`device_name` 非空说明维表命中 |

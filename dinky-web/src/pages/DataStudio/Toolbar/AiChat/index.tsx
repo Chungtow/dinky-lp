@@ -43,6 +43,9 @@ import remarkGfm from 'remark-gfm';
 import CraftDiff from './components/CraftDiff';
 import SqlDiff from './components/SqlDiff';
 import SkillDiff from './components/SkillDiff';
+import FlinkJobCard from './components/FlinkJobCard';
+import { parseFlinkJobDraft } from './flinkJobDraft';
+import type { FlinkJobDraft } from './flinkJobDraft';
 import ContextBar from './ContextBar';
 import type { ContextScope } from './ContextBar';
 import {
@@ -105,6 +108,8 @@ import {
 import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 const CODE_BLOCK_REGEX = /```[a-zA-Z]*\s*\n?([\s\S]*?)```/g;
+/** 四段式作业围栏（M1-D）：命中后渲染卡片，而不是普通代码块 */
+const FLINK_JOB_FENCE = '```flinksql-job';
 /** 「最近使用」的 @ 引用名（localStorage key） */
 const RECENT_MENTION_KEY = 'dinky.ai-chat.recent-mentions';
 
@@ -2117,6 +2122,21 @@ const AiChat = (props: AiChatProps) => {
   };
 
   /**
+   * M1-D：把四段式草稿写进当前任务（SQL 覆盖编辑器 + 自定义配置合并进 configJson）。
+   * 只落开发态，不提交、不发布——发布权归人。
+   */
+  const handleApplyFlinkDraft = (draft: FlinkJobDraft) => {
+    if (!draft?.sql) {
+      return;
+    }
+    updateAction({
+      actionType: DataStudioActionType.TASK_APPLY_DRAFT,
+      params: { sql: draft.sql, customConfig: draft.customConfig ?? [] }
+    });
+    message.success('已写入草稿（含自定义配置），请确认后保存');
+  };
+
+  /**
    * AI 产出 SQL 的「执行」——复刻编辑器点运行的链路。
    *
    * <p><b>此前这里是空壳</b>：只把 SQL 插入编辑器，并不真正执行——`TASK_RUN_SUBMIT` 仅被
@@ -2299,6 +2319,22 @@ const AiChat = (props: AiChatProps) => {
         );
       }
       const code = match[1];
+      if (match[0].startsWith(FLINK_JOB_FENCE)) {
+        const parsedDraft = parseFlinkJobDraft(code);
+        if (parsedDraft) {
+          nodes.push(
+            <div key={`flink-job-${match.index}`}>
+              <FlinkJobCard
+                draft={parsedDraft}
+                onApplyDraft={handleApplyFlinkDraft}
+                onRunSql={handleRunSql}
+              />
+            </div>
+          );
+          lastIndex = CODE_BLOCK_REGEX.lastIndex;
+          continue;
+        }
+      }
       nodes.push(
         <div
           key={`code-${match.index}`}

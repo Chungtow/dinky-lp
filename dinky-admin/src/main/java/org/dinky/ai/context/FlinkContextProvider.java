@@ -19,6 +19,7 @@
 
 package org.dinky.ai.context;
 
+import org.dinky.ai.rule.FlinkSqlRuleEngine;
 import org.dinky.config.Dialect;
 import org.dinky.data.dto.StudioMetaStoreDTO;
 import org.dinky.data.dto.TaskDTO;
@@ -95,6 +96,9 @@ public class FlinkContextProvider {
 
     private final NameRegistryService nameRegistryService;
 
+    /** M1-A：规则库引擎（渲染 prompt 红线；S8 起取代原 RULES 常量） */
+    private final FlinkSqlRuleEngine ruleEngine;
+
     /**
      * 判断该方言是否由本 provider 提供上下文（当前只有 FlinkSQL）。
      *
@@ -135,6 +139,7 @@ public class FlinkContextProvider {
         appendCatalogSection(sb, task);
         appendExternalResources(sb);
         appendRules(sb);
+        appendProtocol(sb);
         appendRegistry(sb);
 
         String text = sb.toString();
@@ -381,11 +386,40 @@ public class FlinkContextProvider {
 
     // ==================== 4. 规则红线 ====================
 
+    /**
+     * 参数放置规则（固定文案，属"框架事实"而非"规则库策略"）+ 规则库渲染的红线。
+     *
+     * <p><b>S8 起</b>：具体红线由 {@code config/…/ai/flinksql-rules.yaml} 的 {@code prompt} 字段渲染，
+     * 这里只保留两段不随规则增删变化的框架事实（参数通道 / 快照口径），避免"平台事实"被规则配置误删。
+     */
     private void appendRules(StringBuilder sb) {
-        sb.append(RULES);
+        sb.append(PARAM_CHANNELS).append(ruleEngine.renderPrompt()).append(CONTEXT_SCOPE);
     }
 
-    // ==================== 5. 命名名册 ====================
+    /**
+     * 四段式输出协议（M1-D）：让模型的产出可以被前端解析成卡片、被后端直接校验。
+     *
+     * <p>协议写成"必须"而不是"建议"：不给出围栏时，前端只能渲染 Markdown，
+     * 「写入草稿」就无从谈起（用户得手工复制四段并逐段粘贴）。
+     */
+    private void appendProtocol(StringBuilder sb) {
+        sb.append("\n### 输出协议（给出新作业或改动作业时必须遵守）\n")
+                .append("- 除 Markdown 说明外，必须**再输出一个 ```flinksql-job 围栏**，围栏内是 JSON：\n")
+                .append("```flinksql-job\n")
+                .append("{\"flinksqlJob\":{\"name\":\"作业名\",\"sql\":\"完整 FlinkSQL\",")
+                .append("\"customConfig\":[{\"key\":\"execution.checkpointing.min-pause\",\"value\":\"10s\"}],")
+                .append("\"ddl\":[{\"engine\":\"clickhouse\",\"database\":\"traccar\",\"table\":\"dws_x\",")
+                .append("\"statement\":\"CREATE TABLE ...\"}],")
+                .append("\"precheck\":[{\"item\":\"sink 表已存在\",\"how\":\"describe_tables\",\"status\":\"pass\"}]}}\n")
+                .append("```\n")
+                .append("- `sql` 必须**完整可执行**（含 SET 头与 INSERT INTO），不要写省略号或注释占位\n")
+                .append("- `customConfig` 只放「只能放自定义配置」的参数；能走 SET 的不要重复\n")
+                .append("- `ddl` 放目标库建表语句；目标表已存在时给空数组 `[]`\n")
+                .append("- `precheck` 每项结论只有 pass / unknown / fail；**没验证过就写 unknown**，不要写 pass\n")
+                .append("- 给出围栏前后应先用 `validate_task_draft` 自检，存在 error 级违规时先修正再输出\n");
+    }
+
+    // ==================== 5. 命名名册 ===================="""
 
     private void appendRegistry(StringBuilder sb) {
         sb.append("\n### 已占用名册（生成新作业前必须避开）\n");
@@ -447,25 +481,18 @@ public class FlinkContextProvider {
         return value;
     }
 
-    /** 静态规则红线：全部沉淀自本项目既有交付的实测结论（参数放置 / 命名唯一性 / Doris 约束 / 时区）。 */
-    private static final String RULES = "\n### 参数放置规则（写错位置会静默失效，必须遵守）\n"
+    /** 参数通道事实（Standalone 下只有 SET 与自定义配置两条路，写错位置静默失效） */
+    private static final String PARAM_CHANNELS = "\n### 参数放置规则（写错位置会静默失效，必须遵守）\n"
             + "- 走 SQL `SET` 有效: `execution.checkpointing.*`（**min-pause 除外**）、`restart-strategy.*`、`table.exec.*`、"
             + "`parallelism.default`、`pipeline.name`\n"
             + "- **只能放「任务自定义配置」**: `execution.checkpointing.min-pause`（SQL SET 实测无效；须用 Flink 1.17 新 key）\n"
             + "- **必须写在 `CREATE TABLE ... WITH(...)`**: connector 全部参数、`sink.parallelism`\n"
             + "- **禁止进 env**: `pipeline.name`（作业唯一标识，进 env 会让同一批作业同名）\n"
             + "- Standalone 模式下 `flink-conf.yaml` 与集群配置模板**均不在作业链路上**（已实测）；"
-            + "客户端参数只有 SET 与自定义配置两个通道\n"
-            + "\n### 命名唯一性（同一 Kafka topic 多作业共用 group.id 会瓜分分区、数据偏小）\n"
-            + "- 必须逐作业唯一: `pipeline.name`、`properties.group.id`、`sink.label-prefix`\n"
-            + "\n### Doris 写入约束\n"
-            + "- 物理表**必须先建好**；Flink 侧 `CREATE TABLE` 只是逻辑映射，不会建表\n"
-            + "- 回撤流（聚合 / Top-N / JOIN）写入必须 `PRIMARY KEY(...) NOT ENFORCED` + 显式 `sink.parallelism`\n"
-            + "- 按天聚合结果用 `UNIQUE KEY(stat_date)` + Merge-on-Write 覆盖\n"
-            + "\n### 上下文口径\n"
+            + "客户端参数只有 SET 与自定义配置两个通道\n";
+
+    /** 快照口径（每次对话都要提醒模型：这是某一时刻的事实） */
+    private static final String CONTEXT_SCOPE = "\n### 上下文口径\n"
             + "- 本区块是**某一时刻的快照**（见「上下文快照时间」）：catalog / 名册 / 资源清单可能已变化\n"
-            + "- 当回答依赖上述快照事实时，请在「依据」中注明该快照时间，便于用户判断是否需要刷新\n"
-            + "\n### 时区口径\n"
-            + "- canal `servertime` 已是北京时间挂钟字符串：按 STRING 原样截取，**禁止 TIMESTAMP 解析**（会偏 8 小时）\n"
-            + "- 作业基线含 `SET 'table.local-time-zone' = 'Asia/Shanghai'`\n";
+            + "- 当回答依赖上述快照事实时，请在「依据」中注明该快照时间，便于用户判断是否需要刷新\n";
 }

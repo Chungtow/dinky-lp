@@ -20,6 +20,8 @@
 package org.dinky.controller;
 
 import org.dinky.ai.context.NameRegistryService;
+import org.dinky.ai.fewshot.SimilarTasksQuery;
+import org.dinky.ai.fewshot.SimilarTasksService;
 import org.dinky.data.constant.PermissionConstants;
 import org.dinky.data.dto.AiChatConfirmRequest;
 import org.dinky.data.dto.AiChatRequest;
@@ -78,6 +80,9 @@ public class AiChatController {
     /** P1-A：{@code @topic/} 候选来自命名名册（零连接 Kafka） */
     private final NameRegistryService nameRegistryService;
 
+    /** M1-C：few-shot 召回（L1 静态语料 + L2 本租户线上作业） */
+    private final SimilarTasksService similarTasksService;
+
     /**
      * 发起对话，流式返回（SSE）。
      *
@@ -109,6 +114,21 @@ public class AiChatController {
     @SaCheckPermission(PermissionConstants.AI_CHAT_USE)
     public Result<AiChatConfig> getConfig() {
         return Result.succeed(aiChatService.getConfig());
+    }
+
+    /**
+     * few-shot 召回：按表 / topic / 关键词返回最相似的作业骨架（M1-C）。
+     *
+     * <p>只读、不调模型：召回走本地打分，返回体已脱敏（口令类字面量打码）。
+     *
+     * @param query 召回条件（全部可选）
+     * @return {@link Result}<{@link Object}> 形如 {@code {items[], candidates:{l1,l2}}}
+     */
+    @PostMapping("/similarTasks")
+    @ApiOperation("Recall Similar FlinkSQL Tasks (few-shot)")
+    @SaCheckPermission(PermissionConstants.AI_CHAT_USE)
+    public Result<Object> similarTasks(@RequestBody(required = false) SimilarTasksQuery query) {
+        return Result.succeed(similarTasksService.recall(query));
     }
 
     /**
