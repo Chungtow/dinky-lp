@@ -39,7 +39,7 @@ public class RuleLoaderTest {
     @Test
     public void missingOverlayFallsBackToBaseline() {
         RuleSet ruleSet = new RuleLoader().load("/tmp/definitely-not-exists-flinksql-rules.yaml");
-        Assert.assertEquals(20, ruleSet.size());
+        Assert.assertEquals(21, ruleSet.size());
     }
 
     @Test
@@ -48,7 +48,7 @@ public class RuleLoaderTest {
         file.deleteOnExit();
         Files.write(file.toPath(), "rules: [ this is : not : valid".getBytes(StandardCharsets.UTF_8));
         RuleSet ruleSet = new RuleLoader().load(file.getAbsolutePath());
-        Assert.assertEquals(20, ruleSet.size());
+        Assert.assertEquals(21, ruleSet.size());
     }
 
     @Test
@@ -67,7 +67,7 @@ public class RuleLoaderTest {
         RuleSet ruleSet = new RuleLoader().load(file.getAbsolutePath());
         Rule rule = ruleSet.get("FLINK-SINK-001");
         Assert.assertNotNull(rule);
-        Assert.assertEquals(20, ruleSet.size());
+        Assert.assertEquals(21, ruleSet.size());
         Assert.assertEquals(RuleSeverity.WARN, rule.getSeverity());
         Assert.assertEquals("自定义文案", rule.getMessage());
         // 判定逻辑不可被配置篡改

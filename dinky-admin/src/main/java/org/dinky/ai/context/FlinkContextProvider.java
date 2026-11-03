@@ -40,6 +40,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Component;
@@ -74,8 +75,8 @@ import lombok.extern.slf4j.Slf4j;
 @RequiredArgsConstructor
 public class FlinkContextProvider {
 
-    /** 最多列出的 Doris 数据源个数（每个数据源查一次库清单）。 */
-    private static final int MAX_DORIS_SOURCES = 5;
+    /** 最多展开库清单的数据源个数（每个数据源查一次库清单，连库有成本，故封顶）。 */
+    private static final int MAX_ENRICHED_SOURCES = 3;
 
     /** 单段清单最多列出的条目数（库 / 表）。 */
     private static final int MAX_ITEMS_PER_LINE = 60;
@@ -98,6 +99,9 @@ public class FlinkContextProvider {
 
     /** M1-A：规则库引擎（渲染 prompt 红线；S8 起取代原 RULES 常量） */
     private final FlinkSqlRuleEngine ruleEngine;
+
+    /** M1：平台运行画像（可用 connector / 目标库 / 口径约定，部署层可覆盖） */
+    private final PlatformProfileLoader platformProfileLoader;
 
     /**
      * 判断该方言是否由本 provider 提供上下文（当前只有 FlinkSQL）。
@@ -138,6 +142,7 @@ public class FlinkContextProvider {
         appendJobBinding(sb, task, snapshot);
         appendCatalogSection(sb, task);
         appendExternalResources(sb);
+        appendProfile(sb);
         appendRules(sb);
         appendProtocol(sb);
         appendRegistry(sb);
@@ -241,6 +246,11 @@ public class FlinkContextProvider {
 
     private void appendCatalogSection(StringBuilder sb, TaskDTO task) {
         sb.append("\n### Flink Catalog（经「env 回放」枚举，仅反映快照时刻状态；在请求线程内直接执行）\n");
+        // 2026-11-03 实测：模型看到 default_catalog 里没有业务表，就要求用户"去面板顶部选 schema"——
+        // 而 FlinkSQL 作业根本没有数据源绑定，这个引导是死路。必须显式说明"内联 DDL 是常态"。
+        sb.append("- 说明: 本平台 FlinkSQL 作业的源表**在 SQL 内用 `CREATE TABLE ... WITH(...)` 内联声明**，"
+                + "`default_catalog` 里没有业务表属**正常现象**；需要业务字段时看下方「外部资源清单」的数据源，"
+                + "或请用户 `@source/<数据源>/<库>/<表>` 引用。**不要让用户去面板顶部选 schema**（FlinkSQL 无数据源绑定）\n");
         StudioMetaStoreDTO dto = toMetaStoreDTO(task);
         try {
             List<Catalog> catalogs = studioService.getMSCatalogs(dto);
@@ -357,30 +367,116 @@ public class FlinkContextProvider {
         try {
             List<DataBase> databases = dataBaseService.listEnabledAll();
             if (databases == null || databases.isEmpty()) {
+                sb.append("- 已启用的数据源: 无\n");
                 return;
             }
-            List<DataBase> doris = databases.stream()
-                    .filter(db -> db.getType() != null && "Doris".equalsIgnoreCase(db.getType()))
-                    .limit(MAX_DORIS_SOURCES)
-                    .collect(Collectors.toList());
-            if (doris.isEmpty()) {
-                sb.append("- 未配置 Doris 数据源（无法列出已知的 Doris 库表）\n");
-                return;
-            }
-            sb.append("- Doris 数据源（sink 侧候选，**物理表必须先建好**，Flink 侧只能写逻辑映射表）:\n");
-            for (DataBase db : doris) {
-                sb.append("  - `").append(db.getName()).append("`: ");
-                try {
-                    Driver driver = Driver.build(db.getDriverConfig());
-                    sb.append(joinLimit(
-                            driver.listSchemas().stream().map(Schema::getName).collect(Collectors.toList())));
-                } catch (Exception e) {
-                    sb.append("(库清单获取失败: ").append(trim(e.getMessage(), 80)).append(")");
+            // 2026-11-03 实测：过去只列 Doris，MySQL（traccar-mysql，含 tc_positions）完全不可见，
+            // 模型因此判定"没有任何业务表元数据"而拒答。改为列出**全部**已启用数据源。
+            sb.append("- 已启用的数据源（源表字段用 `@source/<数据源>/<库>/<表>` 引用获取；" + "sink 侧物理表**必须已存在**，Flink 侧只写逻辑映射）:\n");
+            int enriched = 0;
+            for (DataBase db : databases) {
+                sb.append("  - `")
+                        .append(db.getName())
+                        .append("` (")
+                        .append(db.getType())
+                        .append(')');
+                if (enriched < MAX_ENRICHED_SOURCES) {
+                    enriched++;
+                    try {
+                        Driver driver = Driver.build(db.getDriverConfig());
+                        sb.append(": ")
+                                .append(joinLimit(driver.listSchemas().stream()
+                                        .map(Schema::getName)
+                                        .collect(Collectors.toList())));
+                    } catch (Exception e) {
+                        sb.append(": (库清单获取失败: ")
+                                .append(trim(e.getMessage(), 80))
+                                .append(')');
+                    }
                 }
                 sb.append('\n');
             }
+            if (databases.size() > MAX_ENRICHED_SOURCES) {
+                sb.append("  - （其余 ")
+                        .append(databases.size() - MAX_ENRICHED_SOURCES)
+                        .append(" 个数据源未展开库清单，可按名称 `@source/` 引用）\n");
+            }
         } catch (Exception e) {
             log.debug("FlinkContext: list external resources failed", e);
+        }
+    }
+
+    // ==================== 3.5 平台运行约束 ====================
+
+    /**
+     * 平台画像区块：可用 connector / 写侧目标 / 标准链路 / 口径约定。
+     *
+     * <p>这一区块**不是**规则（规则讲"违反了会怎样"），而是"本集群客观能力"——
+     * 模型最需要的就是这个：没有它，它会写 {@code 'connector' = 'hive'} 或
+     * 用 {@code tc_statistics} 当位置来源（2026-11-03 M1-01 两条都踩了）。
+     */
+    private void appendProfile(StringBuilder sb) {
+        PlatformProfile profile;
+        try {
+            profile = platformProfileLoader.profile();
+        } catch (Exception e) {
+            log.debug("FlinkContext: platform profile unavailable", e);
+            return;
+        }
+        if (profile == null || profile.isEmpty()) {
+            return;
+        }
+        sb.append("\n### 平台运行约束（本集群实测能力，写作业前必须先核对；与通用知识冲突时以本节为准）\n");
+        if (!profile.getConnectors().isEmpty()) {
+            sb.append("- 可用 connector 白名单: ")
+                    .append(profile.getConnectors().stream()
+                            .map(item -> "`" + item + "`")
+                            .collect(Collectors.joining("、")))
+                    .append(" —— **白名单之外一律不可用**\n");
+        }
+        for (String note : profile.getConnectorNotes()) {
+            sb.append("  - ").append(note).append('\n');
+        }
+        if (!profile.getSinkTargets().isEmpty()) {
+            StringBuilder targets = new StringBuilder();
+            for (Map<String, String> target : profile.getSinkTargets()) {
+                if (targets.length() > 0) {
+                    targets.append("；");
+                }
+                targets.append('`')
+                        .append(target.getOrDefault("engine", "?"))
+                        .append("`（库 `")
+                        .append(target.getOrDefault("database", "?"))
+                        .append("`）");
+                String note = target.get("note");
+                if (note != null && !note.isEmpty()) {
+                    targets.append(" —— ").append(note);
+                }
+            }
+            sb.append("- 写侧目标: ").append(targets).append('\n');
+        }
+        if (!profile.getPipelines().isEmpty()) {
+            sb.append("- 标准链路与形态:\n");
+            for (String pipeline : profile.getPipelines()) {
+                sb.append("  - ").append(pipeline).append('\n');
+            }
+        }
+        if (!profile.getTopics().isEmpty()) {
+            sb.append("- 已知 topic:\n");
+            for (Map<String, String> topic : profile.getTopics()) {
+                sb.append("  - `").append(topic.getOrDefault("name", "?")).append('`');
+                String note = topic.get("note");
+                if (note != null && !note.isEmpty()) {
+                    sb.append(" —— ").append(note);
+                }
+                sb.append('\n');
+            }
+        }
+        if (!profile.getConventions().isEmpty()) {
+            sb.append("- 业务口径约定（**平台标准答案**，不要按通用经验改口径）:\n");
+            for (String convention : profile.getConventions()) {
+                sb.append("  - ").append(convention).append('\n');
+            }
         }
     }
 

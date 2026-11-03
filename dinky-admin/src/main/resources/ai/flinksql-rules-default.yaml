@@ -112,6 +112,26 @@ rules:
       不声明 PK → validatePrimaryKey 拒绝；声明 PK → upsert 执行器构建期 NPE。
     prompt: "目标 sink 是 ClickHouse/JDBC 时，禁止输出 ROW_NUMBER / 无界 GROUP BY（回撤流落不了 insert-only sink）"
 
+  - id: FLINK-CONNECTOR-001
+    title: connector 必须在集群可用白名单内
+    severity: error
+    phase: draft
+    tier: primary
+    message: "作业用了本集群未安装的 connector（白名单外），提交阶段会报 Could not find any factories"
+    fix: "改用白名单内的 connector：源用 kafka / upsert-kafka，写用 jdbc（目标 ClickHouse）。本集群没有 hive / doris / elasticsearch connector，换 sink 引擎请先找平台加 jar"
+    evidence: "2026-11-03 M1-01 实测：模型给整段作业配了 'connector' = 'hive' + 'hive-version' = '3.1.2'；集群 /opt/bigdata/flink/flink-1.17.2/lib 只有 flink-connector-kafka / flink-connector-jdbc / clickhouse-dialect / clickhouse-jdbc，提交阶段必报 Could not find any factories"
+    prompt: "只能用集群已装的 connector（kafka / upsert-kafka / jdbc / datagen / print / blackhole / filesystem），禁止写 hive / doris / elasticsearch"
+    check:
+      kind: sql.connector_whitelist
+      allowed:
+        - kafka
+        - upsert-kafka
+        - jdbc
+        - datagen
+        - print
+        - blackhole
+        - filesystem
+
   - id: FLINK-FORMAT-001
     title: 含窗口聚合时不得使用 changelog format 作为源
     severity: error

@@ -21,6 +21,7 @@ package org.dinky.ai.rule;
 
 import org.dinky.ai.rule.check.AppendOnlyCheck;
 import org.dinky.ai.rule.check.ColumnNullSafetyCheck;
+import org.dinky.ai.rule.check.ConnectorWhitelistCheck;
 import org.dinky.ai.rule.check.ContainsCheck;
 import org.dinky.ai.rule.check.DorisAggKeyCheck;
 import org.dinky.ai.rule.check.DorisUpsertCheck;
@@ -57,6 +58,7 @@ public class FlinkSqlRuleEngineTest {
     public static void setUp() {
         List<RuleCheck> checks = Arrays.asList(
                 new AppendOnlyCheck(),
+                new ConnectorWhitelistCheck(),
                 new NotContainsCheck(),
                 new SetAbsentCheck(),
                 new RequiredSetCheck(),
@@ -71,7 +73,7 @@ public class FlinkSqlRuleEngineTest {
 
     @Test
     public void baselineHasTwentyRules() {
-        Assert.assertEquals(20, new RuleLoader().load(null).size());
+        Assert.assertEquals(21, new RuleLoader().load(null).size());
     }
 
     @Test
@@ -158,6 +160,16 @@ public class FlinkSqlRuleEngineTest {
                 .replaceAll("(?m)^\\s*SET 'table\\.local-time-zone'[^;]*;\\s*$", "");
         List<RuleViolation> violations = engine.validateDraft(contextOf(sql, "bench_02_position_top5", 3));
         Assert.assertTrue(containsFail(violations, "FLINK-TZ-001"));
+    }
+
+    @Test
+    public void hiveConnectorHitsConnectorWhitelist() {
+        // 2026-11-03 M1-01 的真实坏例：模型给整段作业配了 hive connector
+        String sql = "CREATE TABLE src (`id` INT) WITH ('connector' = 'hive', 'hive-version' = '3.1.2');\n"
+                + "CREATE TABLE sink (`id` INT) WITH ('connector' = 'jdbc', 'url' = 'jdbc:clickhouse://ch:8123/traccar');\n"
+                + "INSERT INTO sink SELECT id FROM src;\n";
+        List<RuleViolation> violations = engine.validateDraft(contextOf(sql, "uat_connector_case", 1));
+        Assert.assertTrue(containsFail(violations, "FLINK-CONNECTOR-001"));
     }
 
     private static List<Object[]> benchmarks() {

@@ -19,6 +19,8 @@
 
 package org.dinky.ai.rule;
 
+import org.dinky.ai.context.PlatformProfileLoader;
+
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
@@ -43,6 +45,9 @@ public class RuleBootstrapLogger implements ApplicationRunner {
 
     private final RuleLoader ruleLoader;
 
+    /** 平台运行画像同样是懒加载：启动预热 + 打日志，部署阶段就能看出覆盖文件是否生效。 */
+    private final PlatformProfileLoader platformProfileLoader;
+
     @Override
     public void run(ApplicationArguments args) {
         try {
@@ -55,6 +60,15 @@ public class RuleBootstrapLogger implements ApplicationRunner {
                     ruleSet.promptedRules().size());
         } catch (Exception e) {
             log.warn("AI rule engine warm-up failed (聊天仍可用，规则校验降级为内置基线)", e);
+        }
+        try {
+            int connectors = platformProfileLoader.profile().getConnectors().size();
+            log.info(
+                    "AI platform profile ready: {} connectors, overlay={}",
+                    connectors,
+                    StrUtil.blankToDefault(platformProfileLoader.externalPath(), "(未配置)"));
+        } catch (Exception e) {
+            log.warn("AI platform profile warm-up failed (上下文将缺少 connector 白名单)", e);
         }
     }
 }

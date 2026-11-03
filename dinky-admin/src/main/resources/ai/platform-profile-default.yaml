@@ -1,0 +1,44 @@
+# =============================================================================
+# Dinky AI Chat · 平台运行画像（**内置基线，随 jar 打包**）
+#
+# 作用：把「这个集群到底能干什么」告诉模型 —— 可用 connector、目标库、标准链路、
+#       口径约定。没有这份东西，模型会凭通用知识写 `'connector' = 'hive'`，
+#       提交阶段才报 Could not find any factories（2026-11-03 M1-01 实测踩过）。
+#
+# 三层来源（与规则库一致）：① 本文件 ② 部署层覆盖 config/dinky-lp/ai/platform-profile.yaml
+#       ③ 运行期只读内存。改 connectors / conventions 只需改 ②，重启容器生效。
+# 与部署层按 id/name 合并，字符串列表（connectors/conventions/pipelines）**整段替换**。
+# =============================================================================
+version: 1
+
+# 集群 Flink lib 里实际存在、可直接使用的 connector（2026-11-03 实测）
+connectors:
+  - kafka
+  - upsert-kafka
+  - jdbc
+  - datagen
+  - print
+  - blackhole
+  - filesystem
+
+connector_notes:
+  - "`jdbc` 是唯一的**写**通道，目标是 ClickHouse（自研 ClickHouseDialect，url 形如 `jdbc:clickhouse://ch01:8123/traccar`）"
+  - "**没有 hive / doris / elasticsearch / hbase / maxcompute 等 connector**：写进 WITH 会在提交阶段报 `Could not find any factories`，属于硬失败，不要尝试，也不要建议用户换这些 sink"
+
+sink_targets:
+  - engine: clickhouse
+    database: traccar
+    note: "CH 物理表必须已存在；Flink 侧 `CREATE TABLE` 只是逻辑映射，不会建表"
+
+pipelines:
+  - "标准链路：Kafka（源，raw/canal-json）→ Flink（窗口聚合）→ ClickHouse（jdbc sink）"
+  - "Top-N 不落库：DWS 只存窗口聚合结果，Top5 在查询端 `ORDER BY ... LIMIT 5`"
+
+topics:
+  - name: traccar-cdc
+    note: "Traccar MySQL 的 canal 变更流；位置报文对应源表 traccar.tc_positions"
+
+# 业务口径（改这里等于改"平台标准答案"，务必有实测/评审依据）
+conventions:
+  - "「每设备位置条数」取自 `traccar.tc_positions`（按 `deviceid` 计数）；`tc_statistics` 是平台运行统计快照（无设备列、`messagesstored` 是全局计数），**不能**当作位置来源"
+  - "canal 的 `servertime` 已是北京时间挂钟字符串；来自 filebeat 的 `@timestamp` 是 UTC，需 `+ INTERVAL '8' HOUR`"
