@@ -73,6 +73,17 @@ public final class MentionType {
     public static final String ENV = "env";
 
     /**
+     * 作业引用（{@code @job/<作业名或id>}，P2，2026-11-04）。
+     *
+     * <p>把另一个作业的**脱敏后完整 SQL** 注入上下文，作为 few-shot 参考。
+     *
+     * <p><b>与自动召回的分工</b>：自动召回（{@code SimilarTasksService}）是服务端按打分"猜"你想参考哪个，
+     * 兜底用；本句柄是用户**明确指定**"照这个改"，适合"在 #102 基础上加个维度"这类明确诉求。
+     * 两者共用同一条脱敏口径：口令类字面量一律替换为 {@code ***}。
+     */
+    public static final String JOB = "job";
+
+    /**
      * 语义资产引用（{@code @semantic/<project>[/<name>]}，P3b）。
      *
      * <p><b>名字里存的是路径式句柄</b>（对齐 {@link #SOURCE} 的 {@code ds/db/tbl} 存法，D19）：

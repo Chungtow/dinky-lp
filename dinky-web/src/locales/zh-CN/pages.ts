@@ -552,6 +552,14 @@ export default {
   'pages.datastudio.catalog.openMission': '请打开任务',
   'datastudio.aiChat.send': '发送',
   'datastudio.aiChat.stop': '停止',
+  'datastudio.aiChat.validate': '校验 SQL',
+  'datastudio.aiChat.validateTip':
+    '用平台规则库直接校验当前编辑区的 SQL（不调模型、不写数据）；结果可复制进工单',
+  'datastudio.aiChat.validateNoSql': '当前编辑区没有可校验的 SQL',
+  'datastudio.aiChat.validateFailed': '规则校验请求失败，请稍后重试',
+  'datastudio.aiChat.validatePassed': '通过（无 error 级违规）',
+  'datastudio.aiChat.validateRejected': '未通过（存在 error 级违规）',
+  'datastudio.aiChat.validateUnknownTip': 'unknown 表示该项未能判定（缺输入或接口不可达），需要人工确认',
   'datastudio.aiChat.explain': '解释当前 SQL',
   'datastudio.aiChat.explainTip': '用 AI 解释 SQL：编辑区有选中片段时解释选中片段，否则解释全文',
   'datastudio.aiChat.craft.diffTitle': 'AI 建议的改动',
@@ -728,7 +736,8 @@ export default {
   'datastudio.aiChat.mention.groupSourceDb': '库（跨源引用）',
   'datastudio.aiChat.mention.groupSourceTable': '表（跨源引用）',
   'datastudio.aiChat.mention.groupEnv': 'FlinkSQL 环境',
-  'datastudio.aiChat.mention.groupTopic': 'topic（已被作业使用）',
+  'datastudio.aiChat.mention.groupTopic': 'topic（集群真实存在）',
+  'datastudio.aiChat.mention.groupJobRef': '作业（引用其 SQL 作参考）',
   // 知识库 @kb 接入 v1.0：@kb/ 候选分组与说明
   'datastudio.aiChat.mention.groupKb': '知识库（检索范围）',
   'datastudio.aiChat.mention.sourceUsage':
@@ -1194,6 +1203,9 @@ export default {
   'rc.ds.create': '创建数据源',
   'rc.ds.decimalDigits': '小数范围',
   'rc.ds.default': '默认值',
+  'rc.ds.idTip':
+    '该 ID 用于需要按 id 引用数据源的配置项（例如配置中心 → Flink 配置 →「AI 生成作业的默认 sink 数据源」）',
+  'rc.ds.copyId': '复制数据源 ID',
   'rc.ds.delete': '删除数据源',
   'rc.ds.deleteConfirm': '确定删除该数据源吗？',
   'rc.ds.detail.tag.console': '控制台',

@@ -36,18 +36,27 @@ import org.dinky.ai.PromptStore;
 import org.dinky.ai.SqlVerifier;
 import org.dinky.ai.TableSelector;
 import org.dinky.ai.TokenUsage;
+import org.dinky.ai.context.AiTaskBinding;
+import org.dinky.ai.context.AiTaskBindingResolver;
 import org.dinky.ai.context.ContextFingerprintCache;
+import org.dinky.ai.context.FlinkContext;
 import org.dinky.ai.context.FlinkContextProvider;
+import org.dinky.ai.context.FlinkContextSelfCheck;
+import org.dinky.ai.context.FlinkJobProtocol;
 import org.dinky.ai.context.NameRegistryService;
 import org.dinky.ai.context.RequestSnapshot;
+import org.dinky.ai.draft.FlinkJobDraft;
+import org.dinky.ai.draft.FlinkJobDraftParser;
 import org.dinky.ai.kb.KbCollectionBrief;
 import org.dinky.ai.mention.EnvRefRenderer;
+import org.dinky.ai.mention.JobRefRenderer;
 import org.dinky.ai.mention.KbMentionInjector;
 import org.dinky.ai.mention.MentionInjectContext;
 import org.dinky.ai.mention.MentionInjector;
 import org.dinky.ai.mention.MentionType;
 import org.dinky.ai.mention.SourceRefRenderer;
 import org.dinky.ai.mention.TopicRefRenderer;
+import org.dinky.ai.rule.RuleValidationService;
 import org.dinky.ai.semantic.SemanticAssetProvider;
 import org.dinky.ai.semantic.SemanticAssetRef;
 import org.dinky.ai.skill.MarkdownSkillRenderer;
@@ -75,6 +84,7 @@ import org.dinky.data.model.TableRelations;
 import org.dinky.data.model.job.History;
 import org.dinky.data.model.job.JobInstance;
 import org.dinky.data.vo.AiChatConfig;
+import org.dinky.data.vo.AiChatContextPreview;
 import org.dinky.data.vo.SkillFileNode;
 import org.dinky.service.AiChatLogService;
 import org.dinky.service.AiChatService;
@@ -193,6 +203,23 @@ public class AiChatServiceImpl implements AiChatService {
     /** P0：FlinkSQL 作业上下文装配器（只读；仅 FlinkSQL 方言产出内容）。 */
     private final FlinkContextProvider flinkContextProvider;
 
+    /**
+     * 2026-11-04：围栏产出后的**自动校验 + 自愈修复**（与 {@code validate_task_draft} 同一份规则库）。
+     *
+     * <p>过去校验只是"模型愿意调才调"的只读工具，实测它会调、会拿到 {@code passed=false}，
+     * 然后照样把违规 SQL 写进围栏（M1-01：{@code connector=hive} + {@code sink=print} + {@code ROW_NUMBER}）。
+     * 把校验搬到服务端、由服务端驱动修复轮，才不依赖模型自觉。
+     */
+    private final RuleValidationService ruleValidationService;
+
+    /**
+     * 当前作业的权威信息解析（作业名 / 并行度）。
+     *
+     * <p>用于覆盖模型自报值——否则模型把 {@code name} 传成自己写的 {@code pipeline.name}，
+     * {@code FLINK-PARAM-004}（pipeline.name 必须与作业名一致）就会"自证通过"。
+     */
+    private final AiTaskBindingResolver taskBindingResolver;
+
     /** P1：{@code @source/} 引用的渲染器（跨数据源库表 + Flink DDL 骨架） */
     private final SourceRefRenderer sourceRefRenderer;
 
@@ -201,6 +228,9 @@ public class AiChatServiceImpl implements AiChatService {
 
     /** P1：{@code @env/} 引用的渲染器（只给枚举结果，不注入 env 原文） */
     private final EnvRefRenderer envRefRenderer;
+
+    /** P2（2026-11-04）：{@code @job/} 句柄——把另一个作业的脱敏 SQL 作为 few-shot 注入 */
+    private final JobRefRenderer jobRefRenderer;
 
     /** P1：命名名册（为工具快照提供 topic 血缘与名字占用检查） */
     private final NameRegistryService nameRegistryService;
@@ -339,15 +369,24 @@ public class AiChatServiceImpl implements AiChatService {
         final String schemaContext = built;
         // P0：FlinkSQL 上下文也必须在请求线程构建——内部要按 taskId 反查作业 / 集群 / env（同样依赖租户上下文），
         // 且 catalog 枚举依赖登录态；放到异步线程会因上下文丢失而查不到。
+        // 2026-11-03：改为按**方言**注入框架事实（能力/默认/规则/协议与作业无关），taskId 只决定是否追加作业细节。
         String builtFlinkContext = "";
         try {
             if (request != null) {
-                builtFlinkContext = flinkContextProvider.build(request.getTaskId());
+                // P0（2026-11-04）：把用户提问一并传入，供 few-shot 召回打分。
+                FlinkContext context =
+                        flinkContextProvider.build(request.getDialect(), request.getTaskId(), request.getMessage());
+                builtFlinkContext = context.getText();
+                logContextReady(request.getTaskId(), context);
             }
         } catch (Exception e) {
             log.warn("Build flink context before stream failed", e);
         }
         final String flinkContext = builtFlinkContext;
+        // P0（2026-11-03）：作业名 / 并行度的权威值也必须在这里（请求线程）取——
+        // 校验类工具在异步线程里查 dinky_task 会因租户上下文丢失而查不到，只能退回模型自报值，
+        // 而"模型自报值"正是要修的问题（模型把 name 写成自己刚编的 pipeline.name 就能自证通过）。
+        final AiTaskBinding taskBinding = taskBindingResolver.resolve(request == null ? null : request.getTaskId());
         chatExecutor.execute(() -> doChat(
                 request,
                 emitter,
@@ -356,7 +395,8 @@ public class AiChatServiceImpl implements AiChatService {
                 flinkContext,
                 visibleSkills,
                 visibleCollections,
-                requestSnapshot));
+                requestSnapshot,
+                taskBinding));
         return emitter;
     }
 
@@ -411,6 +451,89 @@ public class AiChatServiceImpl implements AiChatService {
         }
     }
 
+    /**
+     * 预览本轮会注入的 FlinkSQL 上下文（**只读、不调模型、不写任何数据**）。
+     *
+     * <p><b>为什么需要这个接口</b>：过去判断"上下文给到没给到"只能让模型原样贴出来（UAT M1-17），
+     * 既花 token，模型还可能省略/改写，判据不稳定。这里直接把装配结果连同**段落清单**与
+     * **7 段自检结论**返回，UAT 可以零 token 断言；排查"模型为什么编 connector"时也能一眼看出
+     * 是"没注入"还是"注入了没遵守"。
+     */
+    @Override
+    public AiChatContextPreview previewFlinkContext(Integer taskId, String dialect) {
+        FlinkContext context = flinkContextProvider.build(dialect, taskId);
+        List<FlinkContextSelfCheck.Item> checks = FlinkContextSelfCheck.check(context.getText());
+
+        List<AiChatContextPreview.Section> sections = new ArrayList<>();
+        for (FlinkContext.Section section : context.getSections()) {
+            sections.add(AiChatContextPreview.Section.builder()
+                    .id(section.getId())
+                    .title(section.getTitle())
+                    .chars(section.getChars())
+                    .degraded(section.getDegraded())
+                    .build());
+        }
+        List<AiChatContextPreview.Check> checkViews = new ArrayList<>();
+        for (FlinkContextSelfCheck.Item item : checks) {
+            checkViews.add(AiChatContextPreview.Check.builder()
+                    .id(item.getId())
+                    .item(item.getItem())
+                    .status(item.getStatus())
+                    .evidence(item.getEvidence())
+                    .build());
+        }
+        return AiChatContextPreview.builder()
+                .taskId(taskId)
+                .dialect(dialect)
+                .taskBound(context.isTaskBound())
+                .chars(context.getText().length())
+                .truncated(context.isTruncated())
+                .sections(sections)
+                .checks(checkViews)
+                .allPass(FlinkContextSelfCheck.allPass(checks))
+                .text(context.getText())
+                .build();
+    }
+
+    /**
+     * 上下文装配可观测性：每次对话落一行，回答"这次到底给了模型什么"。
+     *
+     * <p>7 段自检不通过时升为 warn——上下文不全会直接表现为"模型瞎编"，
+     * 而这在过去只能等用户报障才发现。
+     */
+    private void logContextReady(Integer taskId, FlinkContext context) {
+        if (context.isEmpty()) {
+            log.info("AI flink context skipped: task={} (非 FlinkSQL 方言)", taskId);
+            return;
+        }
+        List<FlinkContextSelfCheck.Item> checks = FlinkContextSelfCheck.check(context.getText());
+        boolean allPass = FlinkContextSelfCheck.allPass(checks);
+        StringBuilder ids = new StringBuilder();
+        for (FlinkContext.Section section : context.getSections()) {
+            if (ids.length() > 0) {
+                ids.append(',');
+            }
+            ids.append(section.getId()).append(':').append(section.getChars());
+        }
+        if (allPass) {
+            log.info(
+                    "AI flink context ready: task={} bound={} chars={} sections={} [{}]",
+                    taskId,
+                    context.isTaskBound(),
+                    context.getText().length(),
+                    context.getSections().size(),
+                    ids);
+        } else {
+            log.warn(
+                    "AI flink context INCOMPLETE: task={} bound={} chars={} sections=[{}] failures={}",
+                    taskId,
+                    context.isTaskBound(),
+                    context.getText().length(),
+                    ids,
+                    FlinkContextSelfCheck.describeFailures(checks));
+        }
+    }
+
     @Override
     public AiChatConfig getConfig() {
         SystemConfiguration config = SystemConfiguration.getInstances();
@@ -456,7 +579,8 @@ public class AiChatServiceImpl implements AiChatService {
             String prebuiltFlinkContext,
             List<SkillBrief> visibleSkills,
             List<KbCollectionBrief> visibleCollections,
-            RequestSnapshot requestSnapshot) {
+            RequestSnapshot requestSnapshot,
+            AiTaskBinding taskBinding) {
         long start = System.currentTimeMillis();
         TokenUsage totalUsage = new TokenUsage();
         AiChatLog audit = new AiChatLog();
@@ -558,7 +682,8 @@ public class AiChatServiceImpl implements AiChatService {
                         () -> runRegistry.isCancelled(run),
                         visibleSkills,
                         visibleCollections,
-                        requestSnapshot);
+                        requestSnapshot,
+                        taskBinding);
                 mergeUsage(totalUsage, toolRun.getUsage());
                 // 阶段 2c-0：用户已请求中断——停止后续校验 / 修复，直接收尾
                 if (runRegistry.isCancelled(run)) {
@@ -570,6 +695,25 @@ public class AiChatServiceImpl implements AiChatService {
                 }
             } else {
                 mergeUsage(totalUsage, generate(messages, profile, emitter, answer));
+            }
+
+            // P0（2026-11-03）：Craft 输出协议兜底。
+            // 协议目前完全靠模型自觉，实测会失效：M1-01 那次 tool_call_count=10、自校验 3 次，
+            // 最终却给了普通 ```sql 代码块 —— 前端解析不到 flinksql-job 围栏，卡片与「写入草稿」全部消失，
+            // 而用户看不出"本次没按协议产出"。这里在"确实产出了作业 SQL 但没给围栏"时补一次纠正（只补一次）。
+            if (isCraftMode(request) && !isExplain && !isFix && !isRewrite) {
+                mergeUsage(totalUsage, repairFlinkJobFence(messages, profile, emitter, answer));
+            }
+            // 2026-11-04：围栏存在 ≠ 作业正确。
+            // 实测模型会主动调 validate_task_draft、会看到 passed=false，然后照样把违规 SQL 写进围栏
+            // （M1-01：connector=hive + sink=print + ROW_NUMBER）。校验必须由服务端驱动并闭环修复，
+            // 否则"先校验再写"只是一句口号。
+            // 放在 craft 判断**之外**：ask 模式下模型同样会给出围栏（尤其被用户追问之后），
+            // 那部分产出一样会被复制进作业；没有围栏时 parse 返回 null，本方法自行跳过。
+            if (!isExplain && !isFix && !isRewrite) {
+                mergeUsage(
+                        totalUsage,
+                        validateAndRepairFence(messages, profile, emitter, answer, taskBinding, requestSnapshot));
             }
 
             int retryCount = 0;
@@ -766,6 +910,317 @@ public class AiChatServiceImpl implements AiChatService {
         }
     }
 
+    /**
+     * 围栏补发提示词：只要围栏，不要解释、不要重复 SQL 代码块。
+     *
+     * <p><b>2026-11-03 起自包含</b>：过去这里只说"块内是协议规定的 JSON（四段）"，不给字段骨架，
+     * 于是当该轮上下文里本来就没有协议段落时（新建作业 tab 无 taskId → 上下文为空），
+     * 补发必然二次失败——模型只能回答"协议不在我的指令里"。现在整段协议原文内联，
+     * 补发不依赖历史上下文。
+     */
+    private static final String FENCE_REPAIR_PROMPT = FlinkJobProtocol.REPAIR_PROMPT;
+
+    private static final String FENCE_REPAIR_HINT = "\n\n> 本次回复未按四段式协议给出 `flinksql-job` 围栏，正在补一次…\n";
+
+    /**
+     * Craft 模式下的输出协议兜底：模型没给围栏就补一次（<b>只补一次</b>）。
+     *
+     * <p><b>为什么堵在这里</b>：围栏是"作业卡片 / 写入草稿"的唯一入口，缺了它整条链路等于失效，
+     * 但模型不会因此报错、前端也不会提示——这是最隐蔽的一类失败。与其让用户猜，不如多花一轮模型调用。
+     *
+     * <p><b>为什么要求"只输出围栏"</b>：补发内容会追加到原回复末尾（前端按同一 assistant 消息解析），
+     * 若模型再重复一遍整段 SQL，用户会看到两份几乎一样的作业说明。
+     *
+     * @return 补发轮消耗的 token（无论成功与否都要计入审计）
+     */
+    private TokenUsage repairFlinkJobFence(
+            List<AiChatMessage> messages, LlmProfile profile, SseEmitter emitter, StringBuilder answer) {
+        if (FlinkJobDraftParser.parse(answer.toString()) != null) {
+            return new TokenUsage();
+        }
+        if (!looksLikeJobSql(answer.toString())) {
+            // 纯问答（没写 CREATE TABLE / INSERT INTO）不强制出卡片
+            return new TokenUsage();
+        }
+        sendFrame(emitter, "content", FENCE_REPAIR_HINT);
+        messages.add(AiChatMessage.of("assistant", answer.toString()));
+        messages.add(AiChatMessage.of("user", FENCE_REPAIR_PROMPT));
+        StringBuilder retry = new StringBuilder();
+        TokenUsage usage;
+        try {
+            usage = generate(messages, profile, emitter, retry);
+        } catch (Exception e) {
+            log.warn("flinksql-job fence repair failed", e);
+            sendFrame(emitter, "content", "\n> 围栏补发失败，本次没有可写入草稿的作业卡片。\n");
+            return new TokenUsage();
+        }
+        if (FlinkJobDraftParser.parse(retry.toString()) != null) {
+            answer.append("\n\n").append(retry);
+        } else {
+            log.warn("flinksql-job fence still missing after repair, craft mode without card");
+            // 2026-11-04：补一次仍未产出围栏时，**由服务端用已产出的 SQL 合成一个最小可用围栏**。
+            // 实测（M1-01 第五轮）补发提示已经把协议原文内联进去，模型仍然回"已给出"——
+            // 说明"要求模型重述结构化输出"这条路本身不可靠。既然 SQL 已经在回复里、而且能抽出来，
+            // 就没必要让用户因为模型没写围栏而拿不到卡片。
+            // 合成的围栏随后会进 validateAndRepairFence 的校验闭环，不会把违规 SQL 直接放行。
+            String synthesized = synthesizeFence(answer.toString());
+            if (synthesized != null) {
+                answer.append("\n\n").append(synthesized);
+                log.info("flinksql-job fence synthesized from reply sql block");
+                sendFrame(emitter, "content", "\n> 本次回复未按协议给出围栏，已由服务端按你的 SQL 自动生成作业卡片。\n");
+            } else {
+                sendFrame(
+                        emitter,
+                        "content",
+                        "\n> 补发仍未产出 `flinksql-job` 围栏，且回复里没有可抽取的 SQL：" + "本次没有可写入草稿的作业卡片，可点「校验 SQL」查看规则结论。\n");
+            }
+        }
+        return usage;
+    }
+
+    /** {@code SET 'pipeline.name' = 'xxx';} 里的作业名 */
+    private static final Pattern PIPELINE_NAME =
+            Pattern.compile("SET\\s+'pipeline\\.name'\\s*=\\s*'([^']*)'", Pattern.CASE_INSENSITIVE);
+
+    /**
+     * 用回复里已出现的 SQL 合成一个最小可用 {@code flinksql-job} 围栏。
+     *
+     * <p>合成原则：**只搬运已经存在的事实，不编造业务口径**。
+     * SQL 原样搬运；{@code customConfig} 只补规则库强制要求的那一项（min-pause 写 SET 无效，只能放这里）；
+     * {@code ddl} 留空（模型没给就不假装给了）；{@code precheck} 全部标 {@code unknown}，
+     * 表示"待人工/工具确认"，绝不标 pass —— 否则等于替用户签了字。
+     *
+     * @return 围栏文本；抽不到 SQL 时返回 null
+     */
+    private String synthesizeFence(String reply) {
+        String sql = null;
+        try {
+            sql = sqlVerifier.extractSql(reply);
+        } catch (Exception e) {
+            log.debug("synthesize fence: extract sql failed", e);
+        }
+        if (StrUtil.isBlank(sql)) {
+            return null;
+        }
+        JSONObject job = new JSONObject();
+        String name = null;
+        try {
+            Matcher matcher = PIPELINE_NAME.matcher(sql);
+            if (matcher.find()) {
+                name = matcher.group(1);
+            }
+        } catch (Exception e) {
+            log.debug("synthesize fence: read pipeline.name failed", e);
+        }
+        if (StrUtil.isNotBlank(name)) {
+            job.set("name", name);
+        }
+        job.set("sql", sql);
+
+        cn.hutool.json.JSONArray customConfig = new cn.hutool.json.JSONArray();
+        customConfig.add(
+                new JSONObject().set("key", "execution.checkpointing.min-pause").set("value", "10s"));
+        job.set("customConfig", customConfig);
+
+        job.set("ddl", new cn.hutool.json.JSONArray());
+
+        cn.hutool.json.JSONArray precheck = new cn.hutool.json.JSONArray();
+        precheck.add(new JSONObject()
+                .set("item", "sink 目标表已存在且字段匹配")
+                .set("how", "服务端规则校验 / @source/")
+                .set("status", "unknown"));
+        precheck.add(new JSONObject()
+                .set("item", "源表字段口径与 topic 报文一致")
+                .set("how", "@source/ 或 @topic/")
+                .set("status", "unknown"));
+        job.set("precheck", precheck);
+
+        JSONObject root = new JSONObject().set("flinksqlJob", job);
+        return "```" + FlinkJobProtocol.FENCE_TAG + "\n" + root.toStringPretty() + "\n```";
+    }
+
+    /** 围栏块（用于在自愈修复后**原地替换**，而不是把两版作业都甩给用户） */
+    private static final Pattern FENCE_BLOCK =
+            Pattern.compile("```\\s*flinksql-job\\s*\\r?\\n.*?```", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+
+    /**
+     * 服务端驱动的「校验 → 修复」闭环（2026-11-04）。
+     *
+     * <p><b>为什么不能靠模型自觉</b>：M1-01 实测那一轮模型确实调了 {@code validate_task_draft}，
+     * 也确实拿到了 {@code passed=false}（{@code FLINK-CONNECTOR-001: hive 不在白名单}），
+     * 然后照样把这段 SQL 写进围栏、写进作业——因为工具是只读的，违规的代价为零。
+     * 校验只有落在**产出之后、交付之前**，并且由服务端驱动修复，才真正生效。
+     *
+     * <p><b>只修 error 级</b>：{@code warn} 是"建议"，{@code unknown} 是"缺输入判不了"，
+     * 拿这两种去驱动修复会让模型陷入无意义的反复改写。
+     *
+     * @return 修复轮消耗的 token（无论成败都计入审计）
+     */
+    private TokenUsage validateAndRepairFence(
+            List<AiChatMessage> messages,
+            LlmProfile profile,
+            SseEmitter emitter,
+            StringBuilder answer,
+            AiTaskBinding binding,
+            RequestSnapshot snapshot) {
+        TokenUsage usage = new TokenUsage();
+        int maxAttempts = Math.max(SystemConfiguration.getInstances().getLlmToolAutoRepairMaxAttempts(), 0);
+        if (maxAttempts <= 0) {
+            return usage;
+        }
+        Integer tenantId = toTenantId(TenantContextHolder.get());
+        for (int attempt = 0; attempt < maxAttempts; attempt++) {
+            FlinkJobDraft draft = FlinkJobDraftParser.parse(answer.toString());
+            if (draft == null || !draft.hasSql()) {
+                return usage;
+            }
+            // 与 validate_task_draft 工具同一口径：已绑定作业时用服务端的权威作业名/并行度覆盖模型自报值，
+            // 否则模型只要把 name 传成自己写的 pipeline.name，FLINK-PARAM-004 就会"自证通过"。
+            applyFenceServerBinding(draft, binding);
+            JSONObject report = ruleValidationService.validate(draft, tenantId, snapshot);
+            JSONObject counts = report.getJSONObject("counts");
+            int errors = counts == null ? 0 : counts.getInt("error");
+            if (errors <= 0) {
+                return usage;
+            }
+            sendFrame(emitter, "content", "\n\n> 服务端规则校验发现 " + errors + " 条 error 级问题，正在自动修正…\n");
+            messages.add(AiChatMessage.of("assistant", answer.toString()));
+            messages.add(AiChatMessage.of("user", buildDraftRepairPrompt(describeFenceErrors(report))));
+            StringBuilder retry = new StringBuilder();
+            try {
+                mergeUsage(usage, generate(messages, profile, emitter, retry));
+            } catch (Exception e) {
+                log.warn("draft auto-repair generate failed", e);
+                return usage;
+            }
+            if (!replaceFenceBlock(answer, retry.toString())) {
+                // 2026-11-04 实测（M1-01 第六轮）：修复轮里模型把"改好的 SQL"又写成了普通 ```sql 块，
+                // 于是这里判"没给围栏"、直接保留旧版退出——**修复白做**，用户看到的还是违规那版。
+                // 既然 retry 里有可抽取的 SQL，就用同一套合成逻辑包成围栏再换回去，让这一轮真正生效。
+                String synthesized = synthesizeFence(retry.toString());
+                if (synthesized == null || !replaceFenceBlock(answer, synthesized)) {
+                    log.warn("draft auto-repair produced no usable sql, keep original");
+                    sendFrame(emitter, "content", "\n\n> 自动修正未能产出可用的 SQL，已保留上一版。" + "**请点「校验 SQL」核对后再写入草稿**。\n");
+                    return usage;
+                }
+                log.info("draft auto-repair fence re-synthesized from plain sql block");
+            }
+            log.info("draft auto-repair applied: attempt={} errors={}", attempt + 1, errors);
+        }
+        return usage;
+    }
+
+    /** 把 fail 条目整理成"问题 + 要求"清单（模型按它改，比只给 passed=false 有效得多） */
+    private static String describeFenceErrors(JSONObject report) {
+        cn.hutool.json.JSONArray array = report.getJSONArray("violations");
+        if (array == null || array.isEmpty()) {
+            return "- （校验报告为空）\n";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (Object element : array) {
+            if (!(element instanceof JSONObject)) {
+                continue;
+            }
+            JSONObject violation = (JSONObject) element;
+            if (!"fail".equalsIgnoreCase(violation.getStr("status"))) {
+                continue;
+            }
+            sb.append("- [")
+                    .append(violation.getStr("id"))
+                    .append("] ")
+                    .append(violation.getStr("title"))
+                    .append('\n');
+            String message = violation.getStr("message");
+            if (StrUtil.isNotBlank(message)) {
+                sb.append("  问题: ").append(message.trim()).append('\n');
+            }
+            String fix = violation.getStr("fix");
+            if (StrUtil.isNotBlank(fix)) {
+                sb.append("  要求: ").append(fix.trim()).append('\n');
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String buildDraftRepairPrompt(String detail) {
+        return "服务端用规则库校验了你上一条给出的 `" + FlinkJobProtocol.FENCE_TAG + "` 围栏，"
+                + "存在以下 **error 级**问题，必须全部修正：\n"
+                + detail
+                + "\n请**只输出修正后的 `" + FlinkJobProtocol.FENCE_TAG + "` 围栏**（一个，不要重复解释、不要输出旧版）。"
+                + "修正纪律：\n"
+                + "- connector 只能用上下文「集群能力」里列出的可用清单；集群没有 hive connector，"
+                + "禁止 `WITH ('connector' = 'hive')`，Hive 表只能用 `@source/` 查字段口径；\n"
+                + "- sink 必须落「平台默认配置 → 默认 sink 数据源」那个库里**已存在的表**，"
+                + "禁止 print / datagen / blackhole 当交付 sink；\n"
+                + "- `execution.checkpointing.min-pause` 必须写进 customConfig（写 SQL SET 无效）；\n"
+                + "- 目标是 ClickHouse/JDBC（insert-only）时禁止 ROW_NUMBER / 无界 GROUP BY 等回撤写法；\n"
+                + "- `pipeline.name` 必须与作业名一致。\n";
+    }
+
+    /** 原地替换最后一个围栏块；模型没给新围栏时返回 false（保留旧版，绝不静默丢内容） */
+    private static boolean replaceFenceBlock(StringBuilder answer, String retryReply) {
+        if (StrUtil.isBlank(retryReply)) {
+            return false;
+        }
+        Matcher source = FENCE_BLOCK.matcher(retryReply);
+        String block = null;
+        while (source.find()) {
+            block = source.group();
+        }
+        if (block == null) {
+            return false;
+        }
+        Matcher current = FENCE_BLOCK.matcher(answer);
+        int start = -1;
+        int end = -1;
+        while (current.find()) {
+            start = current.start();
+            end = current.end();
+        }
+        if (start < 0) {
+            answer.append("\n\n").append(block);
+            return true;
+        }
+        answer.replace(start, end, block);
+        return true;
+    }
+
+    /** 与 {@code ValidateTaskDraftTool#applyServerBinding} 同口径（服务端覆盖模型自报值） */
+    private static void applyFenceServerBinding(FlinkJobDraft draft, AiTaskBinding binding) {
+        if (binding == null) {
+            return;
+        }
+        draft.setTaskId(binding.getTaskId());
+        draft.setName(binding.hasTaskName() ? binding.getTaskName() : null);
+        if (binding.getParallelism() != null) {
+            draft.setParallelism(binding.getParallelism());
+        }
+    }
+
+    /** 租户上下文里存的可能是 Integer 也可能是 String（登录态 / 请求头来源不同） */
+    private static Integer toTenantId(Object raw) {
+        if (raw == null) {
+            return null;
+        }
+        if (raw instanceof Integer) {
+            return (Integer) raw;
+        }
+        try {
+            return Integer.valueOf(String.valueOf(raw));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** 粗略判断"这段回复是在产出作业"（含建表或写入语句），避免纯问答也触发补发 */
+    private static boolean looksLikeJobSql(String text) {
+        if (StrUtil.isBlank(text)) {
+            return false;
+        }
+        String upper = text.toUpperCase(java.util.Locale.ROOT);
+        return upper.contains("CREATE TABLE") || upper.contains("INSERT INTO");
+    }
+
     /** 调用模型一次：流式内容同时下发给前端并累积到 answer */
     private TokenUsage generate(
             List<AiChatMessage> messages, LlmProfile profile, SseEmitter emitter, StringBuilder answer) {
@@ -803,7 +1258,8 @@ public class AiChatServiceImpl implements AiChatService {
             BooleanSupplier cancelled,
             List<SkillBrief> visibleSkills,
             List<KbCollectionBrief> visibleCollections,
-            RequestSnapshot requestSnapshot) {
+            RequestSnapshot requestSnapshot,
+            AiTaskBinding taskBinding) {
         AiToolContext context = AiToolContext.create(
                 dataBase,
                 StrUtil.nullToEmpty(request.getSchemaName()),
@@ -832,6 +1288,8 @@ public class AiChatServiceImpl implements AiChatService {
         // P1：跨数据源引用与命名检查所需的快照（数据源索引 + 命名名册）——
         // 同 visibleSkills，必须用请求线程解析好的那份，绝不能在此（异步线程）重新查。
         context.setRequestSnapshot(requestSnapshot);
+        // 校验依据的服务端权威值（作业名 / 并行度）：让 validate_task_draft 的 name 不可被模型自报绕过。
+        context.setTaskBinding(taskBinding);
         // 阶段 2c-2：记录最近一次工具失败原因，随确认请求下发，
         // 使「第 N 次尝试」的确认框能同时显示上次为什么失败（用户知情后再决定是否执行）
         AtomicReference<String> lastToolError = new AtomicReference<>();
@@ -1550,7 +2008,9 @@ public class AiChatServiceImpl implements AiChatService {
     private static final Pattern PATH_MENTION_PATTERN = Pattern.compile(
             // 知识库 @kb 接入 v1.0：追加 kb（@kb/<code>）。它与 source/topic/env/semantic 同为路径式句柄，
             // 且必须在这里登记，否则用户"手打 @kb/c_xxxxxxxx"时后端收不到（前端只在点选候选时登记 mentions）。
-            "@(source|topic|env|semantic|kb)[-/]([\\p{L}\\p{N}_\\-.$]{1,64}(?:/[\\p{L}\\p{N}_\\-.$]{1,64}){0,3})",
+            // P2（2026-11-04）：追加 job（@job/<作业名|id>）。同样必须登记在这里，
+            // 否则用户手打 "@job/uat_device_top5" 时后端收不到（前端只在点选候选时登记 mentions）。
+            "@(source|topic|env|semantic|kb|job)[-/]([\\p{L}\\p{N}_\\-.$]{1,64}(?:/[\\p{L}\\p{N}_\\-.$]{1,64}){0,3})",
             Pattern.CASE_INSENSITIVE);
 
     /**
@@ -1632,6 +2092,9 @@ public class AiChatServiceImpl implements AiChatService {
             case "kb":
                 // 知识库 @kb 接入 v1.0：范围句柄（只声明检索范围，正文由 kb_search 召回）
                 return MentionType.KB;
+            case "job":
+                // P2：引用另一个作业作为 few-shot 参考（自动召回是"猜"，这个句柄是"指定"）
+                return MentionType.JOB;
             default:
                 return MentionType.ENV;
         }
@@ -1837,6 +2300,9 @@ public class AiChatServiceImpl implements AiChatService {
             } else if (MentionType.ENV.equalsIgnoreCase(mention.getType())) {
                 // P1：环境任务引用（只给 catalog / 库清单，绝不注入 env 原文）
                 sb.append(envRefRenderer.render(StrUtil.nullToEmpty(mention.getName())));
+            } else if (MentionType.JOB.equalsIgnoreCase(mention.getType())) {
+                // P2：作业引用（脱敏后的完整 SQL + 配置，作为 few-shot 参考）
+                sb.append(jobRefRenderer.render(StrUtil.nullToEmpty(mention.getName())));
             } else if (MentionType.SKILL.equalsIgnoreCase(mention.getType())
                     || MentionType.DOC.equalsIgnoreCase(mention.getType())) {
                 // 阶段 4a：@skill/<名>；阶段 4b：@doc/<名>（业务背景知识，与 skill 同构）。

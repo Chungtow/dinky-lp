@@ -19,6 +19,7 @@
 
 package org.dinky.ai;
 
+import org.dinky.ai.context.AiTaskBinding;
 import org.dinky.ai.context.RequestSnapshot;
 import org.dinky.ai.kb.KbCollectionBrief;
 import org.dinky.ai.skill.SkillBrief;
@@ -61,6 +62,15 @@ public class AiToolContext {
     private Integer userId;
 
     private Integer tenantId;
+
+    /**
+     * 当前对话绑定的<b>服务端权威</b>作业信息（请求线程解析后注入）。
+     *
+     * <p>校验类工具必须用它覆盖模型自报的 name / taskId / parallelism——否则
+     * "pipeline.name 与作业名一致"这类规则只要模型传一个同名值就能自证通过
+     * （2026-11-03 实测踩过）。
+     */
+    private AiTaskBinding taskBinding;
 
     /**
      * 阶段 4b：当前对话<b>可见的 skill / doc 快照</b>（由请求线程预解析后注入）。

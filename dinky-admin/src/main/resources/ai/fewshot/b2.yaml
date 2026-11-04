@@ -1,0 +1,42 @@
+# B2 few-shot 静态语料（M1-C，随 jar 打包；与线上作业解耦）
+# 由 jobs/traccar_realtime/benchmarks/B2_fewshot.md 提炼，字段顺序固定：id/title/topics/tables/keywords/sql/customConfig/ddl/precheck
+- id: bench_02_position_top5
+  title: 单流窗口聚合（5 分钟设备位置计数，Top5 放查询端）
+  topics: [traccar-cdc]
+  tables: [traccar.dws_device_position_window]
+  keywords: [Top5, 窗口, 聚合, TUMBLE, 计数, 回撤]
+  sql: |
+    -- ① 源必须 raw：canal-json 是 changelog format，窗口聚合吃不下 -U/+U
+    CREATE TABLE src_tc_positions (
+        payload STRING,
+        device_id  AS CAST(JSON_VALUE(payload,'$.data[0].deviceid') AS BIGINT),
+        event_time AS TO_TIMESTAMP(JSON_VALUE(payload,'$.data[0].servertime'),
+                                    'yyyy-MM-dd HH:mm:ss'),
+        WATERMARK FOR event_time AS event_time - INTERVAL '30' SECOND
+    ) WITH ('connector'='kafka','topic'='traccar-cdc','format'='raw',
+            'properties.group.id'='bench_02_position_top5_v1','scan.startup.mode'='latest-offset');
+
+    -- ② 只在窗口内做聚合：窗口结果在 watermark 越过窗口末尾时一次性输出 → append-only
+    INSERT INTO ch_position_window
+    SELECT window_start, window_end, device_id, COUNT(*) AS position_cnt
+    FROM TABLE(TUMBLE(TABLE src_tc_positions, DESCRIPTOR(event_time), INTERVAL '5' MINUTE))
+    WHERE device_id IS NOT NULL AND JSON_VALUE(payload,'$.table') = 'tc_positions'
+    GROUP BY window_start, window_end, device_id;
+  customConfig: |
+    {"customConfig":[{"key":"execution.checkpointing.min-pause","value":"10s"}],"taskParams":[]}
+  ddl: |
+    CREATE TABLE traccar.dws_device_position_window (
+        window_start DateTime64(3,'Asia/Shanghai'), window_end DateTime64(3,'Asia/Shanghai'),
+        device_id Int64, position_cnt UInt64,
+        ver UInt64 DEFAULT toUnixTimestamp64Milli(now64(3)),
+        _ingest_time DateTime64(3,'Asia/Shanghai') DEFAULT now64(3)
+    ) ENGINE = ReplacingMergeTree(ver)
+    PARTITION BY toYYYYMM(window_start) ORDER BY (window_start, device_id);
+  precheck: |
+    | 检查 | 判据 |
+    |---|---|
+    | 源时间字段 | `servertime` 是 `tc_positions` 的真实列，Canal 按 **CST** 渲染 → 直接 `TO_TIMESTAMP`，不要 ±8h |
+    | 窗口是否触发 | 5 分钟窗口 + 30s 水位线：启动后 **5~6 分钟**才有第一批行，别以为没落库 |
+    | 源空闲不卡窗口 | `SET 'table.exec.source.idle-timeout' = '30s'`（Canal 批量投递，偶发几十秒静默） |
+    | 落库验证 | `SELECT count() FROM traccar.dws_device_position_window` 递增；`count() FINAL == uniqExact(window_start, device_id)` |
+    | 表行数对账 | 聚合作业输入输出非 1:1，用 `check_link_traccar_cdc.sh --agg`，不能拿 Kafka offset 直接比 |

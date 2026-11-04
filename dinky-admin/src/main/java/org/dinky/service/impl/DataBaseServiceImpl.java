@@ -134,6 +134,26 @@ public class DataBaseServiceImpl extends SuperServiceImpl<DataBaseMapper, DataBa
     }
 
     /**
+     * 按名称取<b>当前租户</b>内启用中的数据源（AI 默认 sink 的解析入口）。
+     *
+     * <p>{@code dinky_database} 在租户过滤名单内，所以这里的查询天然只落在当前租户：
+     * 同名数据源由各租户各自注册一份，一份全局配置才能在多个租户下都解析得到。
+     *
+     * <p>同名记录按唯一键 {@code (name, tenant_id)} 至多一条；仍显式取一条，避免脏数据导致异常。
+     */
+    @Override
+    public DataBase getEnabledByName(String name) {
+        if (StringUtils.isBlank(name)) {
+            return null;
+        }
+        List<DataBase> matched = this.list(new QueryWrapper<DataBase>()
+                .eq("name", name.trim())
+                .eq("enabled", 1)
+                .last("limit 1"));
+        return matched == null || matched.isEmpty() ? null : matched.get(0);
+    }
+
+    /**
      * delete database by id (physical deletion)
      *
      * @param id {@link Integer} database id

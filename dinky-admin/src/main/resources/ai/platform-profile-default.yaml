@@ -1,0 +1,38 @@
+# =============================================================================
+# Dinky AI Chat · 平台运行画像（**内置基线，随 jar 打包**）
+#
+# 分工铁律（2026-11-03 P0 瘦身）：
+#   ① 集群有什么 connector  →  FlinkCapabilities（部署脚本扫 Flink lib 探测生成，
+#      见 flink-capabilities-default.yaml / dinky.ai.capabilities.path）
+#   ② 平台默认 sink 数据源  →  配置中心（sys.flink.settings.aiDefaultSinkDataBaseId）
+#   ③ 业务口径（用哪张表）  →  知识库 lpdw-dict / skill，由业务维护
+#   ④ 本文件只保留人工才说得清的：connector 用法约束、标准链路、已知 topic、url 别名
+#
+# 覆盖优先级：本文件（jar 基线） < 部署层覆盖 config/dinky-lp/ai/platform-profile.yaml。
+# 列表段落**整段替换**（不缝合），改完重启容器生效。
+# =============================================================================
+version: 2
+
+# connector 的**用法约束**（清单不在这里，别再往这里抄 connector 列表）
+connector_notes:
+  - "`jdbc` 是写 ClickHouse 的标准通道（自研 ClickHouseDialect），url 形如 `jdbc:clickhouse://doris05:38123/traccar`；CH 物理表必须已存在"
+  - "`jdbc`(ClickHouse) 是 insert-only 方言：不要输出 ROW_NUMBER / 无界 GROUP BY 这类回撤流"
+  - "MySQL（traccar-mysql）只用于 `@source/` 查表结构与 JDBC 维表 lookup（`manager:33306`）：**不能**当 Flink 的 source 做全表轮询，也**不能**当 sink；写出通道一律 ClickHouse"
+  - "写 Doris 用 `doris` connector（已装）：回撤流必须声明 PRIMARY KEY(...) NOT ENFORCED 且 sink.parallelism = 1"
+  - "`print` / `datagen` / `blackhole` 只能临时验证，**不能作为交付 sink**"
+  - "本集群没有 hive / elasticsearch / hbase / maxcompute connector，也不要用这些 sink 的 DDL 示例，提交阶段会报 `Could not find any factories`"
+
+pipelines:
+  - "标准链路：Kafka（源，raw / canal-json）→ Flink（窗口聚合）→ ClickHouse（jdbc sink）"
+  - "Top-N 不落库：DWS 只存窗口聚合结果，Top5 在查询端 `ORDER BY ... LIMIT 5`"
+  - "CDC 同步：MySQL（mysql-cdc 源）→ Flink → ClickHouse / Doris（upsert）"
+
+topics:
+  - name: traccar-cdc
+    note: "Traccar MySQL 的 canal 变更流，**一个 topic 里混有多张表**（tc_events / tc_positions / tc_devices / tc_users 等）；位置报文对应源表 `traccar.tc_positions`，告警事件对应 `traccar.tc_events`。声明源表时用 `'format' = 'raw'`，靠 `JSON_VALUE(payload,'$.table')` 过滤到单表"
+
+# jdbc host 别名 → 真实 host:port（供连接串一致性规则兜误报；规则未上线前仅作说明）
+url_aliases:
+  clickhouse: doris05:38123
+  ch01: doris05:38123
+  clickhouse-traccar: doris05:38123

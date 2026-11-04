@@ -1,0 +1,617 @@
+# =============================================================================
+# Dinky AI Chat · FlinkSQL 作业校验规则库（**内置基线，随 jar 打包**）
+#
+# 本文件是三层规则来源的最底层（classpath:ai/flinksql-rules-default.yaml）：
+#   ① 本文件（随 jar，保证"零配置可用"）
+#   ② 部署层覆盖（config/dinky-lp/ai/flinksql-rules.yaml / config/dinky/ai/…）
+#   ③ 运行期只读内存（启动时加载一次）
+# ⚠️ 改本文件必须重新构建发版；只想改 severity / 文案 / 开关，改 ② 即可（重启容器生效）。
+# 与部署层按 **id** 合并：同 id 覆盖可配置字段，但 **check.kind 永远以本文件为准**。
+#
+# 定位：本文件是**部署层覆盖**，不是唯一定义处。生效来源有两处，优先级由低到高：
+#   ① dinky-lp/dinky-admin/src/main/resources/ai/flinksql-rules-default.yaml（随 jar，内置基线）
+#   ② 本文件（config/dinky-lp/ai/flinksql-rules.yaml，部署时挂进容器）
+# 加载规则：按 id 合并；同 id 覆盖可配置字段（severity / enabled / message / fix / 阈值），
+#           **不可覆盖 check 判定逻辑**（判定逻辑在 Java check 器里，见 README §2）。
+#
+# ── 主次划分（tier，2026-11-02）──────────────────────────────────────────────
+#   现网实时流 sink **以 ClickHouse 为主**（Doris 集群处于**暂停**状态），因此本槽：
+#     · tier: primary   → ClickHouse / JDBC 链路，**主防线**，severity 多为 error
+#     · tier: secondary → Doris 链路，**备用形态**，severity 暂定 warn
+#                        （Doris 恢复后建议升 error；改一行即可，见 FLINK-DORIS-* 的注释）
+#   tier 的用途：① 提示词只注入 primary（省 token）；② 报告分组排序；
+#                ③ 需要整组停用时按 tier 一次性 enabled: false。
+#
+# 谁维护：
+#   · 平台/运维 —— 本文件。改 severity、关误报、加本槽专属规则，重启容器生效。
+#   · 业务用户 —— 不碰。他们在 AI Chat 里反馈，由平台收口。
+#
+# 证据来源（均为 manager 仓库内相对路径，仅追溯用，本容器里没有这些文件）：
+#   · docs/plan/20261102-实时链路标杆作业批次实施计划.md §8.3（30 条反面清单）
+#   · jobs/traccar_realtime/benchmarks/B{1..4}_fewshot.md（四个真实作业的四段式语料）
+# 回归集：B1~B4 四个作业重放（改规则后必须跑，见 README §6）
+# =============================================================================
+
+schema_version: 1
+
+meta:
+  owner: dinky-lp 平台组
+  updated: "2026-11-02"
+  # 归属校验：部署脚本应断言 slot 与目标槽一致，防止把一槽的文件拷进另一槽
+  slot: test
+
+  # 【红线 1：禁止写路径】本文件会被拷进 dinky01 的容器（/opt/dinky/config/ai/），
+  #   在那里 **不存在** manager（中控机）的仓库目录；写"要去读的路径"必然扑空。
+  #   provenance_doc 只是**审计指针**（仓库内相对路径），运行时一律不读取。
+  #
+  # 【红线 2：禁止写环境相关的值】本文件同时投给两个槽（测试槽 8889 / dinky_lp 库，
+  #   生产槽 8888 / dinky 库），同一个 id 在两边指向不同对象。最典型的是 taskId：
+  #   124~127 在 dinky_lp 里是 B1~B4，在 dinky 库中根本不存在（2026-11-02 实测）——
+  #   把它写进来，部署到生产槽就等于指向空气。
+  #   → 回归集、标杆作业 id 这类环境相关的东西，一律留在 manager 侧的脚本里
+  #     （jobs/traccar_realtime/），**不进本文件**。
+  provenance_doc: "docs/plan/20261102-实时链路标杆作业批次实施计划.md §8.3"  # 不读取，仅追溯证据
+
+defaults:
+  # 未写 severity 的规则按此处理；未写 enabled 的规则默认启用
+  severity: warn
+  # 主次：primary=现网主用链路（ClickHouse）；secondary=备用/暂停链路（Doris）
+  tier: primary
+  enabled: true
+  # 未写 phase 的规则归为 draft（生成时提示 + 写入前校验）
+  phase: draft
+
+# -----------------------------------------------------------------------------
+# 规则正文
+#
+# 字段约定
+#   phase:  draft    —— 生成阶段就注入提示词红线，写入前也校验（默认）
+#           precheck —— 写入前必须调一次环境接口才能判定（不进提示词，省 token）
+#           runtime  —— 提交后拉 Flink plan/指标断言（不属于"写入前校验"）
+#   severity: error  —— 阻断写入
+#             warn   —— 只提示，允许继续
+#   tier:   primary  —— 现网主用链路（ClickHouse/JDBC），进提示词、报告置顶
+#           secondary—— 备用/暂停链路（Doris），不进提示词，报告置底
+#   check.kind:
+#     sql.set_absent               SET 里不得出现该 key（判定"放错位置"）
+#     sql.required_set             必须显式出现该 SET
+#     sql.contains / not_contains  字面量共现判断
+#     custom_config.required_key   customConfig 必须含该 key
+#     query.append_only            SQL 必须产出 append-only 流（无回撤）
+#     api.env_statement_contains   env 的 statement 必须含某参数
+#     api.cluster_of_tenant        clusterId 必须属于当前租户
+#     api.table_exists             目标物理表必须已存在
+#     runtime.plan_contains        Flink 作业计划里必须出现某算子
+# -----------------------------------------------------------------------------
+rules:
+
+  # ===== 一、写入目标能力（insert-only sink） ==============================
+  - id: FLINK-SINK-001
+    title: insert-only sink 不得接收回撤流
+    severity: error
+    phase: draft
+    applies_when:
+      sink.connector: [clickhouse, jdbc]
+    check:
+      kind: query.append_only
+      forbid_patterns:
+        - "ROW_NUMBER\\s*\\(\\s*\\)\\s*OVER"
+        - "RANK\\s*\\(\\s*\\)\\s*OVER"
+      # 无界 GROUP BY（无窗口函数包裹）同样产生更新流
+      forbid_group_by_without_window: true
+    message: |
+      目标表 {{sink.table}} 只支持 INSERT，但 SQL 会产生回撤流（ROW_NUMBER / 无界 GROUP BY）。
+      提交会在执行器构建期失败，或直接报 please declare primary key for sink table
+      when query contains update/delete record.
+    fix: |
+      改成 append-only 写法：① 用 TUMBLE/HOP 窗口聚合后按窗口分组；
+      ② Top-N 移到查询端（先落窗口计数表，再用 ORDER BY ... LIMIT 取）；
+      ③ 确实要 upsert 就换目标库（Doris 支持 UNIQUE KEY）。
+    evidence: |
+      2026-11-02 B2 实测：CH sink 方言 getUpsertStatement 返回 empty（insert-only）。
+      不声明 PK → validatePrimaryKey 拒绝；声明 PK → upsert 执行器构建期 NPE。
+    prompt: "目标 sink 是 ClickHouse/JDBC 时，禁止输出 ROW_NUMBER / 无界 GROUP BY（回撤流落不了 insert-only sink）"
+
+  - id: FLINK-CONNECTOR-001
+    title: connector 必须在集群可用白名单内
+    severity: error
+    phase: draft
+    tier: primary
+    message: "作业用了本集群未安装的 connector（白名单外），提交阶段会报 Could not find any factories"
+    fix: "改用白名单内的 connector：源用 kafka / upsert-kafka / mysql-cdc，写用 jdbc（目标 ClickHouse）或 doris。本集群没有 hive / elasticsearch / hbase connector —— 要读 Hive 表时**不要**写 hive DDL：先用 `@source/<数据源>/<库>/<表>` 拿到字段口径，再改走 Kafka 链路（topic 见上下文「平台链路约定」），并把这个限制明确告知用户"
+    evidence: "2026-11-03 M1-01 实测：模型给整段作业配了 'connector' = 'hive' + 'hive-version' = '3.1.2'，提交阶段必报 Could not find any factories。注：运行时白名单优先取部署层生成的能力画像（flink-capabilities.yaml，探测 Flink lib），这里只是画像不可用时的兜底清单"
+    prompt: "只能用集群已装的 connector（kafka / upsert-kafka / mysql-cdc / jdbc / doris / datagen / print / blackhole / filesystem），禁止写 hive / elasticsearch / hbase"
+    check:
+      kind: sql.connector_whitelist
+      # 兜底清单：能力画像不可用时才生效
+      allowed:
+        - kafka
+        - upsert-kafka
+        - mysql-cdc
+        - jdbc
+        - doris
+        - datagen
+        - print
+        - blackhole
+        - filesystem
+
+  - id: FLINK-URL-001
+    title: jdbc url 不得指向本机地址
+    severity: error
+    phase: draft
+    check:
+      kind: sql.jdbc_url_conformance
+    message: |
+      Flink 的 JDBC connector 在 TaskManager 上建连，`127.0.0.1` / `localhost` 指向的是 TM 自己，
+      不是开发机上的 MySQL / ClickHouse。这类作业提交后必报 Connection refused，
+      而 SQL 语法、connector 白名单全都"看起来没问题"，排查成本极高。
+    fix: "改成集群内可解析、TM 侧可连通的主机：ClickHouse 用 jdbc:clickhouse://doris05:38123/traccar；MySQL 维表用 jdbc:mysql://manager:33306/traccar"
+    evidence: "2026-11-03 M1-01 实测：模型把 source 与 sink 同时写成 'url' = 'jdbc:mysql://127.0.0.1:3306/traccar'；因 jdbc 在 connector 白名单内，FLINK-CONNECTOR-001 不会拦，规则库对『数据通道错误』完全失明。"
+    prompt: "jdbc url 禁止 127.0.0.1 / localhost / 0.0.0.0，必须用集群可解析的主机名"
+
+  - id: FLINK-FORMAT-001
+    title: 含窗口聚合时不得使用 changelog format 作为源
+    severity: error
+    phase: draft
+    applies_when:
+      sink.connector: [clickhouse, jdbc]
+    check:
+      kind: sql.not_contains
+      patterns: ["'format'\\s*=\\s*'canal-json'", "'format'\\s*=\\s*'debezium-json'"]
+      # 【S0-F3 修正，2026-11-02】条件从"未设 idle-timeout"改为"含窗口聚合"。
+      #   原 `unless_set_contains: "'table.exec.source.idle-timeout'"` 与 changelog format
+      #   无语义关联，而 B1~B4 全部设置了 idle-timeout ⇒ 该规则在语料上恒不触发，
+      #   既拦不住真问题、也无法用回归集验证。
+      #   真实证据（B2 注释 + 实测）：canal-json 进窗口聚合直接抛
+      #   StreamPhysicalWindowAggregate doesn't support consuming update and delete changes；
+      #   不开窗口、只做无界 GROUP BY 的作业**允许** canal-json（聚合算子能吃回撤）。
+      only_when_window_aggregate: true
+    message: |
+      canal-json / debezium-json 是 changelog format，UPDATE 会产生 -U/+U 消息。
+      下游若是窗口聚合会报 StreamPhysicalWindowAggregate doesn't support consuming
+      update and delete changes；下游若是 insert-only sink 会拒绝写入。
+    fix: |
+      用 'format' = 'raw' + JSON_VALUE(payload, '$.data[0].xxx') 自解析，
+      按 INSERT-only 语义取出字段（Canal 每行都是完整行快照，够用）。
+    evidence: |
+      2026-11-02 B2/B3/B4 实测：canal-json 在窗口聚合处直接抛
+      StreamPhysicalWindowAggregate doesn't support consuming update and delete changes。
+      2026-11-02 S0-F3：原生效条件（未设 idle-timeout）与问题无关且对 B1~B4 恒假，
+      改为"含窗口聚合"条件后，B1~B4 仍 0 误报，且"把 B2 源换成 canal-json"这一反例能命中。
+    prompt: "要开窗口聚合时，Kafka 源用 format='raw' + JSON_VALUE，不要用 canal-json（无界 GROUP BY 才允许）"
+
+  # ===== 二、参数放置位置（放错位置静默失效） ==============================
+  - id: FLINK-PARAM-001
+    title: min-pause 必须放 customConfig，写 SET 静默无效
+    severity: error
+    phase: draft
+    check:
+      kind: sql.set_absent
+      keys:
+        - "execution.checkpointing.min-pause-between-checkpoints"
+        - "execution.checkpointing.min-pause"
+      require_custom_config:
+        key: "execution.checkpointing.min-pause"
+        example_value: "10s"
+    message: |
+      execution.checkpointing.min-pause 走 SQL SET 实测不生效，checkpoint 仍会背靠背触发。
+      它只能写在任务的「自定义配置」（customConfig）里，且 Flink 1.17 的 key 名是
+      execution.checkpointing.min-pause（不是带 -between-checkpoints 的旧名）。
+    fix: |
+      customConfig 增加 {"key": "execution.checkpointing.min-pause", "value": "10s"}，
+      并把 SQL 里那行 SET 删掉。
+    evidence: |
+      2026-11-02 实测：SQL SET 该 key 后 /jobs/:id/checkpoints/config 的 min_pause 仍为 0；
+      改 customConfig 后为 10000。四个标杆作业均如此。
+    prompt: "execution.checkpointing.min-pause 只能放任务自定义配置（customConfig），SQL SET 无效"
+
+  - id: FLINK-PARAM-002
+    title: 必须显式 SET parallelism.default
+    severity: warn
+    phase: draft
+    check:
+      kind: sql.required_set
+      keys: ["parallelism.default"]
+      must_match_task_field: "parallelism"
+    message: |
+      作业未显式声明 parallelism.default，会继承基础环境的兜底值（常见是 1），
+      与传统作业的并行度预期不一致，也看不出 slot 预算。
+    fix: "SQL 头部加 SET 'parallelism.default' = '<与任务并行度一致的数字>';"
+    evidence: "2026-11-02 实测：LP-BaseEnv 里 parallelism.default=1，四个标杆作业全部显式覆盖。"
+    prompt: "作业必须显式 SET 'parallelism.default'，且与任务并行度字段一致"
+
+  - id: FLINK-PARAM-003
+    title: 多源/多分区作业必须设 source idle-timeout
+    severity: warn
+    phase: draft
+    check:
+      kind: sql.required_set
+      keys: ["table.exec.source.idle-timeout"]
+      when_kafka_source_count_gte: 2
+    message: |
+      水位线取所有输入的最小值。某个 source 暂时没数据（Canal 批量投递、filebeat 低频日志）
+      就会把整个作业的水位线钉住，窗口永不触发、sink 一行不写 —— 而作业仍显示 RUNNING。
+    fix: "加 SET 'table.exec.source.idle-timeout' = '30s';"
+    evidence: |
+      2026-11-02 B4 实测：src_logs 无数据时 watermark 卡在最小值，
+      WindowAggregate 输出 0 行、sink 0 行；加 idle-timeout 后分钟窗口正常落库。
+    prompt: "多源作业必须 SET 'table.exec.source.idle-timeout'='30s'，否则慢源会钉死水位线"
+
+  - id: FLINK-PARAM-004
+    title: pipeline.name 禁止写进 env，必须与作业名一致
+    severity: error
+    phase: draft
+    check:
+      kind: sql.required_set
+      keys: ["pipeline.name"]
+      equals_task_name: true
+    message: |
+      pipeline.name 是作业唯一标识。写进基础环境会让同一批作业同名（Flink UI 无法区分、
+      取消作业会误伤）；不写则 Flink 侧显示 insert-into_default_catalog... 这类名字。
+    fix: "每个作业自己的 SQL 头部写 SET 'pipeline.name' = '<作业名>';"
+    evidence: "2026-11-02 实测：B1~B4 的 pipeline.name 与 Dinky 作业名逐一对齐，Flink UI 可直接辨认。"
+    prompt: "每个作业都要 SET 'pipeline.name' = '<作业名>'，且不要写进基础环境"
+
+  - id: FLINK-MINIBATCH-001
+    title: mini-batch.size 不得为 -1
+    severity: error
+    phase: draft
+    check:
+      kind: sql.set_value
+      key: "table.exec.mini-batch.size"
+      forbid_values: ["-1"]
+    message: |
+      mini-batch.size = -1 表示无上限，会把批次攒到内存压力极限才吐，
+      表现为 sink 长时间无写入、checkpoint 超时（10min）反复失败。
+    fix: "设为 5000（或与 sink 的 buffer-flush.max-rows 对齐）。"
+    evidence: "既有红线（FlinkContextProvider.RULES）+ 2026-11-02 四个标杆作业均取 5000。"
+    prompt: "table.exec.mini-batch.size 不要设 -1（无上限会拖垮 checkpoint），取 5000"
+
+  # ===== 三、命名唯一性 ====================================================
+  - id: FLINK-NAME-001
+    title: group.id / sink.label-prefix 必须逐作业唯一
+    severity: error
+    phase: precheck
+    check:
+      kind: name.unique_across_tasks
+      fields: ["properties.group.id", "sink.label-prefix"]
+      suggest_pattern: "bench_0X_<subject>_v1"
+    message: |
+      多个作业共用同一个 Kafka group.id 会瓜分分区：每个作业只能拿到一部分分区，
+      数据量凭空少一半，且两边都"看起来正常"。
+    fix: "按 <作业代号>_<主题>_v1 起名；同一作业内多个源各起各的（如 cdc / log 两个源不能共用一个 group.id）。"
+    evidence: "2026-11-02 B4 双源实测：bench_04_event_minute_cdc_v1 / _log_v1 分开命名。"
+    prompt: "properties.group.id 必须逐作业唯一，同一作业的多个 Kafka 源也要各用各的"
+
+  # ===== 四、时间与时区 ====================================================
+  - id: FLINK-TZ-001
+    title: 用 TO_TIMESTAMP 解析 canal 时间列时必须显式声明作业时区
+    severity: error
+    phase: draft
+    check:
+      kind: sql.contains
+      patterns: ["TO_TIMESTAMP\\s*\\("]
+      require_set:
+        key: "table.local-time-zone"
+        value: "Asia/Shanghai"
+    message: |
+      用 TO_TIMESTAMP(servertime, 'yyyy-MM-dd HH:mm:ss') 解析时，若作业时区仍是默认
+      （UTC 或环境缺省），落库会整体偏 8 小时。
+      历史红线写的是"禁止 TIMESTAMP 解析"，那是**缺条件时的结论**，不是绝对禁令：
+      显式 SET 'table.local-time-zone' = 'Asia/Shanghai' 后 TO_TIMESTAMP 解析正确。
+    fix: "SQL 头部加 SET 'table.local-time-zone' = 'Asia/Shanghai'; 再解析时间列。"
+    evidence: |
+      2026-11-02 实测：B2/B3/B4 用 TO_TIMESTAMP 解析 canal 时间，
+      CH max(event_time) 与 MySQL max(eventtime)（UTC 源库）折算后的北京时间一致，无偏移。
+    prompt: "解析 canal 时间列必须同时 SET 'table.local-time-zone'='Asia/Shanghai'，否则整体偏 8 小时"
+
+  - id: FLINK-TZ-002
+    title: 异构源的时区公式不同，不能共用一个解析模板
+    severity: warn
+    phase: draft
+    check:
+      kind: sql.contains
+      patterns: ["traccar-logs"]
+      require_patterns: ["INTERVAL '8' HOUR|INTERVAL 8 HOUR"]
+    message: |
+      Canal 的 eventtime/servertime 是已按连接时区渲染的挂钟字符串（CST），
+      而 filebeat 的 @timestamp 是 UTC ISO 串。两者用同一个公式必然差 8 小时，
+      表现为多源窗口永远对不齐。
+    fix: "日志侧：解析 @timestamp 后 + INTERVAL '8' HOUR；Canal 侧：直接解析，不加不减。"
+    evidence: "2026-11-02 B4 实测：两路各自公式后，cdc 与 log 的分钟窗口落在同一时间轴上。"
+    prompt: "canal 时间直接解析；filebeat @timestamp 是 UTC，必须 + INTERVAL '8' HOUR"
+
+  # ===== 五、维表 lookup ===================================================
+  - id: FLINK-LOOKUP-001
+    title: lookup join 三要件（hint + proc_time + 键类型一致）
+    severity: error
+    phase: draft
+    check:
+      kind: sql.lookup_join_conformance
+      require:
+        - hint_pattern: "/\\*\\+\\s*LOOKUP\\s*\\("
+        - temporal_key_pattern: "FOR\\s+SYSTEM_TIME\\s+AS\\s+OF\\s+\\w+\\.`?(proc_time|proctime)`?"
+        - dim_key_type: "INT"      # 与 MySQL int 列一致
+    message: |
+      lookup join 有三个必填件，缺任一项的表现各不相同：
+      ① 不加 /*+ LOOKUP('table'='d') */ → 退化成普通流 join，右侧维表全量扫进状态（3 万行起），拿不到实时态；
+      ② FOR SYSTEM_TIME AS OF 挂事件时间 → 被规划成 versioned temporal join 并报
+         requires both primary key and row time attribute in versioned table；
+      ③ 维表键声明 BIGINT 而 MySQL 是 int → 运行时 ClassCastException: Integer cannot be cast to Long。
+    fix: |
+      ① 维表 DDL 带 PRIMARY KEY (id) NOT ENFORCED；
+      ② 事实流加 proc_time AS PROCTIME()，join 写 FOR SYSTEM_TIME AS OF e.proc_time；
+      ③ SELECT 里加 /*+ LOOKUP('table'='d') */；
+      ④ 维表键类型逐一对齐源库（int → INT）。
+    evidence: |
+      2026-11-02 B3 实测：三种错法各踩一次；修正后 Flink 计划出现 LookupJoin 顶点，
+      CH 侧 device_name 命中，24 秒内落 4472 行。
+    prompt: "lookup join 必须：PROCTIME 列 + FOR SYSTEM_TIME AS OF + /*+ LOOKUP('table'='d') */ + 维表键类型与源库一致"
+
+  # ===== 六、空值与可空列 =================================================
+  - id: FLINK-NULL-001
+    title: 目标表非 Nullable 列必须有 COALESCE 兜底
+    severity: warn
+    phase: draft
+    check:
+      kind: sql.column_null_safety
+      nullable_columns_pattern: "Nullable\\("
+      require_coalesce_for: ["name", "type", "attributes", "model"]
+    message: |
+      目标表列若建为非 Nullable，而源数据该字段可能缺失（LOOKUP 未命中、JSON 无该 key），
+      写入会整行失败或落空字符串以外的异常值。
+    fix: "SELECT 里对这类列统一 COALESCE(col, '')；确实可能没有值的列在 DDL 里建 Nullable(...)。"
+    evidence: "2026-11-02 B3 实测：position_id / geofence_id 必须 Nullable，设备字段必须 COALESCE。"
+    prompt: "维表未命中的列必须 COALESCE(col,'')；可能无值的列在 CH 建 Nullable"
+
+  # ===== 七、环境与集群（需查接口，不进提示词） ===========================
+  - id: FLINK-ENV-001
+    title: 作业挂载的 env 必须真的带 Flink 参数
+    severity: error
+    phase: precheck
+    check:
+      kind: api.env_statement_contains
+      api: "GET /api/task/listFlinkSQLEnv"
+      must_contain:
+        - "execution.checkpointing.interval"
+        - "restart-strategy.type"
+        - "table.exec.state.ttl"
+    message: |
+      选中的 FlinkSQL 环境只有 catalog（如 DefaultCatalog，仅 384B），不含任何 Flink 参数。
+      Flink Standalone 下 Dinky 不读 flink-conf.yaml —— 结果作业"裸跑"：
+      checkpoint 不开、时区跑 UTC、mini-batch 关闭，且没有任何报错。
+    fix: "在项目目录下建 LP-BaseEnv-<租户>（复制一份完整参数），作业挂到它上面。"
+    evidence: |
+      2026-11-02 实测：team_a 原有环境只有 96 DefaultCatalog（384B）；
+      新建 LP-BaseEnv-team_a（envId=122，13 条 SET）后四个作业统一挂载。
+    prompt: ""
+
+  - id: FLINK-ENV-002
+    title: 已发布（step=2）的作业不能直接改
+    severity: error
+    phase: precheck
+    check:
+      kind: api.task_lifecycle
+      require_before_write: "step != 2"
+      remediation_api: "GET /api/task/changeTaskLife?taskId={id}&lifeCycle=1"
+    message: |
+      任务处于已发布态时，任何修改接口都会返回"任务已上线，禁止修改"，
+      同步脚本会静默什么都没改，后续提交的还是旧 SQL。
+    fix: "先 changeTaskLife 回开发态再改，改完重新发布。"
+    evidence: "2026-11-02 实测：sync_benchmarks 首轮更新全部静默失败，日志里只有一句'任务已上线'。"
+    prompt: ""
+
+  - id: FLINK-CLUSTER-001
+    title: clusterId 必须属于当前租户
+    severity: error
+    phase: precheck
+    check:
+      kind: api.cluster_of_tenant
+      api: "GET /api/cluster/listEnabledAll"
+    message: |
+      clusterId 填了别的租户的集群时，接口不会友好报错：
+      submitTask 抛 NullPointerException at RemoteStreamExecutor.<init>，
+      最终被包成一句 Instance class [class ...FlinkSqlTask] error!。
+    fix: "用 listEnabledAll 取当前租户的真实集群 id 再填（各租户的 id 不同）。"
+    evidence: "2026-11-02 实测：team_a 的集群 id 是 4，填 1（属 tenant 1）触发上述 NPE。"
+    prompt: ""
+
+  - id: FLINK-SINK-002
+    title: 目标物理表必须已存在
+    severity: error
+    phase: precheck
+    check:
+      kind: api.table_exists
+      via: "describe_source / describe_tables"
+      table_name_pattern: "<database>.<table>"
+    message: |
+      Flink 侧 CREATE TABLE 只是逻辑映射，不会在建表。目标库没这张表时，
+      作业能提交成功，第一条数据进来才失败（或 sink 缓冲满才报）。
+    fix: "先在该库执行建表 DDL（ClickHouse 记得用 ReplacingMergeTree(ver) 做幂等）。"
+    evidence: "2026-11-02 实测：CH 侧 4 张 sink 表由项目 DDL 脚本先行建好（ReplacingMergeTree(ver)），作业提交时表已存在。"
+    prompt: ""
+
+  # ===== 八、运行期断言（提交后体检，不属于写入前校验） ====================
+  - id: FLINK-RUNTIME-001
+    title: lookup join 不得退化为普通 stream join
+    severity: error
+    phase: runtime
+    check:
+      kind: runtime.plan_contains
+      api: "GET {flink_rest}/jobs/{jid}/plan"
+      must_contain_operator: "LookupJoin"
+    message: |
+      作业起来了、也在出数，但计划里没有 LookupJoin 顶点 —— 说明退化成了普通流 join：
+      维表被全量扫进状态（几万行），且拿到的是启动那一刻的快照，不是实时态。
+    fix: "按 FLINK-LOOKUP-001 三要件修正后重新提交。"
+    evidence: "2026-11-02 B3：不加 hint 时计划为 Join(InnerJoin) + 两个 TableSourceScan，无 LookupJoin。"
+    prompt: ""
+
+  - id: FLINK-RUNTIME-002
+    title: checkpoint 必须真的在跑
+    severity: error
+    phase: runtime
+    check:
+      kind: runtime.checkpoint_ok
+      api: "GET {flink_rest}/jobs/{jid}/checkpoints"
+      counts: { completed_gte: 1, failed_eq: 0 }
+    message: |
+      参数写对了不等于生效：env 挂错、customConfig 覆盖、sink 卡住都会让 checkpoint
+      一直 in_progress 或反复失败，而作业状态仍是 RUNNING。
+    fix: "核对 env 是否含 checkpoint 参数、sink 是否长时间无写入（mini-batch / buffer-flush）。"
+    evidence: "2026-11-02 实测：四个标杆作业 9 completed / 0 failed，以此为基线。"
+    prompt: ""
+
+  # ===== 九、备用链路：Doris（tier: secondary，集群暂停中）==================
+  #
+  # 【主次说明】现网实时流 sink 以 ClickHouse 为主，Doris 集群自 2026-11 起**暂停**。
+  #   这两条规则保留是为了：① Doris 恢复时不必从零补规则；② 存量 Doris 作业在
+  #   被 AI 改造时仍有护栏。因此 severity 暂定 **warn**（不阻断写入），
+  #   **Doris 集群恢复后请改为 error**（只改 severity 一个字段）。
+  #
+  # 与 CH 的根本差异（这是必须分型的原因）：
+  #   CH 侧 sink 是 insert-only → 回撤流**禁止**（FLINK-SINK-001）；
+  #   Doris 侧支持 upsert     → 回撤流**允许，但必须**声明 PK + 显式 sink.parallelism。
+  #   把这条规则塞进 FLINK-SINK-001 会两头错，所以独立成条。
+
+  - id: FLINK-SINK-003
+    title: 【Doris】回撤流写 Doris 必须声明 PRIMARY KEY 且显式 sink.parallelism
+    severity: warn          # ← Doris 恢复后建议升 error
+    tier: secondary
+    phase: draft
+    applies_when:
+      sink.connector: [doris]
+    check:
+      kind: sql.doris_upsert_conformance
+      require:
+        - "PRIMARY\\s+KEY\\s*\\([^)]*\\)\\s*NOT\\s+ENFORCED"   # Flink 侧逻辑主键
+        - "'sink\\.parallelism'\\s*=\\s*'1'"                     # 并发写同一批 key 会乱序覆盖
+      # 只有"会产出回撤"的写法才强制上述两件；纯 append 作业不受约束
+      only_when_retract:
+        - "ROW_NUMBER\\s*\\(\\s*\\)\\s*OVER"
+        - "GROUP\\s+BY"
+        - "\\bJOIN\\b"
+    message: |
+      Doris 支持 upsert，所以聚合 / Top-N / JOIN 这类回撤流**可以**写 Doris，
+      但必须同时满足两件：① Flink 侧建表声明 PRIMARY KEY(...) NOT ENFORCED；
+      ② 显式 sink.parallelism = 1。缺 ① 会报 "please declare primary key for
+      sink table when query contains update/delete record"；缺 ② 时多并发写同一批
+      key 会乱序覆盖，表现为"数据对但不稳，偶发旧值把新值盖掉"。
+    fix: |
+      维表 DDL 增加 PRIMARY KEY (<key 列>) NOT ENFORCED，并在 WITH(...) 里加
+      'sink.parallelism' = '1'。纯 append 作业不需要这两件。
+    evidence: |
+      沉淀自本项目既有生产作业（device_top5 等 2 个 Doris 作业）的成形结论；
+      与 CH 侧 insert-only 的相反结论共同构成 K7「按目标库能力分型」。
+      2026-11-02 核对：生产 dinky 库 FlinkSql 作业 2 个，全部写 Doris。
+    prompt: "写 Doris 时若 SQL 会产生回撤（聚合/Top-N/JOIN），必须声明 PRIMARY KEY(...) NOT ENFORCED 且 sink.parallelism=1"
+
+  # 2026-11-04（M1-01 复盘）：print/datagen/blackhole 都在 connector 白名单内，
+  # 白名单规则会判 pass，于是"用 print 当交付 sink"整条链路看起来通过、实际一行没落库。
+  - id: FLINK-SINK-004
+    title: 交付 sink 不能是调试 connector（print / datagen / blackhole）
+    severity: error
+    tier: primary
+    phase: draft
+    check:
+      kind: sql.sink_persistent
+      # 兜底清单：能力画像不可用时才生效（正常情况取 flink-capabilities.yaml 的 debug_connectors）
+      debug_connectors: [print, datagen, blackhole]
+    message: |
+      INSERT INTO 的目标表配了 print / datagen / blackhole：数据不会落库
+      （print 只打到 TaskManager 日志），但作业显示 RUNNING、checkpoint 也正常，
+      是最容易"看起来成功、实际没产出"的失败模式。它们的存在意义只是本地验证链路。
+    fix: |
+      sink 换成默认 sink 数据源（上下文「平台默认配置 → 默认 sink 数据源」给出的那个库，
+      本集群通常是 ClickHouse），目标表用该库已存在的表（表清单见同一段落）；
+      调试 connector 只在临时验证时用，不写进交付 SQL。
+    evidence: |
+      2026-11-04 M1-01 实测：模型把 'connector' = 'print' 当作交付 sink 写在结果表上，
+      connector 白名单校验放行（print 确实是集群已装），结果整条链路无落库。
+    prompt: "交付 sink 必须是 jdbc(ClickHouse) 或 doris；print/datagen/blackhole 只能临时验证，禁止写进交付 SQL 的 sink"
+
+  - id: FLINK-CONNECTOR-002
+    title: 禁止臆造 ${...} 全局变量
+    severity: error
+    tier: primary
+    phase: draft
+    check:
+      kind: sql.undefined_variable
+    message: |
+      SQL 里引用了不存在的 ${...}。${...} 是 Dinky 的全局变量 / JEXL 语法，**不是** Flink 语法：
+      变量未定义时，开关打开 → 提交阶段抛 "The variable name or jexl key of sql ... does not exist"；
+      开关关闭 → 占位符原样下发，Flink 报 Encountered "$"。两种都是提交阶段失败，
+      而草稿看上去字段、connector、表名全对，排查成本极高。
+    fix: |
+      删掉所有 ${...}：连接串与账号口令直接用上下文「平台默认配置」给出的真实值
+      （Kafka 用 properties.bootstrap.servers = 'kafka03:29092,kafka04:29092,kafka05:29092'），
+      sink 的 username / password 用默认 sink 数据源自己的；不确定时**省略这两个选项**并在 precheck 写 unknown。
+    evidence: |
+      2026-11-04 M1-01 第六轮实测：模型产出 ${kafka.bootstrap.servers} / ${clickhouse.jdbc.url} /
+      ${clickhouse.username} / ${clickhouse.password} 一整套臆造变量——上下文里已给出真实地址与
+      「已定义的全局变量」清单（为空），仅靠 prompt 约束不住。
+    prompt: "禁止写 ${...} 占位符；连接串与账号直接用上下文给出的真实值，不确定就省略并在 precheck 标 unknown"
+
+  - id: FLINK-SOURCE-001
+    title: Kafka topic 必须是平台已知 topic
+    severity: error
+    tier: primary
+    phase: draft
+    check:
+      kind: sql.kafka_topic_known
+    message: |
+      声明的 topic 在平台画像与作业名册里都不存在。**topic 名不是表名**：
+      本集群业务变更流是 traccar-cdc，一个 topic 里混有多张表（tc_events / tc_positions / tc_devices 等），
+      要靠 canal-json.table.include 过滤到单表。topic 写错时作业能提交、运行期一直空跑。
+    fix: |
+      把 'topic' 改成已知 topic（traccar-cdc），格式用 'format' = 'raw'（**不要用 canal-json**：
+      它是 changelog format，窗口聚合吃不下 -U/+U），并用 JSON_VALUE(payload,'$.table') = '<源表名>' 过滤单表。
+      取字段用计算列：device_id AS CAST(JSON_VALUE(payload,'$.data[0].deviceid') AS BIGINT)。
+    evidence: |
+      2026-11-04 M1-01 第六轮实测：模型写出 'topic' = 'ods_traccar_tc_events'（把 Hive 表名当 topic），
+      该 topic 不存在；同时 'format' 错配成 json，canal 报文根本解析不出来。
+    prompt: "Kafka 源 topic 只能用平台画像列出的（traccar-cdc），配 canal-json + table.include；禁止用表名当 topic"
+
+  - id: FLINK-SINK-005
+    title: sink 目标表必须在默认 sink 库中已存在
+    severity: error
+    tier: primary
+    phase: draft
+    check:
+      kind: sql.sink_table_exists
+    message: |
+      INSERT INTO 的目标表在默认 sink 库里不存在。Flink 侧 CREATE TABLE 只是逻辑映射、不会建表，
+      所以作业能提交成功、显示 RUNNING，直到第一条数据进 sink 才失败（或 sink 缓冲满才报）。
+    fix: |
+      从上下文「默认 sink 数据源」段落列出的**已存在表**里选一张（本集群 ClickHouse traccar 库：
+      dws_device_position_window 适合窗口/按天聚合、dws_event_minute、dwd_tc_events_enriched、ods_tc_devices）；
+      确实要新表就先给出建表 DDL 并让用户确认。
+    evidence: |
+      2026-11-04 M1-01 第六轮实测：模型编了 traccar.dws_traccar_device_position_top5_df，
+      库里实际只有 4 张表，没有这一张。
+    prompt: "sink 的 table-name 必须取自上下文「默认 sink 数据源」列出的已存在表，禁止编表名"
+
+  - id: FLINK-DORIS-001
+    title: 【Doris】按天聚合明细表用 UNIQUE KEY(stat_date) + Merge-on-Write
+    severity: warn          # ← Doris 恢复后建议升 error
+    tier: secondary
+    phase: draft
+    applies_when:
+      sink.connector: [doris]
+    check:
+      kind: ddl.doris_agg_key
+      when_ddl_columns_contain: ["stat_date"]
+      require:
+        - "UNIQUE\\s+KEY\\s*\\([^)]*stat_date[^)]*\\)"
+        - "enable_unique_key_merge_on_write\\s*=\\s*'?true'?"
+    message: |
+      按天聚合结果落 Doris 时，若建表用 AGGREGATE/DUPLICATE KEY，同一 stat_date
+      重跑会产生重复行（"重跑一次，数字翻倍"）。正确形态是 UNIQUE KEY(stat_date)
+      + Merge-on-Write：同一 key 后写覆盖前写，重跑幂等。
+    fix: |
+      建表 DDL 改为 UNIQUE KEY(stat_date) 并设置 properties
+      "enable_unique_key_merge_on_write" = "true"（Doris 1.2+ 默认项，仍需显式声明以便审计）。
+    evidence: |
+      沉淀自既有 Doris 作业的建表规范（原 FlinkContextProvider.RULES「Doris 写入约束」段）；
+      Doris 停用后未再实测，故 severity 取 warn、tier 取 secondary。
+    prompt: "按天聚合落 Doris 要用 UNIQUE KEY(stat_date) + enable_unique_key_merge_on_write=true，否则重跑翻倍"

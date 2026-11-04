@@ -43,6 +43,10 @@ import remarkGfm from 'remark-gfm';
 import CraftDiff from './components/CraftDiff';
 import SqlDiff from './components/SqlDiff';
 import SkillDiff from './components/SkillDiff';
+import FlinkJobCard from './components/FlinkJobCard';
+import { parseFlinkJobDraft } from './flinkJobDraft';
+import type { FlinkJobDraft } from './flinkJobDraft';
+import type { AiRuleReport } from './service';
 import ContextBar from './ContextBar';
 import type { ContextScope } from './ContextBar';
 import {
@@ -66,15 +70,20 @@ import {
   fetchMentionCandidates,
   getAiChatConfig,
   listFlinkSqlEnvs,
+  listMentionJobs,
   listMentionTopics,
   listPublishedSemanticAssets,
   listPublishedSemanticProjects,
   listKbCollections,
   listSkills,
   listTableColumns,
-  reportCraftWrite
+  reportCraftWrite,
+  validateFlinkDraft
 } from './service';
 import { DataStudioContext } from '@/pages/DataStudio/DataStudioContext';
+// DataStudio 的 colorBgContainer 是 CSS 变量串，antd Tag 默认底色会被算成近黑（"一团黑"），
+// 因此**不带 color 的标签**必须用 ThemeChip；带 color 的 Tag 不受影响。
+import ThemeChip from '@/components/ThemeChip';
 import { resolveEditorKey } from '@/pages/DataStudio/editorKey';
 import { getExecError, getLatestExecError } from '@/services/BusinessCrud';
 import { l } from '@/utils/intl';
@@ -84,6 +93,7 @@ import {
   PlayCircleOutlined,
   RobotOutlined,
   RollbackOutlined,
+  SafetyCertificateOutlined,
   SendOutlined,
   StopOutlined
 } from '@ant-design/icons';
@@ -105,6 +115,8 @@ import {
 import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 const CODE_BLOCK_REGEX = /```[a-zA-Z]*\s*\n?([\s\S]*?)```/g;
+/** 四段式作业围栏（M1-D）：命中后渲染卡片，而不是普通代码块 */
+const FLINK_JOB_FENCE = '```flinksql-job';
 /** 「最近使用」的 @ 引用名（localStorage key） */
 const RECENT_MENTION_KEY = 'dinky.ai-chat.recent-mentions';
 
@@ -271,6 +283,10 @@ const AiChat = (props: AiChatProps) => {
   const [messages, setMessages] = useState<AiChatMessage[]>([]);
   const [inputValue, setInputValue] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
+  /** 规则校验直连（不调模型）的报告与加载态：「校验 SQL」按钮用 */
+  const [ruleReport, setRuleReport] = useState<AiRuleReport | null>(null);
+  const [ruleReportOpen, setRuleReportOpen] = useState<boolean>(false);
+  const [validating, setValidating] = useState<boolean>(false);
   const [config, setConfig] = useState<AiChatConfig>();
   const [schemas, setSchemas] = useState<any[]>([]);
   const [schemaName, setSchemaName] = useState<string>();
@@ -544,6 +560,10 @@ const AiChat = (props: AiChatProps) => {
   const [envOptions, setEnvOptions] = useState<AiChatMentionItem[]>([]);
   /** P1-A：{@code @topic/} 候选（名册版：仅含已被作业使用的 topic，不连 Kafka） */
   const [topicOptions, setTopicOptions] = useState<AiChatMentionItem[]>([]);
+  // P2（2026-11-04）：@job/ 候选（本租户 FlinkSQL 作业），首次用到时拉一次
+  const [jobOptions, setJobOptions] = useState<AiChatMentionItem[]>([]);
+  /** 已拉过 @job/ 候选（空结果也算拉过，避免重复请求） */
+  const jobLoadedRef = useRef(false);
   /** 数据源名 → 该数据源的 schemas（含 tables）缓存 */
   const sourceTreeRef = useRef<Map<string, any[]>>(new Map());
   /**
@@ -945,6 +965,30 @@ const AiChat = (props: AiChatProps) => {
       .catch(() => setTopicOptions([]));
   }, [mentionQuery, topicOptions.length]);
 
+  // P2（2026-11-04）：{@code @job/} 候选——首次用到时拉一次本租户 FlinkSQL 作业清单。
+  // 选中的名字写成作业名（后端也认 id），这样插入后的文本 `@job/uat_device_top5` 可读性最好。
+  useEffect(() => {
+    // 用 ref 记住"已经拉过"，而不是用 jobOptions.length——否则接口返回空数组时 length 恒为 0，
+    // 用户每敲一个字都会重新打一次接口（请求风暴），且永远等不到结果。
+    if (!/^job[-/]/.test(mentionQuery.trim().toLowerCase()) || jobLoadedRef.current) {
+      return;
+    }
+    jobLoadedRef.current = true;
+    listMentionJobs()
+      .then((items) =>
+        setJobOptions(
+          (items ?? []).map((item: any) => ({
+            type: 'job-ref' as const,
+            name: item.name,
+            // 带上方言：候选里有 Hive(42) / DataX(24) / SparkSql(13) / FlinkSql(7) / Mysql(7)…
+            // 同名或近似名作业不带类型根本分不清；右侧那栏就显示 "作业 · DataX"
+            group: `${l('datastudio.aiChat.mention.groupJobRef')}${item.dialect ? ` · ${item.dialect}` : ''}`
+          }))
+        )
+      )
+      .catch(() => setJobOptions([]));
+  }, [mentionQuery]);
+
   const mentionCandidates = useMemo(() => {
     const list: (AiChatMentionItem & { group: string })[] = [];
     // provider 1：当前 schema 下的表（P4：按实际生效的 schema，表 tab 打开即有候选）
@@ -1053,6 +1097,10 @@ const AiChat = (props: AiChatProps) => {
     // 平台里存在但无任何作业消费的 topic ，需等批次 2 的 list_topics（AdminClient）。
     if (/^topic[-/]/.test(mentionQuery.trim().toLowerCase())) {
       return topicOptions;
+    }
+    // provider 8b（P2，2026-11-04）：@job/ 候选——本租户 FlinkSQL 作业，选中后由后端按名查库。
+    if (/^job[-/]/.test(mentionQuery.trim().toLowerCase())) {
+      return jobOptions;
     }
     // provider 10（知识库 @kb 接入 v1.0）：@kb/ 候选——**单级**（库编码），无层级下钻。
     // 与 @source/ @semantic/ 不同：知识库是"检索范围"而不是"可引用对象"，选中即插入库编码，
@@ -1165,6 +1213,8 @@ const AiChat = (props: AiChatProps) => {
         // 故这里不做开关判断——多一个条件就多一处漏判风险）
         prefixItem('kb/', l('datastudio.aiChat.mention.groupKb')),
         prefixItem('env/', l('datastudio.aiChat.mention.groupEnv')),
+        // P2（2026-11-04）：@job/ —— 引用另一个作业当 few-shot 参考
+        prefixItem('job/', l('datastudio.aiChat.mention.groupJobRef')),
         ...list
       ].slice(0, 30);
     }
@@ -1185,6 +1235,9 @@ const AiChat = (props: AiChatProps) => {
     dataSources,
     envOptions,
     topicOptions,
+    // P2（2026-11-04）：漏了这个依赖 → jobOptions 更新后 useMemo 不重算，候选恒为空。
+    // 这类"数据到了但 UI 不刷新"的坑，只有把候选集真跑一遍才会发现。
+    jobOptions,
     sourceTreeTick,
     semanticQuery,
     semanticProjects,
@@ -1212,7 +1265,9 @@ const AiChat = (props: AiChatProps) => {
                   ? 'semantic'
                   : /^kb[-/]/.test(q)
                     ? 'kb'
-                    : '';
+                    : /^job[-/]/.test(q)
+                      ? 'job'
+                      : '';
     if (assetPrefix) {
       // 知识库 @kb 接入 v1.0：候选 name 是库**编码**（c_xxx / 外部原标识），不在 name 里带 "kb/"，
       // 若走下面 assetKey 分支会因 "kb/" 拼不进编码而恒空（与 @table/ 当年的坑同源）。
@@ -1225,6 +1280,19 @@ const AiChat = (props: AiChatProps) => {
               !kbKey ||
               `${c.name ?? ''}`.toLowerCase().includes(kbKey) ||
               `${c.content ?? ''}`.toLowerCase().includes(kbKey)
+          )
+          .slice(0, 20);
+      }
+      if (assetPrefix === 'job') {
+        // P2（2026-11-04）：@job/ 候选。**不能**走下面 `c.type === assetPrefix` 的通用分支——
+        // 候选的 type 是 `job-ref`（与"已打开标签页"的 `job` 区分），按 `job` 比会恒空。
+        // 这里按作业名做一次关键字筛选（支持继续输入 `@job/uat` 收窄）。
+        const jobKey = q.slice('job/'.length);
+        return mentionCandidates
+          .filter(
+            (c) =>
+              c.type === 'job-ref' &&
+              (!jobKey || `${c.name ?? ''}`.toLowerCase().includes(jobKey))
           )
           .slice(0, 20);
       }
@@ -1468,8 +1536,18 @@ const AiChat = (props: AiChatProps) => {
     // `@<表名>`——保证 C2「与迭代前完全一致」这条兼容性红线不被破坏。
     // 2026-10-06：分隔符统一为斜杠，选中后一律生成新语法；手打旧语法（连字符）后端仍解析。
     const viaTablePrefix = /^table[-/]/.test(mentionQuery.trim().toLowerCase());
+    // P2（2026-11-04）：@job/ 候选落地时统一生成 `@job/<作业名>`。
+    // 候选的 type 用 'job-ref' 是为了与"其它已打开作业"(type='job'，带 SQL 正文) 区分开——
+    // 那个是"把 SQL 塞进上下文"，这个是"让后端按名字去查作业"。
+    const viaJobPrefix = /^job[-/]/.test(mentionQuery.trim().toLowerCase());
     const token =
-      item.type === 'table' && viaTablePrefix ? `@table/${item.name}` : mentionToken(item);
+      item.type === 'table' && viaTablePrefix
+        ? `@table/${item.name}`
+        : item.type === 'job-ref' && viaJobPrefix
+          ? `@job/${item.name}`
+          : mentionToken(item);
+    // 记入 mentions 时换成后端认识的 type（后端按 MentionType.JOB 分发）
+    const mentionedItem = item.type === 'job-ref' ? { ...item, type: 'job' } : item;
 
     // 中间层级：补斜杠、保持浮层（不建 chip、不记最近使用——这一层还不是一次「引用」）
     if (item.chainable && !forceFinal) {
@@ -1484,10 +1562,13 @@ const AiChat = (props: AiChatProps) => {
     applyMentionText(`${token} `);
     setMentions((prev) =>
       prev.some(
-        (m) => m.type === item.type && m.name === item.name && m.columnName === item.columnName
+        (m) =>
+          m.type === mentionedItem.type &&
+          m.name === mentionedItem.name &&
+          m.columnName === mentionedItem.columnName
       )
         ? prev
-        : [...prev, item]
+        : [...prev, mentionedItem as AiChatMentionItem]
     );
     setMentionOpen(false);
     setMentionQuery('');
@@ -1845,6 +1926,39 @@ const AiChat = (props: AiChatProps) => {
   };
 
   /**
+   * 「校验 SQL」：**直连规则引擎**，不经过大模型。
+   *
+   * <p>为什么要有这个按钮：审核类问题若交给模型转述会出现两种失真——① 模型压根没调校验工具
+   * （2026-11-03 实测 tool_call_count=0 却照样输出"命中/未命中"）；② 把 error 说成"建议"。
+   * 按钮拿的是规则引擎原文，判据稳定、可截图留证，且不消耗模型额度。
+   */
+  const handleValidateDraft = async () => {
+    const sql = (currentSql ?? '').trim();
+    if (!sql) {
+      message.warning(l('datastudio.aiChat.validateNoSql'));
+      return;
+    }
+    setValidating(true);
+    try {
+      const report = await validateFlinkDraft({
+        sql,
+        name: tabParams?.name,
+        parallelism: tabParams?.parallelism,
+        taskId: tabParams?.taskId,
+        envId: tabParams?.envId,
+        clusterId: tabParams?.clusterId ?? undefined,
+        customConfig: tabParams?.configJson?.customConfig
+      });
+      setRuleReport(report ?? null);
+      setRuleReportOpen(true);
+    } catch (e) {
+      message.error(l('datastudio.aiChat.validateFailed'));
+    } finally {
+      setValidating(false);
+    }
+  };
+
+  /**
    * 把写确认框里的正文**应用到编辑区**（不落盘）——批次 F，2026-10-29 用户口径。
    *
    * <p>为什么不再让后端直接写：用户要的是「AI 改完放进编辑器、由我自己核对后点保存」，
@@ -2117,6 +2231,21 @@ const AiChat = (props: AiChatProps) => {
   };
 
   /**
+   * M1-D：把四段式草稿写进当前任务（SQL 覆盖编辑器 + 自定义配置合并进 configJson）。
+   * 只落开发态，不提交、不发布——发布权归人。
+   */
+  const handleApplyFlinkDraft = (draft: FlinkJobDraft) => {
+    if (!draft?.sql) {
+      return;
+    }
+    updateAction({
+      actionType: DataStudioActionType.TASK_APPLY_DRAFT,
+      params: { sql: draft.sql, customConfig: draft.customConfig ?? [] }
+    });
+    message.success('已写入草稿（含自定义配置），请确认后保存');
+  };
+
+  /**
    * AI 产出 SQL 的「执行」——复刻编辑器点运行的链路。
    *
    * <p><b>此前这里是空壳</b>：只把 SQL 插入编辑器，并不真正执行——`TASK_RUN_SUBMIT` 仅被
@@ -2299,6 +2428,22 @@ const AiChat = (props: AiChatProps) => {
         );
       }
       const code = match[1];
+      if (match[0].startsWith(FLINK_JOB_FENCE)) {
+        const parsedDraft = parseFlinkJobDraft(code);
+        if (parsedDraft) {
+          nodes.push(
+            <div key={`flink-job-${match.index}`}>
+              <FlinkJobCard
+                draft={parsedDraft}
+                onApplyDraft={handleApplyFlinkDraft}
+                onRunSql={handleRunSql}
+              />
+            </div>
+          );
+          lastIndex = CODE_BLOCK_REGEX.lastIndex;
+          continue;
+        }
+      }
       nodes.push(
         <div
           key={`code-${match.index}`}
@@ -2735,6 +2880,16 @@ const AiChat = (props: AiChatProps) => {
             </Button>
           </Tooltip>
         )}
+        <Tooltip title={l('datastudio.aiChat.validateTip')}>
+          <Button
+            icon={<SafetyCertificateOutlined />}
+            loading={validating}
+            disabled={!isSqlJobTab || !currentSql?.trim()}
+            onClick={handleValidateDraft}
+          >
+            {l('datastudio.aiChat.validate')}
+          </Button>
+        </Tooltip>
         <Tooltip title={l('datastudio.aiChat.explainTip')}>
           <Button
             icon={<PlayCircleOutlined />}
@@ -2759,6 +2914,84 @@ const AiChat = (props: AiChatProps) => {
           </Button>
         )}
       </Space>
+      {/* 规则校验报告（直连规则引擎，不调模型）：error / warn / unknown 分区展示，条目可截图留证 */}
+      <Modal
+        open={ruleReportOpen}
+        title={l('datastudio.aiChat.validate')}
+        onCancel={() => setRuleReportOpen(false)}
+        footer={null}
+        width={760}
+      >
+        {ruleReport ? (
+          <Space direction={'vertical'} style={{ width: '100%' }} size={8}>
+            <Space wrap size={6}>
+              <Tag color={ruleReport.passed ? 'success' : 'error'}>
+                {ruleReport.passed
+                  ? l('datastudio.aiChat.validatePassed')
+                  : l('datastudio.aiChat.validateRejected')}
+              </Tag>
+              <Tag color={'error'}>{`error ${ruleReport.counts?.error ?? 0}`}</Tag>
+              <Tag color={'warning'}>{`warn ${ruleReport.counts?.warn ?? 0}`}</Tag>
+              <Tooltip title={l('datastudio.aiChat.validateUnknownTip')}>
+                <ThemeChip tone={'neutral'}>{`unknown ${ruleReport.counts?.unknown ?? 0}`}</ThemeChip>
+              </Tooltip>
+            </Space>
+            {ruleReport.message ? <Alert type={'warning'} showIcon message={ruleReport.message} /> : null}
+            {ruleReport.violations && ruleReport.violations.length > 0 ? (
+              <Space direction={'vertical'} style={{ width: '100%' }} size={6}>
+                {ruleReport.violations.map((item, index) => (
+                  <div
+                    key={`${item.id ?? 'rule'}-${index}`}
+                    style={{
+                      border: '1px solid rgba(128, 128, 128, 0.25)',
+                      borderRadius: 6,
+                      padding: '8px 10px'
+                    }}
+                  >
+                    <Space wrap size={6}>
+                      <Tag color={item.severity === 'error' ? 'error' : 'warning'}>
+                        {item.severity ?? 'warn'}
+                      </Tag>
+                      {/* phase=draft 是 SQL 本身的问题；phase=precheck 是作业状态 / 外部资源问题，
+                          两者混在一起看会误以为"SQL 有错"（如已发布作业必然命中 FLINK-ENV-002） */}
+                      {item.phase ? <ThemeChip tone={'neutral'}>{item.phase}</ThemeChip> : null}
+                      <Typography.Text strong>{item.id ?? '-'}</Typography.Text>
+                      <ThemeChip
+                        tone={
+                          item.status === 'fail'
+                            ? item.severity === 'error'
+                              ? 'danger'
+                              : 'warn'
+                            : 'neutral'
+                        }
+                      >
+                        {item.status ?? 'unknown'}
+                      </ThemeChip>
+                      {item.title ? <Typography.Text type={'secondary'}>{item.title}</Typography.Text> : null}
+                    </Space>
+                    <Typography.Paragraph style={{ margin: '6px 0 0', whiteSpace: 'pre-wrap' }}>
+                      {item.message ?? ''}
+                    </Typography.Paragraph>
+                    {item.fix ? (
+                      <Typography.Paragraph
+                        type={'secondary'}
+                        style={{ margin: '4px 0 0', whiteSpace: 'pre-wrap' }}
+                      >
+                        {item.fix}
+                      </Typography.Paragraph>
+                    ) : null}
+                  </div>
+                ))}
+              </Space>
+            ) : (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description={'没有 fail / unknown 条目（pass 不逐条展示）'}
+              />
+            )}
+          </Space>
+        ) : null}
+      </Modal>
       {/* 阶段 2（Craft）：改动预览——未点采纳时编辑器内容绝不变动 */}
       <CraftDiff
         open={!!craftDiff}

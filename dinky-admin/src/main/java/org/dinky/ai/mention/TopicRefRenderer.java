@@ -20,6 +20,7 @@
 package org.dinky.ai.mention;
 
 import org.dinky.ai.context.NameRegistryService;
+import org.dinky.ai.kafka.KafkaTopicCatalog;
 import org.dinky.data.model.Column;
 import org.dinky.data.model.DataBase;
 import org.dinky.data.model.SystemConfiguration;
@@ -69,6 +70,9 @@ public class TopicRefRenderer {
 
     private final DataBaseService dataBaseService;
 
+    /** P1（2026-11-04）：向 broker 求证 topic 是否存在（名册未命中时用它把"不知道"变成确定结论） */
+    private final KafkaTopicCatalog kafkaTopicCatalog;
+
     /**
      * 渲染一条 {@code @topic/} 引用（<b>永不抛异常</b>，失败即降级为可读说明）。
      *
@@ -91,7 +95,7 @@ public class TopicRefRenderer {
             NameRegistryService.Snapshot snapshot = nameRegistryService.getSnapshot();
             List<NameRegistryService.TaskLink> links = snapshot.linksOfTopic(topic);
             if (CollUtil.isEmpty(links)) {
-                appendNotFound(sb, snapshot);
+                appendNotFound(sb, topic, snapshot);
             } else {
                 appendTopicDetail(sb, topic, links);
             }
@@ -103,14 +107,35 @@ public class TopicRefRenderer {
     }
 
     /** 名册里找不到该 topic：说清楚"为什么没查到"与"还能怎么查"，避免模型误判为"topic 不存在"。 */
-    private void appendNotFound(StringBuilder sb, NameRegistryService.Snapshot snapshot) {
-        sb.append("- ⚠️ 未在任何作业的 DDL 中找到该 topic（本口径**只覆盖已被作业使用的 topic**）\n");
+    private void appendNotFound(StringBuilder sb, String topic, NameRegistryService.Snapshot snapshot) {
+        sb.append("- ⚠️ 未在任何作业的 DDL 中找到该 topic（名册口径**只覆盖已被作业使用的 topic**）\n");
+        // P1（2026-11-04）：名册没查到 ≠ 不存在。这里向 broker 求证一次，
+        // 把"不知道"变成"确定存在但没被用过"或"确定不存在（拼写错）"——两者的处置完全不同。
+        Boolean exists = kafkaTopicCatalog == null ? null : kafkaTopicCatalog.exists(topic);
+        if (Boolean.TRUE.equals(exists)) {
+            sb.append("- ✅ **该 topic 真实存在**（已向 broker 确认），只是还没有任何 FlinkSQL 作业消费过它，" + "所以名册里没有血缘记录\n");
+            sb.append("- 因此**不能**从名册推断字段结构：请用 `@source/<数据源>/<库>/<表>` 查上游源表字段"
+                    + "（canal 报文 = 源表字段 + 固定包裹），或让用户提供一条样例报文\n");
+            sb.append("- 写法参考: canal 报文用 `'format' = 'raw'` + `JSON_VALUE(payload,'$.data[0].<字段>')`，"
+                    + "用 `JSON_VALUE(payload,'$.table')` 过滤单表\n");
+            return;
+        }
+        if (Boolean.FALSE.equals(exists)) {
+            sb.append("- ❌ 已向 broker 确认：**该 topic 不存在**。请先核对拼写，再检查是否建在了别的集群\n");
+            Set<String> known = kafkaTopicCatalog.topicNames();
+            if (!known.isEmpty()) {
+                sb.append("- 集群里真实存在的 topic: ")
+                        .append(joinLimit(new ArrayList<>(known), 20))
+                        .append('\n');
+            }
+            return;
+        }
         sb.append("- 可能原因: ① topic 名拼写不同；② 该 topic 存在但尚未被任何作业消费；").append("③ 它只被 FlinkSQL 之外的作业使用\n");
         List<String> known = snapshot.get("kafkaTopic");
         if (CollUtil.isNotEmpty(known)) {
             sb.append("- 名册中已出现的 topic: ").append(joinLimit(known, 20)).append('\n');
         }
-        sb.append("- 提示: 枚举平台里**全部** topic（含未被使用的）需要实时连接 Kafka，属 P1 批次 2 的 `list_topics` 能力。\n");
+        sb.append("- 提示: 当前 Kafka 不可达，无法向 broker 求证；可用 `list_topics` 工具或稍后重试。\n");
     }
 
     /** 命中血缘：给出作业 / 血缘 / group.id 占用 / 建议值 / 报文字段。 */
