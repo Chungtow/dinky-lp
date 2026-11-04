@@ -18,12 +18,13 @@
  */
 
 import { transformTableDataToCsv } from '@/utils/function';
+import { l } from '@/utils/intl';
 import { ProTable } from '@ant-design/pro-components';
 import { getInsights } from '@antv/ava';
 import { InsightCard } from '@antv/ava-react';
 import type { Datum, InsightsResult } from '@antv/ava/lib/insight/types';
-import { Drawer, Tabs, TabsProps } from 'antd';
-import React, { useCallback, useEffect, useMemo, useState, useTransition } from 'react';
+import { Drawer, message, Tabs, TabsProps } from 'antd';
+import React, { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { useResultColumns } from './columns';
 import ResultToolRail from './ResultToolRail';
 import { ResultColumnsState, ResultData, ResultEntry } from './useResultEntries';
@@ -47,6 +48,7 @@ const ResultTable: React.FC<ResultTableProps> = (props) => {
   const { entry, loading, onRefresh, onColumnsStateChange } = props;
   const { dataList, columnsState } = entry;
   const { getColumns } = useResultColumns();
+  const tableWrapRef = useRef<HTMLDivElement>(null);
 
   const [innerKey, setInnerKey] = useState<string>(() =>
     dataList.length > 0 ? tableKeyOf(dataList[0], 0) : ''
@@ -109,6 +111,54 @@ const ResultTable: React.FC<ResultTableProps> = (props) => {
 
   const handleCloseAva = useCallback(() => setOpenAVA(false), []);
 
+  /**
+   * 复制当前页表格内容（TSV，可直接粘进 Excel）。
+   *
+   * <p>直接读 DOM 而不是读 dataSource：DOM 里只有当前页渲染的行，且天然跟随当前排序、
+   * 列筛选与列显隐（隐藏列不在 DOM 里），与用户"看到什么就复制什么"的预期一致。
+   */
+  const handleCopyPage = useCallback(async () => {
+    const root = tableWrapRef.current;
+    if (!root) {
+      return;
+    }
+    const table = (isSingle
+      ? root.querySelector('.ant-table')
+      : root.querySelector('.ant-tabs-tabpane-active .ant-table')) as HTMLElement | null;
+    if (!table) {
+      return;
+    }
+    const cellText = (el: Element) => (el.textContent ?? '').replace(/\s+/g, ' ').trim();
+    const headers = Array.from(table.querySelectorAll('thead th'))
+      .filter((th) => !th.classList.contains('ant-table-cell-scrollbar'))
+      .map(cellText);
+    const rows = Array.from(table.querySelectorAll('tbody tr.ant-table-row')).map((tr) =>
+      Array.from(tr.querySelectorAll('td'))
+        .filter((td) => !td.classList.contains('ant-table-cell-scrollbar'))
+        .map(cellText)
+    );
+    if (headers.length === 0 && rows.length === 0) {
+      return;
+    }
+    const tsv = [headers.join('\t'), ...rows.map((row) => row.join('\t'))].join('\n');
+    try {
+      if (!navigator?.clipboard) {
+        throw new Error('clipboard api unavailable');
+      }
+      await navigator.clipboard.writeText(tsv);
+    } catch (e) {
+      const textarea = document.createElement('textarea');
+      textarea.value = tsv;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+    }
+    message.success(l('pages.datastudio.label.result.copy.success', '', { rowCount: rows.length }));
+  }, [isSingle]);
+
   const renderTable = (data: ResultData) => (
     <ProTable
       className={'datastudio-theme'}
@@ -151,7 +201,7 @@ const ResultTable: React.FC<ResultTableProps> = (props) => {
   return (
     <div style={containerStyle}>
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'row' }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ flex: 1, minWidth: 0 }} ref={tableWrapRef}>
           {isSingle ? (
             renderTable(activeData)
           ) : (
@@ -173,6 +223,7 @@ const ResultTable: React.FC<ResultTableProps> = (props) => {
             fullscreen={fullscreen}
             onRefresh={onRefresh}
             onAVA={() => handleAVA(activeData)}
+            onCopyPage={handleCopyPage}
             onToggleFullscreen={() => setFullscreen((prev) => !prev)}
             onColumnsStateChange={(state) => onColumnsStateChange(entry.id, state)}
           />

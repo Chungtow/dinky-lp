@@ -1082,12 +1082,24 @@ body.dock-dragging iframe {
 // 注意：不能改 rc-dock 的 group 字符串（DockLayoutFunction.tsx 依赖 'leftBottom' 判位置），
 // 只能通过 group 自动生成的 dock-style-leftBottom 类做样式覆盖。
 .dock-panel.dock-style-leftBottom {
+  // 只改子元素高度是不够的（rc-tabs 的 nav / nav-more / extra-content 都会撑开），
+  // 这里把 bar 自身钉死并裁掉溢出，实测 40px → 26px 生效
   .dock-bar {
-    padding-left: 6px;
+    height: 26px;
+    min-height: 26px;
+    padding: 0 0 0 6px;
+    overflow: hidden;
+  }
+
+  .dock-nav,
+  .dock-nav-wrap,
+  .dock-nav-list {
+    height: 26px;
   }
 
   .dock-tab {
     height: 26px;
+    line-height: 26px;
     font-size: 12px;
     font-weight: 500;
   }
@@ -1096,18 +1108,23 @@ body.dock-dragging iframe {
     height: 26px;
   }
 
+  .dock-nav-more {
+    height: 26px;
+    width: 26px;
+  }
+
   .dock-panel-max-btn,
   .dock-panel-min-btn {
-    height: 18px;
-    width: 18px;
+    height: 16px;
+    width: 16px;
     margin: 2px 2px 2px 0;
     padding: 2px;
   }
 
   .dock-panel-max-btn:before,
   .dock-panel-min-btn:before {
-    width: 9px;
-    height: 9px;
+    width: 8px;
+    height: 8px;
   }
 
   // 面板内一级 Tabs 更紧凑
@@ -1134,6 +1151,50 @@ body.dock-dragging iframe {
 
 .ant-tabs-tab:hover .service-result-tab-close {
   opacity: 0.6;
+}
+
+//     =======  深色主题下的表格可读性  =======
+// DataStudio 的 ConfigProvider 把 colorBgContainer 指向 CSS 变量后，antd 通过算法推导
+// 出的正文色与真实背景不匹配，深色主题下表格会出现"深底深字"。这里统一用主题变量兜住，
+// 浅色（--text-color:#424242）与深色（#fafafa）同时正确。
+.datastudio-theme {
+  .ant-table {
+    color: var(--text-color);
+    background-color: transparent;
+  }
+
+  .ant-table-thead > tr > th {
+    color: var(--text-color) !important;
+    background-color: var(--second-color) !important;
+    border-bottom-color: var(--border-color) !important;
+  }
+
+  .ant-table-tbody > tr > td {
+    color: var(--text-color);
+    border-bottom-color: var(--border-color);
+  }
+
+  .ant-table-tbody > tr.ant-table-row:hover > td,
+  .ant-table-tbody > tr > td.ant-table-cell-row-hover {
+    background-color: var(--second-color) !important;
+  }
+
+  .ant-table-cell-fix-left,
+  .ant-table-cell-fix-right {
+    background-color: var(--main-background-color) !important;
+  }
+
+  .ant-table-column-sorter,
+  .ant-table-filter-trigger,
+  .ant-table-column-sorters {
+    color: var(--text-color);
+  }
+
+  .ant-pagination,
+  .ant-pagination-item a,
+  .ant-empty-description {
+    color: var(--text-color);
+  }
 }
 
 .service-result-tab-close:hover {

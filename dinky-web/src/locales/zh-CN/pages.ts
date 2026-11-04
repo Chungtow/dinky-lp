@@ -532,6 +532,8 @@ export default {
   'pages.datastudio.label.result.clear.all': '清空所有结果',
   'pages.datastudio.label.result.clear.all.confirm': '确定清空所有结果吗？该操作不可撤销。',
   'pages.datastudio.label.result.empty': '执行后将在这里以独立标签展示结果',
+  'pages.datastudio.label.result.copy': '复制当前页',
+  'pages.datastudio.label.result.copy.success': '已复制当前页 {rowCount} 行数据',
   'pages.datastudio.label.version': '版本历史',
   'pages.datastudio.label.version.diff': '版本对比',
   'pages.datastudio.label.version.leftTitle': '版本号：【{versionId}】 创建时间：【{createTime}】',

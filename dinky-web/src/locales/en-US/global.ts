@@ -90,6 +90,7 @@ export default {
   'button.ava': 'Automated insights',
   'button.setting.columns': 'Column settings',
   'button.fullscreen': 'Full screen',
+  'button.selectAll': 'Select all',
 
   'menu.menu': 'Menu',
   'right.menu.open': 'Open',

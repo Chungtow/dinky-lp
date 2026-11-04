@@ -21,6 +21,7 @@ import { CircleBtn } from '@/components/CallBackButton/CircleBtn';
 import { l } from '@/utils/intl';
 import {
   BulbOutlined,
+  CopyOutlined,
   DownloadOutlined,
   FullscreenExitOutlined,
   FullscreenOutlined,
@@ -40,6 +41,7 @@ type ResultToolRailProps = {
   fullscreen: boolean;
   onRefresh: () => void;
   onAVA: () => void;
+  onCopyPage: () => void;
   onToggleFullscreen: () => void;
   onColumnsStateChange: (columnsState: ResultColumnsState) => void;
 };
@@ -57,14 +59,39 @@ const ResultToolRail: React.FC<ResultToolRailProps> = (props) => {
     fullscreen,
     onRefresh,
     onAVA,
+    onCopyPage,
     onToggleFullscreen,
     onColumnsStateChange
   } = props;
 
   const visibleColumns = columns.filter((column) => columnsState?.[column]?.show !== false);
+  const allChecked = columns.length > 0 && visibleColumns.length === columns.length;
+
+  const handleSelectAll = (show: boolean) => {
+    const next: ResultColumnsState = {};
+    columns.forEach((column) => {
+      next[column] = { ...(columnsState?.[column] ?? {}), show };
+    });
+    onColumnsStateChange(next);
+  };
 
   const columnSetting = (
     <div style={{ maxHeight: 320, overflowY: 'auto', minWidth: 160 }}>
+      <div
+        style={{
+          borderBottom: '1px solid var(--border-color)',
+          paddingBottom: 4,
+          marginBottom: 4
+        }}
+      >
+        <Checkbox
+          checked={allChecked}
+          indeterminate={visibleColumns.length > 0 && !allChecked}
+          onChange={(e) => handleSelectAll(e.target.checked)}
+        >
+          {l('button.selectAll')}
+        </Checkbox>
+      </div>
       <Checkbox.Group
         value={visibleColumns}
         onChange={(values) => {
@@ -98,6 +125,11 @@ const ResultToolRail: React.FC<ResultToolRailProps> = (props) => {
       {csvUrl && (
         <CircleBtn icon={<DownloadOutlined />} href={csvUrl} title={'Export CSV'} />
       )}
+      <CircleBtn
+        icon={<CopyOutlined />}
+        onClick={onCopyPage}
+        title={l('pages.datastudio.label.result.copy')}
+      />
       <CircleBtn icon={<BulbOutlined />} onClick={onAVA} title={l('button.ava')} />
       <Popover trigger={'click'} placement={'left'} content={columnSetting}>
         <Button

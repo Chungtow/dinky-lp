@@ -90,6 +90,7 @@ export default {
   'button.ava': '自动洞察',
   'button.setting.columns': '列设置',
   'button.fullscreen': '全屏',
+  'button.selectAll': '全选',
 
   'menu.menu': '菜单',
   'right.menu.open': '打开',
