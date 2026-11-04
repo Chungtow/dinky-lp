@@ -1195,6 +1195,32 @@ body.dock-dragging iframe {
   .ant-empty-description {
     color: var(--text-color);
   }
+
+  // 行高对齐 pgconsole 的 ROW_HEIGHT=28：paddingBlock 8→4、line-height 22→20、字号 14→12
+  // 详见 docs/research/20261104-...调研与方案.md §11
+  .ant-table.ant-table-small {
+    .ant-table-thead > tr > th {
+      padding: 4px 8px;
+      font-size: 12px;
+      line-height: 20px;
+    }
+
+    .ant-table-tbody > tr > td {
+      padding: 4px 8px;
+      font-size: 12px;
+      line-height: 20px;
+    }
+  }
+
+  // 兜底：单元格内容再高也不超过 28px（对齐 pgconsole 的固定行高）
+  .ant-table-tbody > tr > td {
+    height: 28px;
+  }
+
+  // 分页条压到 ~24px（对应 pgconsole 的 h-6 状态条）
+  .ant-pagination.ant-pagination-small {
+    margin: 4px 0;
+  }
 }
 
 .service-result-tab-close:hover {
