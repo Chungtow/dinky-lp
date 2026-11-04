@@ -617,6 +617,15 @@ export default {
   'pages.datastudio.catalog.openMission': 'Open Mission',
   'datastudio.aiChat.send': 'Send',
   'datastudio.aiChat.stop': 'Stop',
+  'datastudio.aiChat.validate': 'Validate SQL',
+  'datastudio.aiChat.validateTip':
+    'Run the platform rule engine on the current editor SQL (no LLM call, no data written)',
+  'datastudio.aiChat.validateNoSql': 'No SQL in the current editor to validate',
+  'datastudio.aiChat.validateFailed': 'Rule validation request failed, please retry',
+  'datastudio.aiChat.validatePassed': 'Passed (no error-level violation)',
+  'datastudio.aiChat.validateRejected': 'Rejected (error-level violation found)',
+  'datastudio.aiChat.validateUnknownTip':
+    'unknown means the item could not be decided (missing input or API unreachable) and needs manual review',
   'datastudio.aiChat.explain': 'Explain SQL',
   'datastudio.aiChat.explainTip':
     'Explain SQL with AI: explains the selected snippet if any, otherwise the whole editor content',
@@ -809,7 +818,8 @@ export default {
   'datastudio.aiChat.mention.semanticEmpty': 'This project has no referable asset',
   'datastudio.aiChat.mention.kindMetric': 'metric',
   'datastudio.aiChat.mention.kindTable': 'table',
-  'datastudio.aiChat.mention.groupTopic': 'Topic (used by jobs)',
+  'datastudio.aiChat.mention.groupTopic': 'Topic (exists on cluster)',
+  'datastudio.aiChat.mention.groupJobRef': 'Job (use its SQL as reference)',
   // KB (@kb) integration v1.0: candidate group label
   'datastudio.aiChat.mention.groupKb': 'Knowledge base (search scope)',
   'datastudio.aiChat.mention.sourceUsage':
@@ -1282,6 +1292,9 @@ export default {
   'rc.ds.create': 'Create DataSource',
   'rc.ds.decimalDigits': 'Decimal Range',
   'rc.ds.default': 'Default Value',
+  'rc.ds.idTip':
+    'This ID is used by config items that reference a DataSource by id (e.g. Settings -> Flink Config -> "Default sink DataSource for AI generated job")',
+  'rc.ds.copyId': 'Copy DataSource ID',
   'rc.ds.delete': 'Delete DataSource',
   'rc.ds.deleteConfirm': 'Are you sure to delete this DataSource? ',
   'rc.ds.detail.tag.console': 'Console',

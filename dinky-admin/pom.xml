@@ -243,6 +243,14 @@
             <groupId>com.alibaba.fastjson2</groupId>
             <artifactId>fastjson2</artifactId>
         </dependency>
+        <!-- P1（2026-11-04）：AI Chat 列举 Kafka topic 用 AdminClient 直连 broker。
+             版本与集群 Flink lib 内的 kafka-clients 保持一致（3.5.1），
+             避免 admin 进程与 Flink 侧对 broker 的协议假设不一致。 -->
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-clients</artifactId>
+            <version>3.5.1</version>
+        </dependency>
         <dependency>
             <groupId>org.dinky</groupId>
             <artifactId>dinky-alert-base</artifactId>

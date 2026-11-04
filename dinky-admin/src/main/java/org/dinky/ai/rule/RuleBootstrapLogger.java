@@ -19,6 +19,8 @@
 
 package org.dinky.ai.rule;
 
+import org.dinky.ai.context.FlinkCapabilities;
+import org.dinky.ai.context.FlinkCapabilitiesLoader;
 import org.dinky.ai.context.PlatformProfileLoader;
 
 import org.springframework.boot.ApplicationArguments;
@@ -48,6 +50,9 @@ public class RuleBootstrapLogger implements ApplicationRunner {
     /** 平台运行画像同样是懒加载：启动预热 + 打日志，部署阶段就能看出覆盖文件是否生效。 */
     private final PlatformProfileLoader platformProfileLoader;
 
+    /** 集群能力画像（部署脚本探测生成）：启动预热，日志里就能看出探测结果是否上机。 */
+    private final FlinkCapabilitiesLoader flinkCapabilitiesLoader;
+
     @Override
     public void run(ApplicationArguments args) {
         try {
@@ -62,13 +67,24 @@ public class RuleBootstrapLogger implements ApplicationRunner {
             log.warn("AI rule engine warm-up failed (聊天仍可用，规则校验降级为内置基线)", e);
         }
         try {
-            int connectors = platformProfileLoader.profile().getConnectors().size();
             log.info(
-                    "AI platform profile ready: {} connectors, overlay={}",
-                    connectors,
+                    "AI platform profile ready: pipelines={} topics={} overlay={}",
+                    platformProfileLoader.profile().getPipelines().size(),
+                    platformProfileLoader.profile().getTopics().size(),
                     StrUtil.blankToDefault(platformProfileLoader.externalPath(), "(未配置)"));
         } catch (Exception e) {
-            log.warn("AI platform profile warm-up failed (上下文将缺少 connector 白名单)", e);
+            log.warn("AI platform profile warm-up failed (上下文将缺少链路说明)", e);
+        }
+        try {
+            FlinkCapabilities capabilities = flinkCapabilitiesLoader.capabilities();
+            log.info(
+                    "AI capabilities ready: {} connectors (debug {}), flink {}, overlay={}",
+                    capabilities.allConnectors().size(),
+                    capabilities.getDebugConnectors().size(),
+                    capabilities.getFlinkVersion(),
+                    StrUtil.blankToDefault(flinkCapabilitiesLoader.externalPath(), "(未配置)"));
+        } catch (Exception e) {
+            log.warn("AI capabilities warm-up failed (上下文将缺少 connector 白名单)", e);
         }
     }
 }

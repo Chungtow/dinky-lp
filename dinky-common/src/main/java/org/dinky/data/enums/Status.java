@@ -343,6 +343,27 @@ public enum Status {
 
     SYS_FLINK_SETTINGS_USERESTAPI(100, "sys.flink.settings.useRestAPI"),
     SYS_FLINK_SETTINGS_USERESTAPI_NOTE(101, "sys.flink.settings.useRestAPI.note"),
+    /**
+     * AI 生成 FlinkSQL 时的默认 sink 数据源（P0，2026-11-03）。
+     *
+     * <p>存 {@code dinky_database.id}；{@code 0} = 未配置。取值来自「注册中心 → 数据源」的 id 列。
+     *
+     * <p><b>2026-11-03 起降级为兼容通道</b>：id 只在租户内唯一，而这个键是全局配置
+     * （{@code dinky_sys_config} 无 tenant_id），必然出现"对某个租户不可用"。
+     * 新增按<b>名称</b>解析的 {@link #SYS_FLINK_SETTINGS_AIDEFAULTSINKDATABASENAME} 为主通道，
+     * 本键仅在本租户历史配置已存在且未填名称时兜底。
+     */
+    SYS_FLINK_SETTINGS_AIDEFAULTSINKDATABASEID(102, "sys.flink.settings.aiDefaultSinkDataBaseId"),
+    SYS_FLINK_SETTINGS_AIDEFAULTSINKDATABASEID_NOTE(103, "sys.flink.settings.aiDefaultSinkDataBaseId.note"),
+    /**
+     * AI 默认 sink 数据源的<b>名称</b>（主通道，2026-11-03 起）。
+     *
+     * <p>为什么从 id 换成名称：id 是"租户内唯一"的，全局键一旦存 id 就天然对别的租户失效；
+     * 名称同样是租户内唯一（{@code UNIQUE(name, tenant_id)}），但它<b>可以被各租户各自注册一份</b>，
+     * 于是"一份全局配置"对所有租户都成立——解析时只在当前租户内按名称查，取本租户自己的凭证。
+     */
+    SYS_FLINK_SETTINGS_AIDEFAULTSINKDATABASENAME(200, "sys.flink.settings.aiDefaultSinkDataBaseName"),
+    SYS_FLINK_SETTINGS_AIDEFAULTSINKDATABASENAME_NOTE(201, "sys.flink.settings.aiDefaultSinkDataBaseName.note"),
     SYS_FLINK_SETTINGS_JOBIDWAIT(104, "sys.flink.settings.jobIdWait"),
     SYS_FLINK_SETTINGS_JOBIDWAIT_NOTE(105, "sys.flink.settings.jobIdWait.note"),
     SYS_MAVEN_SETTINGS_SETTINGSFILEPATH(106, "sys.maven.settings.settingsFilePath"),

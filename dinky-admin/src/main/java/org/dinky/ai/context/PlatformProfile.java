@@ -27,30 +27,28 @@ import java.util.Map;
 import lombok.Data;
 
 /**
- * 平台运行画像（M1 补充）：把"本集群能干什么"变成可配置事实。
+ * 平台画像（人工维护的那部分）。
  *
- * <p><b>为什么必须显式给出</b>：模型的通用知识里 "Flink 支持 hive/doris/elasticsearch"，
- * 但本集群的 Flink lib 只有 kafka + jdbc + ClickHouse。不显式声明，它就会写
- * {@code 'connector' = 'hive'}，直到提交阶段才报 {@code Could not find any factories}
- * （2026-11-03 M1-01 实测）。
+ * <p><b>2026-11-03 P0 瘦身</b>：原先把"集群能力"（connector 清单）、"默认 sink"、
+ * "业务口径"都塞在这里，违背了分工铁律。现在只保留人工才说得清的三样：
+ * <ul>
+ *   <li>{@code connectorNotes} —— connector 的**用法约束**（如"jdbc 是唯一写通道"），能力清单本身在
+ *       {@link FlinkCapabilities}（探测生成）</li>
+ *   <li>{@code pipelines} —— 平台标准链路形态</li>
+ *   <li>{@code topics} —— 已知 topic 与血缘</li>
+ *   <li>{@code urlAliases} —— jdbc host 别名映射（给连接串一致性规则兜误报）</li>
+ * </ul>
+ * 业务口径（"位置条数用 tc_positions"）**不进这里**，归知识库（`lpdw-dict` / skill），由业务维护。
  *
- * <p>字段全部是"渲染即用"的文本/清单，判定逻辑不在这里（那是规则库的事）。
- *
- * @since 2026/11/03
+ * @since 2026/11/02
  */
 @Data
 public class PlatformProfile {
 
     private Integer version;
 
-    /** 集群 Flink lib 里实际可用的 connector 名 */
-    private List<String> connectors = new ArrayList<>();
-
-    /** 每条 connector 的约束说明（如"jdbc 是唯一写通道，目标是 ClickHouse"） */
+    /** connector 用法约束（不是清单） */
     private List<String> connectorNotes = new ArrayList<>();
-
-    /** 写侧目标（engine/database/note） */
-    private List<Map<String, String>> sinkTargets = new ArrayList<>();
 
     /** 标准链路描述 */
     private List<String> pipelines = new ArrayList<>();
@@ -58,16 +56,11 @@ public class PlatformProfile {
     /** 已知 topic（name/note） */
     private List<Map<String, String>> topics = new ArrayList<>();
 
-    /** 业务口径约定（"位置条数用 tc_positions" 这类"平台标准答案"） */
-    private List<String> conventions = new ArrayList<>();
+    /** jdbc host 别名 → 真实 host:port（配置化解决"数据源写别名"导致的误报） */
+    private Map<String, String> urlAliases = new LinkedHashMap<>();
 
     public boolean isEmpty() {
-        return connectors.isEmpty()
-                && connectorNotes.isEmpty()
-                && sinkTargets.isEmpty()
-                && pipelines.isEmpty()
-                && topics.isEmpty()
-                && conventions.isEmpty();
+        return connectorNotes.isEmpty() && pipelines.isEmpty() && topics.isEmpty() && urlAliases.isEmpty();
     }
 
     /** 覆盖合并：标量取覆盖值，清单整段替换（避免"半新半旧"的缝合状态） */
@@ -77,12 +70,13 @@ public class PlatformProfile {
         }
         PlatformProfile merged = new PlatformProfile();
         merged.setVersion(other.getVersion() == null ? version : other.getVersion());
-        merged.setConnectors(pick(other.getConnectors(), connectors));
         merged.setConnectorNotes(pick(other.getConnectorNotes(), connectorNotes));
-        merged.setSinkTargets(pick(other.getSinkTargets(), sinkTargets));
         merged.setPipelines(pick(other.getPipelines(), pipelines));
         merged.setTopics(pick(other.getTopics(), topics));
-        merged.setConventions(pick(other.getConventions(), conventions));
+        merged.setUrlAliases(
+                other.getUrlAliases() == null || other.getUrlAliases().isEmpty()
+                        ? new LinkedHashMap<>(urlAliases)
+                        : new LinkedHashMap<>(other.getUrlAliases()));
         return merged;
     }
 
@@ -93,16 +87,13 @@ public class PlatformProfile {
         return base == null ? new ArrayList<>() : new ArrayList<>(base);
     }
 
-    /** 浅拷贝构造（Loader 落库用） */
     public static PlatformProfile of(Map<String, Object> raw) {
         PlatformProfile profile = new PlatformProfile();
         profile.setVersion(asInt(raw.get("version")));
-        profile.setConnectors(asStringList(raw.get("connectors")));
         profile.setConnectorNotes(asStringList(raw.get("connector_notes")));
-        profile.setSinkTargets(asMapList(raw.get("sink_targets")));
         profile.setPipelines(asStringList(raw.get("pipelines")));
         profile.setTopics(asMapList(raw.get("topics")));
-        profile.setConventions(asStringList(raw.get("conventions")));
+        profile.setUrlAliases(asStringMap(raw.get("url_aliases")));
         return profile;
     }
 
@@ -133,16 +124,23 @@ public class PlatformProfile {
         if (value instanceof List) {
             for (Object item : (List<Object>) value) {
                 if (item instanceof Map) {
-                    Map<String, String> map = new LinkedHashMap<>();
-                    for (Map.Entry<Object, Object> entry : ((Map<Object, Object>) item).entrySet()) {
-                        map.put(
-                                String.valueOf(entry.getKey()),
-                                entry.getValue() == null ? "" : String.valueOf(entry.getValue()));
-                    }
-                    list.add(map);
+                    list.add(asStringMap(item));
                 }
             }
         }
         return list;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, String> asStringMap(Object value) {
+        Map<String, String> map = new LinkedHashMap<>();
+        if (value instanceof Map) {
+            for (Map.Entry<Object, Object> entry : ((Map<Object, Object>) value).entrySet()) {
+                map.put(
+                        String.valueOf(entry.getKey()),
+                        entry.getValue() == null ? "" : String.valueOf(entry.getValue()));
+            }
+        }
+        return map;
     }
 }

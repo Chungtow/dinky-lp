@@ -80,9 +80,10 @@ public class PlatformProfileLoader {
         PlatformProfile overlay = readOverlay();
         PlatformProfile merged = baseline.overlay(overlay);
         log.info(
-                "AI platform profile loaded: connectors={} conventions={} overlay={}",
-                merged.getConnectors().size(),
-                merged.getConventions().size(),
+                "AI platform profile loaded: pipelines={} topics={} aliases={} overlay={}",
+                merged.getPipelines().size(),
+                merged.getTopics().size(),
+                merged.getUrlAliases().size(),
                 isBlank(externalPath) ? "(未配置)" : externalPath);
         return merged;
     }

@@ -78,6 +78,17 @@ public class RequiredSetCheck implements RuleCheck {
         if (!missing.isEmpty()) {
             return RuleOutcome.fail("缺少 SET: " + String.join(", ", missing));
         }
+        // 2026-11-03 加固：没有权威作业名时**不得默认通过**。
+        // 原逻辑在 taskName 为空时 expected=null → 跳过比对 → pass，等于模型只要自报一个
+        // 与 pipeline.name 同名的作业名（或干脆不传 name）就能"自证一致"。
+        // 区分两种空：已绑定作业却取不到名字（跨租户/已删除）→ unknown；纯 SQL 校验 → notApplicable。
+        if (CheckParams.bool(rule, "equals_task_name", false) && StrUtil.isBlank(context.getTaskName())) {
+            if (context.getTaskId() != null) {
+                return RuleOutcome.unknown(
+                        "已绑定作业 task " + context.getTaskId() + " 但服务端未能取得作业名（跨租户或作业已删除），无法校验 pipeline.name 一致性");
+            }
+            return RuleOutcome.notApplicable("未绑定作业，跳过 pipeline.name 一致性校验");
+        }
         if (!mismatched.isEmpty()) {
             return RuleOutcome.fail("SET 取值与任务字段不一致: " + String.join(", ", mismatched));
         }

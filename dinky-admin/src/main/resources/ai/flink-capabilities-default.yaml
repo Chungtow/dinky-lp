@@ -1,0 +1,38 @@
+# =============================================================================
+# Dinky AI Chat · 集群能力画像（**内置基线，仅在探测文件缺失时兜底**）
+#
+# ⚠️ 正常情况本文件不该被用到：部署脚本 scripts/dinky-lp/gen_flink_capabilities.sh
+#    会扫集群 Flink lib 生成 <部署目录>/ai/flink-capabilities.yaml 并挂进容器
+#    （dinky.ai.capabilities.path）。这里的值只是"探测失败时也别让模型裸奔"的保险，
+#    因此每次集群加/减 jar，请同步更新这里（否则兜底值会与事实相反）。
+#
+# 字段：
+#   flink_version     Flink 版本（探测自 flink-dist-*.jar）
+#   generated_at      生成时间（探测写入；人工改过请同步改这里）
+#   source_host       探测来源节点与目录
+#   connectors        从 flink-connector-<name>-*.jar / flink-sql-connector-<name>-*.jar /
+#                     flink-<vendor>-connector-*.jar 解析出的 connector
+#   extra_connectors  探测覆盖不到的补充项（内置 connector）
+#   debug_connectors  **只能临时验证、不能作为交付 sink** 的 connector
+# =============================================================================
+flink_version: "1.17.2"
+generated_at: "2026-11-03 基线（待部署探测覆盖）"
+source_host: "flink01:/opt/bigdata/flink/flink-1.17.2/lib"
+
+connectors:
+  - doris
+  - filesystem
+  - jdbc
+  - kafka
+  - mysql-cdc
+  - upsert-kafka
+
+extra_connectors:
+  - datagen
+  - print
+  - blackhole
+
+debug_connectors:
+  - print
+  - datagen
+  - blackhole

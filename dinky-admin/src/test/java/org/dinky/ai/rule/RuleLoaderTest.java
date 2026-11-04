@@ -36,10 +36,19 @@ import org.junit.Test;
  */
 public class RuleLoaderTest {
 
+    /**
+     * 内置基线规则条数（`ai/flinksql-rules-default.yaml`）。
+     *
+     * <p>写死而不是"读出来比较"：这样"少加载了几条"（比如某条 id 写错被去重）能被发现。
+     * 2026-11-03 由 21 更新为 22：规则库新增了一条（基线已含 22 条），旧断言随之失真。
+     * <b>以后新增/删除基线规则必须同步改这里</b>。
+     */
+    private static final int BASELINE_RULE_COUNT = 22;
+
     @Test
     public void missingOverlayFallsBackToBaseline() {
         RuleSet ruleSet = new RuleLoader().load("/tmp/definitely-not-exists-flinksql-rules.yaml");
-        Assert.assertEquals(21, ruleSet.size());
+        Assert.assertEquals(BASELINE_RULE_COUNT, ruleSet.size());
     }
 
     @Test
@@ -48,7 +57,7 @@ public class RuleLoaderTest {
         file.deleteOnExit();
         Files.write(file.toPath(), "rules: [ this is : not : valid".getBytes(StandardCharsets.UTF_8));
         RuleSet ruleSet = new RuleLoader().load(file.getAbsolutePath());
-        Assert.assertEquals(21, ruleSet.size());
+        Assert.assertEquals(BASELINE_RULE_COUNT, ruleSet.size());
     }
 
     @Test
@@ -67,7 +76,7 @@ public class RuleLoaderTest {
         RuleSet ruleSet = new RuleLoader().load(file.getAbsolutePath());
         Rule rule = ruleSet.get("FLINK-SINK-001");
         Assert.assertNotNull(rule);
-        Assert.assertEquals(21, ruleSet.size());
+        Assert.assertEquals(BASELINE_RULE_COUNT, ruleSet.size());
         Assert.assertEquals(RuleSeverity.WARN, rule.getSeverity());
         Assert.assertEquals("自定义文案", rule.getMessage());
         // 判定逻辑不可被配置篡改

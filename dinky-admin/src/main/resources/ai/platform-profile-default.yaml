@@ -1,44 +1,38 @@
 # =============================================================================
 # Dinky AI Chat · 平台运行画像（**内置基线，随 jar 打包**）
 #
-# 作用：把「这个集群到底能干什么」告诉模型 —— 可用 connector、目标库、标准链路、
-#       口径约定。没有这份东西，模型会凭通用知识写 `'connector' = 'hive'`，
-#       提交阶段才报 Could not find any factories（2026-11-03 M1-01 实测踩过）。
+# 分工铁律（2026-11-03 P0 瘦身）：
+#   ① 集群有什么 connector  →  FlinkCapabilities（部署脚本扫 Flink lib 探测生成，
+#      见 flink-capabilities-default.yaml / dinky.ai.capabilities.path）
+#   ② 平台默认 sink 数据源  →  配置中心（sys.flink.settings.aiDefaultSinkDataBaseId）
+#   ③ 业务口径（用哪张表）  →  知识库 lpdw-dict / skill，由业务维护
+#   ④ 本文件只保留人工才说得清的：connector 用法约束、标准链路、已知 topic、url 别名
 #
-# 三层来源（与规则库一致）：① 本文件 ② 部署层覆盖 config/dinky-lp/ai/platform-profile.yaml
-#       ③ 运行期只读内存。改 connectors / conventions 只需改 ②，重启容器生效。
-# 与部署层按 id/name 合并，字符串列表（connectors/conventions/pipelines）**整段替换**。
+# 覆盖优先级：本文件（jar 基线） < 部署层覆盖 config/dinky-lp/ai/platform-profile.yaml。
+# 列表段落**整段替换**（不缝合），改完重启容器生效。
 # =============================================================================
-version: 1
+version: 2
 
-# 集群 Flink lib 里实际存在、可直接使用的 connector（2026-11-03 实测）
-connectors:
-  - kafka
-  - upsert-kafka
-  - jdbc
-  - datagen
-  - print
-  - blackhole
-  - filesystem
-
+# connector 的**用法约束**（清单不在这里，别再往这里抄 connector 列表）
 connector_notes:
-  - "`jdbc` 是唯一的**写**通道，目标是 ClickHouse（自研 ClickHouseDialect，url 形如 `jdbc:clickhouse://ch01:8123/traccar`）"
-  - "**没有 hive / doris / elasticsearch / hbase / maxcompute 等 connector**：写进 WITH 会在提交阶段报 `Could not find any factories`，属于硬失败，不要尝试，也不要建议用户换这些 sink"
-
-sink_targets:
-  - engine: clickhouse
-    database: traccar
-    note: "CH 物理表必须已存在；Flink 侧 `CREATE TABLE` 只是逻辑映射，不会建表"
+  - "`jdbc` 是写 ClickHouse 的标准通道（自研 ClickHouseDialect），url 形如 `jdbc:clickhouse://doris05:38123/traccar`；CH 物理表必须已存在"
+  - "`jdbc`(ClickHouse) 是 insert-only 方言：不要输出 ROW_NUMBER / 无界 GROUP BY 这类回撤流"
+  - "MySQL（traccar-mysql）只用于 `@source/` 查表结构与 JDBC 维表 lookup（`manager:33306`）：**不能**当 Flink 的 source 做全表轮询，也**不能**当 sink；写出通道一律 ClickHouse"
+  - "写 Doris 用 `doris` connector（已装）：回撤流必须声明 PRIMARY KEY(...) NOT ENFORCED 且 sink.parallelism = 1"
+  - "`print` / `datagen` / `blackhole` 只能临时验证，**不能作为交付 sink**"
+  - "本集群没有 hive / elasticsearch / hbase / maxcompute connector，也不要用这些 sink 的 DDL 示例，提交阶段会报 `Could not find any factories`"
 
 pipelines:
-  - "标准链路：Kafka（源，raw/canal-json）→ Flink（窗口聚合）→ ClickHouse（jdbc sink）"
+  - "标准链路：Kafka（源，raw / canal-json）→ Flink（窗口聚合）→ ClickHouse（jdbc sink）"
   - "Top-N 不落库：DWS 只存窗口聚合结果，Top5 在查询端 `ORDER BY ... LIMIT 5`"
+  - "CDC 同步：MySQL（mysql-cdc 源）→ Flink → ClickHouse / Doris（upsert）"
 
 topics:
   - name: traccar-cdc
-    note: "Traccar MySQL 的 canal 变更流；位置报文对应源表 traccar.tc_positions"
+    note: "Traccar MySQL 的 canal 变更流，**一个 topic 里混有多张表**（tc_events / tc_positions / tc_devices / tc_users 等）；位置报文对应源表 `traccar.tc_positions`，告警事件对应 `traccar.tc_events`。声明源表时用 `'format' = 'raw'`，靠 `JSON_VALUE(payload,'$.table')` 过滤到单表"
 
-# 业务口径（改这里等于改"平台标准答案"，务必有实测/评审依据）
-conventions:
-  - "「每设备位置条数」取自 `traccar.tc_positions`（按 `deviceid` 计数）；`tc_statistics` 是平台运行统计快照（无设备列、`messagesstored` 是全局计数），**不能**当作位置来源"
-  - "canal 的 `servertime` 已是北京时间挂钟字符串；来自 filebeat 的 `@timestamp` 是 UTC，需 `+ INTERVAL '8' HOUR`"
+# jdbc host 别名 → 真实 host:port（供连接串一致性规则兜误报；规则未上线前仅作说明）
+url_aliases:
+  clickhouse: doris05:38123
+  ch01: doris05:38123
+  clickhouse-traccar: doris05:38123

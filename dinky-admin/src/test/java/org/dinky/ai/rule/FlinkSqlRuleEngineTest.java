@@ -25,11 +25,17 @@ import org.dinky.ai.rule.check.ConnectorWhitelistCheck;
 import org.dinky.ai.rule.check.ContainsCheck;
 import org.dinky.ai.rule.check.DorisAggKeyCheck;
 import org.dinky.ai.rule.check.DorisUpsertCheck;
+import org.dinky.ai.rule.check.JdbcUrlConformanceCheck;
+import org.dinky.ai.rule.check.KafkaTopicKnownCheck;
 import org.dinky.ai.rule.check.LookupConformanceCheck;
 import org.dinky.ai.rule.check.NotContainsCheck;
 import org.dinky.ai.rule.check.RequiredSetCheck;
 import org.dinky.ai.rule.check.SetAbsentCheck;
 import org.dinky.ai.rule.check.SetValueCheck;
+import org.dinky.ai.rule.check.SinkPersistentCheck;
+import org.dinky.ai.rule.check.SinkTableExistsCheck;
+import org.dinky.ai.rule.check.UndefinedVariableCheck;
+import org.dinky.service.FragmentVariableService;
 
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -39,6 +45,7 @@ import java.util.List;
 import org.junit.Assert;
 import org.junit.BeforeClass;
 import org.junit.Test;
+import org.mockito.Mockito;
 
 import cn.hutool.core.io.IoUtil;
 
@@ -59,6 +66,7 @@ public class FlinkSqlRuleEngineTest {
         List<RuleCheck> checks = Arrays.asList(
                 new AppendOnlyCheck(),
                 new ConnectorWhitelistCheck(),
+                new JdbcUrlConformanceCheck(),
                 new NotContainsCheck(),
                 new SetAbsentCheck(),
                 new RequiredSetCheck(),
@@ -67,13 +75,137 @@ public class FlinkSqlRuleEngineTest {
                 new LookupConformanceCheck(),
                 new ColumnNullSafetyCheck(),
                 new DorisUpsertCheck(),
-                new DorisAggKeyCheck());
+                new DorisAggKeyCheck(),
+                new SinkPersistentCheck(),
+                new UndefinedVariableCheck(),
+                new KafkaTopicKnownCheck(),
+                new SinkTableExistsCheck());
         engine = new FlinkSqlRuleEngine(new RuleLoader(), checks);
     }
 
     @Test
-    public void baselineHasTwentyRules() {
-        Assert.assertEquals(21, new RuleLoader().load(null).size());
+    public void baselineHasTwentyTwoRules() {
+        // 2026-11-04：FLINK-SINK-004（调试 connector 不能当交付 sink）
+        //           + FLINK-CONNECTOR-002 / FLINK-SOURCE-001 / FLINK-SINK-005 → 22 → 26
+        Assert.assertEquals(26, new RuleLoader().load(null).size());
+    }
+
+    /**
+     * 臆造的 {@code ${...}} 必须判 fail。
+     *
+     * <p>2026-11-04 M1-01 第六轮实测：模型产出 {@code ${kafka.bootstrap.servers}}、
+     * {@code ${clickhouse.username}} 等一整套占位符（本租户根本没有全局变量），
+     * 草稿层面完全看不出来，提交阶段必报 does not exist。
+     */
+    @Test
+    public void undefinedVariableIsBlocking() {
+        FragmentVariableService variableService = Mockito.mock(FragmentVariableService.class);
+        Mockito.when(variableService.listEnabledAll()).thenReturn(new ArrayList<>());
+        List<RuleCheck> onlyVariableCheck = new ArrayList<>();
+        onlyVariableCheck.add(new UndefinedVariableCheck(variableService));
+        FlinkSqlRuleEngine local = new FlinkSqlRuleEngine(new RuleLoader(), onlyVariableCheck);
+
+        String sql = "CREATE TABLE src (id INT) WITH ('connector' = 'kafka', "
+                + "'topic' = 'traccar-cdc', "
+                + "'properties.bootstrap.servers' = '${kafka.bootstrap.servers}');\n"
+                + "CREATE TABLE sink (id INT) WITH ('connector' = 'print');\n"
+                + "INSERT INTO sink SELECT id FROM src;\n";
+        List<RuleViolation> violations = local.validateDraft(contextOf(sql, null, 2));
+        boolean blocking = false;
+        for (RuleViolation violation : violations) {
+            if ("FLINK-CONNECTOR-002".equals(violation.getId()) && violation.getStatus() == RuleStatus.FAIL) {
+                blocking = true;
+            }
+        }
+        Assert.assertTrue("未定义的 ${...} 必须 fail，实际: " + describe(violations), blocking);
+    }
+
+    /**
+     * 127.0.0.1 必须被拦：Flink 在 TaskManager 上建连，回环地址指的是 TM 自己。
+     *
+     * <p>2026-11-03 M1-01 实测模型把 source/sink 都写成 {@code jdbc:mysql://127.0.0.1:3306/traccar}，
+     * 而 {@code jdbc} 在 connector 白名单内，旧规则集完全没拦住。
+     */
+    /**
+     * 绑定到作业、但服务端取不到作业名（跨租户 / 已删除）时，PARAM-004 必须判 <b>unknown</b>。
+     *
+     * <p>加固前的行为是 expected=null → 跳过比对 → <b>pass</b>，等于"模型自报同名"或"干脆不传 name"
+     * 都能让这条规则形同虚设（2026-11-03 实测被绕过）。
+     */
+    @Test
+    public void boundTaskWithoutTaskNameIsUnknown() {
+        RuleContext context = RuleContext.builder()
+                .sql(resource("ai/benchmarks/B1_devices_ods.sql"))
+                .taskId(124)
+                .taskName(null)
+                .parallelism(2)
+                .clusterId(4)
+                .envId(122)
+                .build();
+        List<RuleViolation> violations = engine.validateDraft(context);
+        boolean unknown = false;
+        for (RuleViolation violation : violations) {
+            if ("FLINK-PARAM-004".equals(violation.getId()) && violation.getStatus() == RuleStatus.UNKNOWN) {
+                unknown = true;
+            }
+        }
+        Assert.assertTrue("已绑定作业但无作业名时必须 unknown，实际: " + describe(violations), unknown);
+    }
+
+    /**
+     * print 当交付 sink 必须判 fail。
+     *
+     * <p>2026-11-04 M1-01 实测：模型把 {@code 'connector' = 'print'} 写在结果表上。
+     * print 确实在连接器白名单内（集群已装），所以 {@code FLINK-CONNECTOR-001} 会判 pass，
+     * 而它只把数据打到 TaskManager 日志 —— 作业 RUNNING、无异常、一行没落库。
+     */
+    @Test
+    public void printAsSinkIsBlocking() {
+        String sql = "CREATE TABLE src (id INT) WITH ('connector' = 'kafka', "
+                + "'properties.bootstrap.servers' = 'kafka03:29092', 'topic' = 'traccar-cdc');\n"
+                + "CREATE TABLE sink (id INT) WITH ('connector' = 'print');\n"
+                + "INSERT INTO sink SELECT id FROM src;\n";
+        List<RuleViolation> violations = engine.validateDraft(contextOf(sql, null, 2));
+        boolean blocking = false;
+        for (RuleViolation violation : violations) {
+            if ("FLINK-SINK-004".equals(violation.getId()) && violation.getStatus() == RuleStatus.FAIL) {
+                blocking = true;
+            }
+        }
+        Assert.assertTrue("print 当交付 sink 必须 fail，实际: " + describe(violations), blocking);
+    }
+
+    /** 反过来：jdbc(ClickHouse) 当 sink 不能被这条规则误伤 */
+    @Test
+    public void jdbcSinkPassesPersistentCheck() {
+        String sql = "CREATE TABLE src (id INT) WITH ('connector' = 'kafka', "
+                + "'properties.bootstrap.servers' = 'kafka03:29092', 'topic' = 'traccar-cdc');\n"
+                + "CREATE TABLE sink (id INT) WITH ('connector' = 'jdbc', "
+                + "'url' = 'jdbc:clickhouse://doris05:38123/traccar', 'table-name' = 'dws_x');\n"
+                + "INSERT INTO sink SELECT id FROM src;\n";
+        List<RuleViolation> violations = engine.validateDraft(contextOf(sql, null, 2));
+        for (RuleViolation violation : violations) {
+            if ("FLINK-SINK-004".equals(violation.getId()) && violation.getStatus() == RuleStatus.FAIL) {
+                Assert.fail("jdbc sink 被 FLINK-SINK-004 误伤: " + describe(violations));
+            }
+        }
+    }
+
+    @Test
+    public void loopbackJdbcUrlIsBlocking() {
+        String sql = "CREATE TABLE src (id INT) WITH ('connector' = 'jdbc', "
+                + "'url' = 'jdbc:mysql://127.0.0.1:3306/traccar', 'table-name' = 'tc_positions');\n"
+                + "CREATE TABLE sink (id INT) WITH ('connector' = 'jdbc', "
+                + "'url' = 'jdbc:clickhouse://doris05:38123/traccar', 'table-name' = 'ods_x');\n"
+                + "INSERT INTO sink SELECT id FROM src;\n";
+        List<RuleViolation> violations = engine.validateDraft(contextOf(sql, null, 2));
+        List<String> blockingIds = new ArrayList<>();
+        for (RuleViolation violation : violations) {
+            if (violation.blocking()) {
+                blockingIds.add(violation.getId());
+            }
+        }
+        Assert.assertTrue("应命中 FLINK-URL-001，实际: " + blockingIds, blockingIds.contains("FLINK-URL-001"));
     }
 
     @Test

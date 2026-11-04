@@ -195,6 +195,10 @@ export enum API_CONSTANTS {
   AI_CHAT_CANCEL = '/api/aiChat/cancel',
   /** P1-A：{@code @topic/} 候选（名册版，零连接 Kafka） */
   AI_CHAT_MENTION_TOPICS = '/api/aiChat/mentionTopics',
+  // P2（2026-11-04）：@job/ 候选——本租户 FlinkSQL 作业清单（id + name）
+  AI_CHAT_MENTION_JOBS = '/api/aiChat/mentionJobs',
+  /** 规则校验直连接口（只读、不调模型）：前端「校验 SQL」按钮用，判据稳定且不消耗模型额度 */
+  AI_CHAT_VALIDATE_DRAFT = '/api/aiChat/validateDraft',
 
   /** --------------------------------------------  @ 候选统一索引（C1）  ------------------------------------------------------- */
   /**

@@ -78,6 +78,35 @@ public class SystemConfiguration {
             .defaultValue(true)
             .note(Status.SYS_FLINK_SETTINGS_USERESTAPI_NOTE);
 
+    /**
+     * AI 生成 FlinkSQL 时的默认 sink 数据源（P0，2026-11-03）。
+     *
+     * <p>只存数据源 id，不存连接串 —— 连接信息仍以注册中心的数据源为准，避免两处维护。
+     * {@code 0} 表示未配置：此时 AI 上下文明示"需用户 `@source/` 指定 sink"。
+     */
+    private final Configuration<Integer> aiDefaultSinkDataBaseId =
+            key(Status.SYS_FLINK_SETTINGS_AIDEFAULTSINKDATABASEID)
+                    .intType()
+                    .defaultValue(0)
+                    .note(Status.SYS_FLINK_SETTINGS_AIDEFAULTSINKDATABASEID_NOTE);
+
+    /**
+     * AI 默认 sink 数据源的<b>名称</b>（主通道，2026-11-03 起；空 = 未配置）。
+     *
+     * <p><b>为什么是名称而不是 id</b>：本配置存在 {@code dinky_sys_config} 里，没有 tenant_id，
+     * 是<b>全局配置</b>；而 {@code dinky_database.id} 只在租户内唯一，且查询走租户过滤。
+     * 早先存 id 的结果是"总有一个租户解析不到默认 sink"（2026-11-03 UAT 实测：配置 34 属于
+     * tenant 2，tenant 1 的上下文只能降级成'当前租户不可用'）。
+     *
+     * <p>名称同样是租户内唯一（{@code UNIQUE(name, tenant_id)}），但它允许<b>各租户各自注册一份</b>：
+     * 解析时只在当前租户内按名称查，用本租户自己的连接凭证。于是一份全局配置对所有租户都成立。
+     */
+    private final Configuration<String> aiDefaultSinkDataBaseName =
+            key(Status.SYS_FLINK_SETTINGS_AIDEFAULTSINKDATABASENAME)
+                    .stringType()
+                    .defaultValue("")
+                    .note(Status.SYS_FLINK_SETTINGS_AIDEFAULTSINKDATABASENAME_NOTE);
+
     private final Configuration<Integer> jobIdWait = key(Status.SYS_FLINK_SETTINGS_JOBIDWAIT)
             .intType()
             .defaultValue(30)
@@ -1305,6 +1334,27 @@ public class SystemConfiguration {
         return Asserts.isNull(llmSourceExpandMaxChars.getValue())
                 ? llmSourceExpandMaxChars.getDefaultValue()
                 : llmSourceExpandMaxChars.getValue();
+    }
+
+    /**
+     * @return AI 生成 FlinkSQL 的默认 sink 数据源 id（{@code 0} = 未配置）。
+     */
+    public int getAiDefaultSinkDataBaseId() {
+        Integer value = aiDefaultSinkDataBaseId.getValue();
+        Integer effective = Asserts.isNull(value) ? aiDefaultSinkDataBaseId.getDefaultValue() : value;
+        return effective == null ? 0 : effective;
+    }
+
+    /**
+     * @return AI 生成 FlinkSQL 的默认 sink 数据源<b>名称</b>（空串 = 未配置）。
+     *
+     * <p>与 {@link #getAiDefaultSinkDataBaseId()} 的关系：名称是主通道，
+     * 解析发生在<b>当前租户</b>内（各租户各自注册同名数据源）；id 仅在名称为空时兜底。
+     */
+    public String getAiDefaultSinkDataBaseName() {
+        return Asserts.isNullString(aiDefaultSinkDataBaseName.getValue())
+                ? aiDefaultSinkDataBaseName.getDefaultValue()
+                : aiDefaultSinkDataBaseName.getValue();
     }
 
     /**

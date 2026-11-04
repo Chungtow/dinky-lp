@@ -88,7 +88,11 @@ public class AiToolRegistry {
             // M1 审作业：FlinkSQL 作业本就没有绑定数据源，而这两个工具正是为它准备的。
             // 不在白名单 = FlinkSQL 对话里永远调不到（validate_task_draft 就白做了）。
             "validate_task_draft",
-            "create_task");
+            "create_task",
+            // P1（2026-11-04）：列举 Kafka topic 走的是 broker 元数据，与数据源绑定无关。
+            // 不在此列出的话，FlinkSQL 对话里模型永远无法确认 topic 是否存在——
+            // 而这正是它编出 'topic'='ods_traccar_tc_events' 的直接原因。
+            "list_topics");
 
     /**
      * 阶段 4b：按「是否绑定数据源」过滤后的工具清单。

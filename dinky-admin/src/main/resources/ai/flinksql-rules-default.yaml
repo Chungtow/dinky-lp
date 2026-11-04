@@ -118,19 +118,36 @@ rules:
     phase: draft
     tier: primary
     message: "作业用了本集群未安装的 connector（白名单外），提交阶段会报 Could not find any factories"
-    fix: "改用白名单内的 connector：源用 kafka / upsert-kafka，写用 jdbc（目标 ClickHouse）。本集群没有 hive / doris / elasticsearch connector，换 sink 引擎请先找平台加 jar"
-    evidence: "2026-11-03 M1-01 实测：模型给整段作业配了 'connector' = 'hive' + 'hive-version' = '3.1.2'；集群 /opt/bigdata/flink/flink-1.17.2/lib 只有 flink-connector-kafka / flink-connector-jdbc / clickhouse-dialect / clickhouse-jdbc，提交阶段必报 Could not find any factories"
-    prompt: "只能用集群已装的 connector（kafka / upsert-kafka / jdbc / datagen / print / blackhole / filesystem），禁止写 hive / doris / elasticsearch"
+    fix: "改用白名单内的 connector：源用 kafka / upsert-kafka / mysql-cdc，写用 jdbc（目标 ClickHouse）或 doris。本集群没有 hive / elasticsearch / hbase connector —— 要读 Hive 表时**不要**写 hive DDL：先用 `@source/<数据源>/<库>/<表>` 拿到字段口径，再改走 Kafka 链路（topic 见上下文「平台链路约定」），并把这个限制明确告知用户"
+    evidence: "2026-11-03 M1-01 实测：模型给整段作业配了 'connector' = 'hive' + 'hive-version' = '3.1.2'，提交阶段必报 Could not find any factories。注：运行时白名单优先取部署层生成的能力画像（flink-capabilities.yaml，探测 Flink lib），这里只是画像不可用时的兜底清单"
+    prompt: "只能用集群已装的 connector（kafka / upsert-kafka / mysql-cdc / jdbc / doris / datagen / print / blackhole / filesystem），禁止写 hive / elasticsearch / hbase"
     check:
       kind: sql.connector_whitelist
+      # 兜底清单：能力画像不可用时才生效
       allowed:
         - kafka
         - upsert-kafka
+        - mysql-cdc
         - jdbc
+        - doris
         - datagen
         - print
         - blackhole
         - filesystem
+
+  - id: FLINK-URL-001
+    title: jdbc url 不得指向本机地址
+    severity: error
+    phase: draft
+    check:
+      kind: sql.jdbc_url_conformance
+    message: |
+      Flink 的 JDBC connector 在 TaskManager 上建连，`127.0.0.1` / `localhost` 指向的是 TM 自己，
+      不是开发机上的 MySQL / ClickHouse。这类作业提交后必报 Connection refused，
+      而 SQL 语法、connector 白名单全都"看起来没问题"，排查成本极高。
+    fix: "改成集群内可解析、TM 侧可连通的主机：ClickHouse 用 jdbc:clickhouse://doris05:38123/traccar；MySQL 维表用 jdbc:mysql://manager:33306/traccar"
+    evidence: "2026-11-03 M1-01 实测：模型把 source 与 sink 同时写成 'url' = 'jdbc:mysql://127.0.0.1:3306/traccar'；因 jdbc 在 connector 白名单内，FLINK-CONNECTOR-001 不会拦，规则库对『数据通道错误』完全失明。"
+    prompt: "jdbc url 禁止 127.0.0.1 / localhost / 0.0.0.0，必须用集群可解析的主机名"
 
   - id: FLINK-FORMAT-001
     title: 含窗口聚合时不得使用 changelog format 作为源
@@ -488,6 +505,91 @@ rules:
       与 CH 侧 insert-only 的相反结论共同构成 K7「按目标库能力分型」。
       2026-11-02 核对：生产 dinky 库 FlinkSql 作业 2 个，全部写 Doris。
     prompt: "写 Doris 时若 SQL 会产生回撤（聚合/Top-N/JOIN），必须声明 PRIMARY KEY(...) NOT ENFORCED 且 sink.parallelism=1"
+
+  # 2026-11-04（M1-01 复盘）：print/datagen/blackhole 都在 connector 白名单内，
+  # 白名单规则会判 pass，于是"用 print 当交付 sink"整条链路看起来通过、实际一行没落库。
+  - id: FLINK-SINK-004
+    title: 交付 sink 不能是调试 connector（print / datagen / blackhole）
+    severity: error
+    tier: primary
+    phase: draft
+    check:
+      kind: sql.sink_persistent
+      # 兜底清单：能力画像不可用时才生效（正常情况取 flink-capabilities.yaml 的 debug_connectors）
+      debug_connectors: [print, datagen, blackhole]
+    message: |
+      INSERT INTO 的目标表配了 print / datagen / blackhole：数据不会落库
+      （print 只打到 TaskManager 日志），但作业显示 RUNNING、checkpoint 也正常，
+      是最容易"看起来成功、实际没产出"的失败模式。它们的存在意义只是本地验证链路。
+    fix: |
+      sink 换成默认 sink 数据源（上下文「平台默认配置 → 默认 sink 数据源」给出的那个库，
+      本集群通常是 ClickHouse），目标表用该库已存在的表（表清单见同一段落）；
+      调试 connector 只在临时验证时用，不写进交付 SQL。
+    evidence: |
+      2026-11-04 M1-01 实测：模型把 'connector' = 'print' 当作交付 sink 写在结果表上，
+      connector 白名单校验放行（print 确实是集群已装），结果整条链路无落库。
+    prompt: "交付 sink 必须是 jdbc(ClickHouse) 或 doris；print/datagen/blackhole 只能临时验证，禁止写进交付 SQL 的 sink"
+
+  - id: FLINK-CONNECTOR-002
+    title: 禁止臆造 ${...} 全局变量
+    severity: error
+    tier: primary
+    phase: draft
+    check:
+      kind: sql.undefined_variable
+    message: |
+      SQL 里引用了不存在的 ${...}。${...} 是 Dinky 的全局变量 / JEXL 语法，**不是** Flink 语法：
+      变量未定义时，开关打开 → 提交阶段抛 "The variable name or jexl key of sql ... does not exist"；
+      开关关闭 → 占位符原样下发，Flink 报 Encountered "$"。两种都是提交阶段失败，
+      而草稿看上去字段、connector、表名全对，排查成本极高。
+    fix: |
+      删掉所有 ${...}：连接串与账号口令直接用上下文「平台默认配置」给出的真实值
+      （Kafka 用 properties.bootstrap.servers = 'kafka03:29092,kafka04:29092,kafka05:29092'），
+      sink 的 username / password 用默认 sink 数据源自己的；不确定时**省略这两个选项**并在 precheck 写 unknown。
+    evidence: |
+      2026-11-04 M1-01 第六轮实测：模型产出 ${kafka.bootstrap.servers} / ${clickhouse.jdbc.url} /
+      ${clickhouse.username} / ${clickhouse.password} 一整套臆造变量——上下文里已给出真实地址与
+      「已定义的全局变量」清单（为空），仅靠 prompt 约束不住。
+    prompt: "禁止写 ${...} 占位符；连接串与账号直接用上下文给出的真实值，不确定就省略并在 precheck 标 unknown"
+
+  - id: FLINK-SOURCE-001
+    title: Kafka topic 必须是平台已知 topic
+    severity: error
+    tier: primary
+    phase: draft
+    check:
+      kind: sql.kafka_topic_known
+    message: |
+      声明的 topic 在平台画像与作业名册里都不存在。**topic 名不是表名**：
+      本集群业务变更流是 traccar-cdc，一个 topic 里混有多张表（tc_events / tc_positions / tc_devices 等），
+      要靠 canal-json.table.include 过滤到单表。topic 写错时作业能提交、运行期一直空跑。
+    fix: |
+      把 'topic' 改成已知 topic（traccar-cdc），格式用 'format' = 'raw'（**不要用 canal-json**：
+      它是 changelog format，窗口聚合吃不下 -U/+U），并用 JSON_VALUE(payload,'$.table') = '<源表名>' 过滤单表。
+      取字段用计算列：device_id AS CAST(JSON_VALUE(payload,'$.data[0].deviceid') AS BIGINT)。
+    evidence: |
+      2026-11-04 M1-01 第六轮实测：模型写出 'topic' = 'ods_traccar_tc_events'（把 Hive 表名当 topic），
+      该 topic 不存在；同时 'format' 错配成 json，canal 报文根本解析不出来。
+    prompt: "Kafka 源 topic 只能用平台画像列出的（traccar-cdc），配 canal-json + table.include；禁止用表名当 topic"
+
+  - id: FLINK-SINK-005
+    title: sink 目标表必须在默认 sink 库中已存在
+    severity: error
+    tier: primary
+    phase: draft
+    check:
+      kind: sql.sink_table_exists
+    message: |
+      INSERT INTO 的目标表在默认 sink 库里不存在。Flink 侧 CREATE TABLE 只是逻辑映射、不会建表，
+      所以作业能提交成功、显示 RUNNING，直到第一条数据进 sink 才失败（或 sink 缓冲满才报）。
+    fix: |
+      从上下文「默认 sink 数据源」段落列出的**已存在表**里选一张（本集群 ClickHouse traccar 库：
+      dws_device_position_window 适合窗口/按天聚合、dws_event_minute、dwd_tc_events_enriched、ods_tc_devices）；
+      确实要新表就先给出建表 DDL 并让用户确认。
+    evidence: |
+      2026-11-04 M1-01 第六轮实测：模型编了 traccar.dws_traccar_device_position_top5_df，
+      库里实际只有 4 张表，没有这一张。
+    prompt: "sink 的 table-name 必须取自上下文「默认 sink 数据源」列出的已存在表，禁止编表名"
 
   - id: FLINK-DORIS-001
     title: 【Doris】按天聚合明细表用 UNIQUE KEY(stat_date) + Merge-on-Write

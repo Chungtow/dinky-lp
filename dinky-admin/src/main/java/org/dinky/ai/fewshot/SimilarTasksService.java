@@ -22,6 +22,7 @@ package org.dinky.ai.fewshot;
 import org.dinky.ai.rule.FlinkSqlRuleEngine;
 import org.dinky.ai.rule.RuleContext;
 import org.dinky.config.Dialect;
+import org.dinky.context.TenantContextHolder;
 import org.dinky.data.model.Task;
 import org.dinky.service.TaskService;
 
@@ -29,6 +30,8 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -104,8 +107,32 @@ public class SimilarTasksService {
         return result;
     }
 
-    /** L2：本租户线上 FlinkSQL 作业（脏数据由 draft 档规则挡掉） */
+    /** L2 候选缓存：跑规则校验有成本（最多 200 个作业），按租户缓存 5 分钟 */
+    private static final long L2_TTL_MS = 300_000L;
+
+    private final Map<String, CachedCandidates> l2Cache = new ConcurrentHashMap<>();
+
+    /**
+     * L2：本租户线上 FlinkSQL 作业（脏数据由 draft 档规则挡掉）。
+     *
+     * <p><b>2026-11-04 加缓存</b>：P0 把召回接进对话链路后，本方法会在**每次提问**时被调用；
+     * 而它要对最多 200 个作业逐个跑 {phase=draft} 规则校验，实测单次 1~2 秒。
+     * 不缓存的话，用户每问一句都要等这段扫描——而召回本身是"检索"，没理由比生成还慢。
+     * 按租户缓存 5 分钟：够覆盖一轮对话，又不至于让刚改过的作业长期以旧版出现。
+     */
     private List<SimilarTask> dynamicCandidates() {
+        String key = String.valueOf(TenantContextHolder.get());
+        CachedCandidates cached = l2Cache.get(key);
+        long now = System.currentTimeMillis();
+        if (cached != null && now - cached.loadedAt < L2_TTL_MS) {
+            return cached.items;
+        }
+        List<SimilarTask> loaded = loadDynamicCandidates();
+        l2Cache.put(key, new CachedCandidates(loaded, now));
+        return loaded;
+    }
+
+    private List<SimilarTask> loadDynamicCandidates() {
         List<SimilarTask> candidates = new ArrayList<>();
         List<Task> tasks;
         try {
@@ -227,5 +254,18 @@ public class SimilarTasksService {
         json.set("ddl", item.getDdl());
         json.set("precheck", item.getPrecheck());
         return json;
+    }
+
+    /** L2 候选缓存项 */
+    private static final class CachedCandidates {
+
+        private final List<SimilarTask> items;
+
+        private final long loadedAt;
+
+        private CachedCandidates(List<SimilarTask> items, long loadedAt) {
+            this.items = items;
+            this.loadedAt = loadedAt;
+        }
     }
 }

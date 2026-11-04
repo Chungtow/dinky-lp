@@ -230,6 +230,15 @@ export type AiChatMentionItem = {
     | 'topic'
     | 'env'
     /**
+     * P2（2026-11-04）：{@code @job/} 候选（本租户 FlinkSQL 作业）。
+     *
+     * <p><b>为什么另起一个 type 而不是复用 `job`</b>：已有的 `job` 表示"其它已打开标签页"，
+     * 它的 {@code content} 是**前端内存里的 SQL 正文**，选中即把正文塞进上下文；
+     * 而 `job-ref` 只是**作业名**，正文由后端按名/ id 去查库（`JobRefRenderer`）——
+     * 两者数据来源与注入路径都不同。选中落地时会转回 `job` 再上报给后端。
+     */
+    | 'job-ref'
+    /**
      * P3b：语义资产引用。{@code name} 存**路径式句柄**（{@code project} 或 {@code project/asset}），
      * 与后端 {@code MentionType.SEMANTIC} 及 {@code AiChatMention.name} 的存法一致（D19）。
      */
@@ -426,6 +435,45 @@ export const getAiChatConfig = async (): Promise<AiChatConfig> => {
   return (res?.data ?? {}) as AiChatConfig;
 };
 
+/** 规则校验报告里的一条违规（后端 {@code RuleReport} 同结构） */
+export type AiRuleViolation = {
+  id?: string;
+  title?: string;
+  severity?: string; // error / warn
+  phase?: string; // draft / precheck / runtime
+  status?: string; // fail / unknown
+  message?: string;
+  fix?: string;
+  detail?: string;
+};
+
+export type AiRuleReport = {
+  passed?: boolean;
+  counts?: { error?: number; warn?: number; unknown?: number };
+  violations?: AiRuleViolation[];
+  message?: string;
+};
+
+/**
+ * 规则校验**直连**（不经过大模型）。
+ *
+ * <p><b>为什么要有这条路</b>：审核类问题让模型转述会出现两种失真——模型压根没调校验工具
+ * （实测 tool_call_count=0 却照样输出"命中/未命中"），或把 error 说成建议。
+ * 按钮直连拿到的是规则引擎原文，判据稳定且不消耗模型额度。
+ */
+export const validateFlinkDraft = async (params: {
+  sql: string;
+  name?: string;
+  parallelism?: number;
+  taskId?: number;
+  envId?: number;
+  clusterId?: number;
+  customConfig?: { key: string; value: string }[];
+}): Promise<AiRuleReport> => {
+  const res: any = await postAll(API_CONSTANTS.AI_CHAT_VALIDATE_DRAFT, params);
+  return (res?.data ?? res ?? {}) as AiRuleReport;
+};
+
 /**
  * 拉取当前用户可见的 skill 列表（阶段 4a：{@code @skill/<名>} 的候选来源）。
  *
@@ -439,17 +487,40 @@ export const getAiChatConfig = async (): Promise<AiChatConfig> => {
  * 不新增后端接口。失败时返回空数组（不阻断输入框）。
  */
 /**
- * P1-A：{@code @topic/} 候选（**名册版**）。
+ * P1-A：{@code @topic/} 候选。
  *
- * <p>后端取值全部来自命名名册（本租户 `FlinkSql`/`FlinkSqlEnv` 作业的 DDL），
- * **不连接 Kafka**——因此候选只含"已被作业使用"的 topic；
- * "平台里存在但没任何作业消费"的 topic 需等批次 2 的 {@code list_topics}。
+ * <p>2026-11-04 更新：后端已改为 **broker 实时列举 ∪ 名册**。
+ * 此前只给名册（"已被作业使用"的 topic），导致平台上真实存在、但还没有作业消费过的 topic
+ * 在 `@` 菜单里根本选不到——用户只能手打，手打错了还不知道。
  */
 export const listMentionTopics = async (): Promise<string[]> => {
   try {
     const res: any = await getData(API_CONSTANTS.AI_CHAT_MENTION_TOPICS);
-    return res ?? [];
+    // 2026-11-04 修：全局响应拦截器返回的是**整个 body**（`{code,data,msg,time}`），不是 `data`。
+    // 这里原先写 `return res ?? []`，拿到的是对象，上层 `.map` 直接抛 TypeError，
+    // 又被本函数的 catch 吞成 `[]` —— 于是候选永远是空，且**一点报错都看不到**。
+    // 即：`@topic/` 候选自 P1-A 上线起就没有真正工作过。
+    return (res?.data ?? res ?? []) as string[];
   } catch (e) {
+    // 别静默吞：候选"无缘无故为空"是最难排查的一类问题（本次就查了半天才发现是解包写错）
+    console.warn('[aiChat] listMentionTopics failed', e);
+    return [];
+  }
+};
+
+/**
+ * P2（2026-11-04）：{@code @job/} 候选——本租户 FlinkSQL 作业清单。
+ *
+ * <p>返回 `{id, name}`，插入到输入框时写成 `@job/<name>`（重名时用 id 更稳，
+ * 后端两种都认）。
+ */
+export const listMentionJobs = async (): Promise<{ id: number; name: string }[]> => {
+  try {
+    const res: any = await getData(API_CONSTANTS.AI_CHAT_MENTION_JOBS);
+    // 同 listMentionTopics：必须解包 `res.data`，否则拿到的是整个 Result 对象
+    return (res?.data ?? res ?? []) as { id: number; name: string }[];
+  } catch (e) {
+    console.warn('[aiChat] listMentionJobs failed', e);
     return [];
   }
 };

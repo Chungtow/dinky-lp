@@ -19,6 +19,8 @@
 
 package org.dinky.ai.rule.check;
 
+import org.dinky.ai.context.FlinkCapabilities;
+import org.dinky.ai.context.FlinkCapabilitiesLoader;
 import org.dinky.ai.rule.Rule;
 import org.dinky.ai.rule.RuleCheck;
 import org.dinky.ai.rule.RuleContext;
@@ -31,18 +33,23 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * {@code sql.connector_whitelist}：connector 必须在本集群已安装的白名单内。
+ * {@code sql.connector_whitelist}：connector 必须在本集群<b>真实已安装</b>的白名单内。
  *
  * <p><b>为什么单列一条规则</b>：这是"硬失败"而不是"风格问题"——模型的通用知识里
- * Flink 支持 hive/doris/elasticsearch，但本集群 Flink lib 只有 kafka + jdbc + CH。
+ * Flink 支持 hive/doris/elasticsearch，但本集群 Flink lib 只有 kafka + jdbc + CH（+ doris/CDC）。
  * 写错的代价是提交阶段 {@code Could not find any factories}，排查成本极高
  * （2026-11-03 M1-01 实测：模型给整段作业配了 {@code 'connector' = 'hive'} 和
  * {@code 'hive-version' = '3.1.2'}）。
+ *
+ * <p><b>白名单来源优先级</b>：① 集群能力画像（部署脚本探测 Flink lib 生成，反映真实 jar）；
+ * ② 规则里的 {@code allowed}（画像不可用时的兜底）。若只信规则里的硬编码清单，
+ * 集群加/减 jar 后校验就会与事实相反（加：误拦可用 connector；减：放过不可用 connector）。
  *
  * <p>与「平台运行画像」互补：画像负责<b>事先告知</b>，本条负责<b>事后拦截</b>。
  *
@@ -52,6 +59,18 @@ import lombok.extern.slf4j.Slf4j;
 @Component
 public class ConnectorWhitelistCheck implements RuleCheck {
 
+    /** 为空时退化为规则内的 allowed 清单（单测与画像缺失场景） */
+    private final FlinkCapabilitiesLoader capabilitiesLoader;
+
+    public ConnectorWhitelistCheck() {
+        this(null);
+    }
+
+    @Autowired
+    public ConnectorWhitelistCheck(FlinkCapabilitiesLoader capabilitiesLoader) {
+        this.capabilitiesLoader = capabilitiesLoader;
+    }
+
     @Override
     public String kind() {
         return "sql.connector_whitelist";
@@ -59,13 +78,19 @@ public class ConnectorWhitelistCheck implements RuleCheck {
 
     @Override
     public RuleOutcome check(Rule rule, RuleContext context) {
-        List<String> allowed = CheckParams.strings(rule, "allowed");
-        if (allowed.isEmpty()) {
-            return RuleOutcome.unknown("规则未配置 allowed 白名单，跳过 connector 校验");
-        }
         Set<String> allowedSet = new LinkedHashSet<>();
-        for (String item : allowed) {
-            allowedSet.add(item.toLowerCase(Locale.ROOT));
+        String source = "规则配置";
+        FlinkCapabilities capabilities = loadCapabilities();
+        if (capabilities != null && !capabilities.allConnectors().isEmpty()) {
+            allowedSet.addAll(capabilities.allConnectors());
+            source = "集群能力画像";
+        } else {
+            for (String item : CheckParams.strings(rule, "allowed")) {
+                allowedSet.add(item.toLowerCase(Locale.ROOT));
+            }
+        }
+        if (allowedSet.isEmpty()) {
+            return RuleOutcome.unknown("能力画像与规则 allowed 均不可用，跳过 connector 校验");
         }
         Set<String> unknown = new LinkedHashSet<>();
         List<String> used = new ArrayList<>();
@@ -84,9 +109,21 @@ public class ConnectorWhitelistCheck implements RuleCheck {
             return RuleOutcome.notApplicable("SQL 未声明 connector（无 CREATE TABLE ... WITH）");
         }
         if (!unknown.isEmpty()) {
-            return RuleOutcome.fail("使用了本集群未安装的 connector: " + String.join(", ", unknown) + "（可用: "
+            return RuleOutcome.fail("使用了本集群未安装的 connector: " + String.join(", ", unknown) + "（" + source + "白名单: "
                     + String.join(", ", allowedSet) + "）");
         }
         return RuleOutcome.pass("connector 均在白名单内: " + String.join(", ", used));
+    }
+
+    private FlinkCapabilities loadCapabilities() {
+        if (capabilitiesLoader == null) {
+            return null;
+        }
+        try {
+            return capabilitiesLoader.capabilities();
+        } catch (Exception e) {
+            log.debug("connector whitelist: capabilities unavailable, fallback to rule allowed", e);
+            return null;
+        }
     }
 }

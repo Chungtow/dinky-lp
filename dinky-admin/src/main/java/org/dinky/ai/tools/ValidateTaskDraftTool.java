@@ -23,14 +23,11 @@ import org.dinky.ai.AiTool;
 import org.dinky.ai.AiToolContext;
 import org.dinky.ai.AiToolResult;
 import org.dinky.ai.AiToolSpec;
+import org.dinky.ai.context.AiTaskBinding;
 import org.dinky.ai.draft.FlinkJobDraft;
-import org.dinky.ai.draft.RuleReport;
-import org.dinky.ai.rule.FlinkSqlRuleEngine;
-import org.dinky.ai.rule.RuleContext;
-import org.dinky.ai.rule.RuleViolation;
+import org.dinky.ai.rule.RuleValidationService;
 
 import java.util.Collections;
-import java.util.List;
 
 import org.springframework.stereotype.Component;
 
@@ -55,7 +52,8 @@ public class ValidateTaskDraftTool implements AiTool {
 
     public static final String NAME = "validate_task_draft";
 
-    private final FlinkSqlRuleEngine ruleEngine;
+    /** 与前端「校验当前 SQL」按钮共用同一实现，避免"按钮说通过、模型说违规" */
+    private final RuleValidationService ruleValidationService;
 
     @Override
     public String name() {
@@ -98,19 +96,35 @@ public class ValidateTaskDraftTool implements AiTool {
         if (!draft.hasSql()) {
             return AiToolResult.failure("缺少必填参数 sql（完整 FlinkSQL 作业）", System.currentTimeMillis() - start);
         }
-        RuleContext ruleContext = draft.toRuleContext();
-        if (context != null) {
-            ruleContext.setTenantId(context.getTenantId());
-            ruleContext.setRequestSnapshot(context.getRequestSnapshot());
-        }
-        List<RuleViolation> violations = ruleEngine.validate(ruleContext);
-        ruleEngine.sort(violations);
-        JSONObject report = RuleReport.build(RuleReport.meaningful(violations));
-        log.info(
-                "validate_task_draft: passed={} error={}",
-                report.getBool("passed"),
-                report.getJSONObject("counts").getInt("error"));
+        applyServerBinding(draft, context);
+        JSONObject report = ruleValidationService.validate(
+                draft,
+                context == null ? null : context.getTenantId(),
+                context == null ? null : context.getRequestSnapshot());
         return AiToolResult.success(report.toString(), System.currentTimeMillis() - start);
+    }
+
+    /**
+     * 用服务端的作业信息覆盖模型自报值。
+     *
+     * <p>动机见 {@link org.dinky.ai.context.AiTaskBinding}：不覆盖时，模型只要把 {@code name}
+     * 传成自己写的 {@code pipeline.name}，{@code FLINK-PARAM-004} 就会"自证通过"。
+     *
+     * <p>只在<b>已存在作业</b>（binding 非空）时覆盖：新建作业场景没有权威作业名，模型取名是合法的。
+     */
+    private static void applyServerBinding(FlinkJobDraft draft, AiToolContext context) {
+        AiTaskBinding binding = context == null ? null : context.getTaskBinding();
+        if (binding == null) {
+            return;
+        }
+        draft.setTaskId(binding.getTaskId());
+        // 拿不到权威作业名时**清空**而不是沿用模型自报值：
+        // 否则模型照旧可以自报一个与自己 pipeline.name 同名的作业名来"自证一致"。
+        // 清空后由校验器判 unknown（已绑定作业但无法确认作业名），不会静默放过。
+        draft.setName(binding.hasTaskName() ? binding.getTaskName() : null);
+        if (binding.getParallelism() != null) {
+            draft.setParallelism(binding.getParallelism());
+        }
     }
 
     private static JSONObject arrayProperty(String description) {
