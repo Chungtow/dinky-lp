@@ -88,6 +88,8 @@ export default {
   'button.autoWrap': 'Auto Wrap/Unwrap',
   'button.output': 'Output',
   'button.ava': 'Automated insights',
+  'button.setting.columns': 'Column settings',
+  'button.fullscreen': 'Full screen',
 
   'menu.menu': 'Menu',
   'right.menu.open': 'Open',

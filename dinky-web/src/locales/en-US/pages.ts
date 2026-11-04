@@ -594,6 +594,8 @@ export default {
     'The data is too long to be displayed in full',
   'pages.datastudio.label.result.tab': 'Result',
   'pages.datastudio.label.result.clear.all': 'Clear all results',
+  'pages.datastudio.label.result.clear.all.confirm': 'Clear all results? This cannot be undone.',
+  'pages.datastudio.label.result.empty': 'Results will appear here as separate tabs after execution',
   'pages.datastudio.label.version': 'Version History',
   'pages.datastudio.label.version.diff': 'Version Diff',
   'pages.datastudio.label.version.leftTitle':
