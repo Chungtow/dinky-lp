@@ -60,6 +60,18 @@ export type SkillCreateParams = {
   visibility?: SkillVisibility;
 };
 
+/**
+ * 带正文新建资产入参（2026-11-04「消息操作」批次）。
+ *
+ * 与 `SkillCreateParams` 的唯一区别是多一个 `content`：后端在同一事务里建目录、
+ * 拼 frontmatter（`name` / `description` 由服务端生成）、写正文、落元数据，新资产版本停在 1。
+ * `content` 传空则退化为普通新建（模板正文）。
+ */
+export type SkillCreateWithContentParams = SkillCreateParams & {
+  /** 主文件正文，**不含 frontmatter**（服务端拼装） */
+  content?: string;
+};
+
 /** 修改可见性入参（2026-10-14 三档） */
 export type SkillVisibilityParams = {
   id: number;

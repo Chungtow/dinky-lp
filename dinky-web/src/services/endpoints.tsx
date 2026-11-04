@@ -236,6 +236,8 @@ export enum API_CONSTANTS {
   SKILL_LIST = '/api/skill/list',
   SKILL_DETAIL = '/api/skill/detail',
   SKILL_CREATE = '/api/skill/create',
+  /** 2026-11-04：建资产并直接写入正文（同一事务，frontmatter 由服务端拼） */
+  SKILL_CREATE_WITH_CONTENT = '/api/skill/createWithContent',
   SKILL_SAVE = '/api/skill/save',
   SKILL_REMOVE = '/api/skill/remove',
   // 2026-10-14 三档可见性：修改 skill/doc 可见性（private / tenant / public）

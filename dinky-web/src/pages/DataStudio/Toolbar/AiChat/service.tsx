@@ -157,6 +157,20 @@ export type AiChatFinish = {
 
 /** 页面内的一条消息（reasoning 为模型的思考过程，仅部分模型提供） */
 export type AiChatMessage = {
+  /**
+   * 前端消息身份（2026-11-04「消息操作」批次新增）。
+   *
+   * <p>只在本会话内有效，<b>不发给后端</b>——后端不存对话正文（{@code history} 只映射
+   * {@code role+content}），多发字段没有接收方。它解决两件事：React key 稳定、删除后
+   * 「思考过程」展开态不串位（此前二者都用列表 index，一删就错位）。
+   */
+  id: string;
+  /**
+   * 轮次身份：一问一答共享同一个值。
+   *
+   * <p>「删一条 = 删一轮」的依据。发送时两条一起生成，此后不再变。
+   */
+  roundId: string;
   role: AiChatRole;
   content: string;
   reasoning?: string;

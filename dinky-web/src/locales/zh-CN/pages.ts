@@ -644,6 +644,20 @@ export default {
   'datastudio.aiChat.copyFailed': '复制失败，请手动选中后复制',
   'datastudio.aiChat.showReasoning': '查看思考过程',
   'datastudio.aiChat.hideReasoning': '收起思考过程',
+  // 2026-11-04：消息操作（复制 / 编辑 / 删除 / 沉淀）
+  'datastudio.aiChat.msg.copyQuestion': '复制问题',
+  'datastudio.aiChat.msg.copyAnswer': '复制回答',
+  'datastudio.aiChat.msg.edit': '编辑',
+  'datastudio.aiChat.msg.delete': '删除',
+  'datastudio.aiChat.msg.deleteTitle': '删除这一轮问答？',
+  'datastudio.aiChat.msg.deleteConfirm':
+    '该轮的问题与回答会一起移除，之后的问题不会再引用它们（仅影响本页面，不涉及服务端记录）。',
+  'datastudio.aiChat.msg.editHandleLost':
+    '原问题里的 @ 引用已变成普通文本，如需引用请重新选择',
+  'datastudio.aiChat.msg.saveAsDoc': '保存为知识文档',
+  'datastudio.aiChat.msg.pushToKb': '推送到知识库',
+  'datastudio.aiChat.saveAsDoc.hint': '本轮 AI 回答将作为正文保存（共 {chars} 字）',
+  'datastudio.aiChat.saveAsDoc.done': '已保存为知识文档：{name}（注册中心 → Skills 可查看）',
   'datastudio.aiChat.verify.verifying': '正在校验 SQL 是否可执行…',
   'datastudio.aiChat.verify.verified': '校验通过：可执行',
   'datastudio.aiChat.verify.retrying': '执行失败，正在自动修复…',
