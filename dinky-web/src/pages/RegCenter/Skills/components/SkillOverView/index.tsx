@@ -34,6 +34,8 @@ import {
   updateSkillVisibility
 } from '../../service';
 import SkillFilePanel from '../SkillFilePanel';
+import CreateAssetModal from '../CreateAssetModal';
+import type { CreateAssetValues } from '../CreateAssetModal';
 import { notifyHandleValidation } from '../handleValidation';
 import type { SkillInfo } from '@/types/RegCenter/skill';
 
@@ -58,7 +60,6 @@ const SkillOverView = () => {
    * skill 与 doc 共用同一套后端能力与表单，只在入口按钮上区分（doc 落在 docs/<name>/DOC.md）。
    */
   const [createAssetType, setCreateAssetType] = useState<'skill' | 'doc'>('skill');
-  const [createForm] = Form.useForm();
   // 批次 F：editing 里带上 version——保存时作为乐观锁的编辑起点，
   // 避免"注册中心弹窗"与"数据开发 skill tab"同时编辑时静默覆盖。
   const [editing, setEditing] = useState<{ id: number; name: string; content: string; version?: number }>();
@@ -185,13 +186,18 @@ const SkillOverView = () => {
     }
   };
 
-  const handleCreate = async () => {
-    const values = await createForm.validateFields();
-    await createSkill({ ...values, assetType: createAssetType }, () => {
-      setCreateOpen(false);
-      createForm.resetFields();
-    });
-    await load();
+  /**
+   * 新建 skill / 知识文档（2026-11-04：表单已下沉到 `CreateAssetModal`，这里只剩提交）。
+   *
+   * <p>返回 `Boolean(ok)` 交给组件判成功——`createSkill` 走 `handleOption`，业务失败
+   * 同样 resolve（返回 undefined），不能靠异常判失败。
+   */
+  const handleCreate = async (values: CreateAssetValues) => {
+    const ok = await createSkill({ ...values, assetType: createAssetType });
+    if (ok) {
+      await load();
+    }
+    return Boolean(ok);
   };
 
   const columns = [
@@ -339,53 +345,13 @@ const SkillOverView = () => {
         onClose={() => setFilePanel(undefined)}
       />
 
-      <Modal
+      {/* 新建 skill / 知识文档：表单已下沉为公共组件（2026-11-04），AI Chat 复用同一份 */}
+      <CreateAssetModal
         open={createOpen}
-        title={
-          createAssetType === 'doc' ? l('pages.skill.createDocTitle') : l('pages.skill.createTitle')
-        }
-        okText={l('button.create')}
-        cancelText={l('button.cancel')}
+        assetType={createAssetType}
+        onSubmit={handleCreate}
         onCancel={() => setCreateOpen(false)}
-        onOk={handleCreate}
-      >
-        <Form form={createForm} layout={'vertical'}>
-          <Form.Item
-            name={'name'}
-            label={l('pages.skill.name')}
-            rules={[
-              { required: true, message: l('pages.skill.nameRequired') },
-              { pattern: /^[a-z0-9][a-z0-9-]{1,63}$/, message: l('pages.skill.nameRule') }
-            ]}
-          >
-            <Input placeholder={'dw-sql-review'} />
-          </Form.Item>
-          <Form.Item
-            name={'description'}
-            label={l('pages.skill.description')}
-            rules={[{ required: true, message: l('pages.skill.descriptionRequired') }]}
-          >
-            <Input placeholder={l('pages.skill.descriptionPlaceholder')} />
-          </Form.Item>
-          {/* 2026-10-14 三档可见性：创建时即可选择（默认私有），创建后可在列表行「可见性」中修改 */}
-          <Form.Item
-            name={'visibility'}
-            label={l('pages.skill.visibility')}
-            initialValue={'private'}
-          >
-            <Select
-              options={[
-                { value: 'private', label: l('pages.skill.visibilityPrivate') },
-                { value: 'tenant', label: l('pages.skill.visibilityTenant') },
-                { value: 'public', label: l('pages.skill.visibilityPublic') }
-              ]}
-            />
-          </Form.Item>
-          <div style={{ color: 'rgba(0, 0, 0, 0.45)', fontSize: 12 }}>
-            {l('pages.skill.visibilityHint')}
-          </div>
-        </Form>
-      </Modal>
+      />
 
       {/* 2026-10-14 三档可见性：修改可见性（仅属主；设为「全体公开」还需 registration:skill:share 权限） */}
       <Modal

@@ -22,6 +22,7 @@ import { postAll } from '@/services/api';
 import { API_CONSTANTS } from '@/services/endpoints';
 import {
   SkillCreateParams,
+  SkillCreateWithContentParams,
   SkillDetail,
   SkillFileNode,
   SkillFileRenameParams,
@@ -50,6 +51,19 @@ export const detailSkill = async (id: number): Promise<SkillDetail | undefined> 
  */
 export const createSkill = async (params: SkillCreateParams, cb?: () => void) =>
   handleOption(API_CONSTANTS.SKILL_CREATE, l('pages.skill.create'), params, cb);
+
+/**
+ * 建资产并直接写入正文（2026-11-04「消息操作」批次）。
+ *
+ * <p>用于 AI Chat「保存为知识文档」：一次事务内完成建目录 + 写 frontmatter+正文 + 落元数据，
+ * 新资产版本停在 1。对比 `create` + `save` 两步：非原子（第二步失败会留下模板空文档）、
+ * 且 save 会把版本推到 2。
+ *
+ * <p>**frontmatter 由服务端拼装**——调用方只传正文，不要在 JS 里自己拼，否则会与
+ * `SkillDocParser` 的格式约定漂移。
+ */
+export const createSkillWithContent = async (params: SkillCreateWithContentParams, cb?: () => void) =>
+  handleOption(API_CONSTANTS.SKILL_CREATE_WITH_CONTENT, l('pages.skill.create'), params, cb);
 
 /**
  * 修改可见性（2026-10-14 三档：private / tenant / public）。

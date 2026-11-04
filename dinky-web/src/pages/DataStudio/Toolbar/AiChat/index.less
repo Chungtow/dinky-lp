@@ -104,3 +104,29 @@
     font-weight: 600;
   }
 }
+
+/*
+ * 消息操作条（2026-11-04「消息操作」批次）。
+ *
+ * 默认隐藏、悬停该条消息时淡入：常显会在窄面板里持续占位，且每条消息都带一排按钮很吵。
+ * 这里用 less 而非内联 style——内联写法写不了 `:hover` 与媒体查询。
+ */
+.ai-chat-msg-actions {
+  opacity: 0;
+  transition: opacity 0.12s ease-in-out;
+  line-height: 0;
+  margin-top: 2px;
+}
+
+/* keyboard 聚焦时也要显现，否则 Tab 到按钮上却看不见焦点 */
+.ai-chat-msg:hover .ai-chat-msg-actions,
+.ai-chat-msg-actions:focus-within {
+  opacity: 1;
+}
+
+/* 触屏 / 无 hover 环境（平板、远程桌面）：常显兜底，否则用户点了才发现按钮存在 */
+@media (hover: none) {
+  .ai-chat-msg-actions {
+    opacity: 1;
+  }
+}

@@ -120,6 +120,8 @@ public class SkillController {
             value = {PermissionConstants.REGISTRATION_SKILL_ADD, PermissionConstants.REGISTRATION_RESOURCE_UPLOAD},
             mode = SaMode.OR)
     public Result<Skill> create(@RequestBody SkillCreateDTO skillCreateDTO) {
+        // K8（2026-11-04）：上面的 OR 只是准入门槛，public 还必须额外持有 share
+        assertShareForPublic(skillCreateDTO.getVisibility());
         return Result.succeed(skillService.create(
                 skillCreateDTO.getName(),
                 skillCreateDTO.getDescription(),
@@ -128,6 +130,33 @@ public class SkillController {
                 StpUtil.getLoginIdAsInt(),
                 // 2026-10-14 三档可见性：private（默认）/ tenant / public，为空按 private
                 skillCreateDTO.getVisibility()));
+    }
+
+    /**
+     * 新建资产并<b>直接写入正文</b>（2026-11-04「消息操作」批次）。
+     *
+     * <p><b>为什么不复用 {@code /create} + {@code /save}</b>：两步非原子——第二步失败会留下一个
+     * 模板空文档；而且 {@code save} 会把新资产版本推高到 2。本端点在<b>一个事务</b>内完成
+     * 建目录 + 写 frontmatter+正文 + 落元数据，版本停在 1。
+     *
+     * <p><b>frontmatter 由服务端拼</b>：调用方只传正文，{@code name} / {@code description} 头由
+     * {@code SkillDocParser} 的同一套规则生成——避免前端在 JS 里复制一份 Java 解析器。
+     */
+    @PostMapping("/createWithContent")
+    @ApiOperation("Create Skill or Doc with content")
+    @Log(title = "Create Skill With Content", businessType = BusinessType.INSERT)
+    @SaCheckPermission(
+            value = {PermissionConstants.REGISTRATION_SKILL_ADD, PermissionConstants.REGISTRATION_RESOURCE_UPLOAD},
+            mode = SaMode.OR)
+    public Result<Skill> createWithContent(@RequestBody SkillCreateDTO skillCreateDTO) {
+        assertShareForPublic(skillCreateDTO.getVisibility());
+        return Result.succeed(skillService.createWithContent(
+                skillCreateDTO.getName(),
+                skillCreateDTO.getDescription(),
+                skillCreateDTO.getAssetType(),
+                StpUtil.getLoginIdAsInt(),
+                skillCreateDTO.getVisibility(),
+                skillCreateDTO.getContent()));
     }
 
     @PostMapping("/save")
@@ -178,11 +207,7 @@ public class SkillController {
             mode = SaMode.OR)
     public Result<Skill> updateVisibility(@RequestBody SkillVisibilityDTO skillVisibilityDTO) {
         String visibility = SkillServiceImpl.normalizeVisibility(skillVisibilityDTO.getVisibility());
-        // 「面向全体公开」是组织级动作：上面的 OR 只是准入门槛，public 必须额外持有 share 权限
-        if (SkillServiceImpl.VISIBILITY_PUBLIC.equals(visibility)
-                && !StpUtil.hasPermission(PermissionConstants.REGISTRATION_SKILL_SHARE)) {
-            throw new BusException("无权将资产设置为「全体公开」，请联系管理员分配 registration:skill:share 权限");
-        }
+        assertShareForPublic(visibility);
         return Result.succeed(
                 skillService.updateVisibility(skillVisibilityDTO.getId(), visibility, StpUtil.getLoginIdAsInt()));
     }
@@ -272,5 +297,20 @@ public class SkillController {
         skillService.removeFile(
                 skillFileRemoveDTO.getSkillId(), skillFileRemoveDTO.getRelativePath(), StpUtil.getLoginIdAsInt());
         return Result.succeed();
+    }
+
+    /**
+     * 「面向全体公开」是<b>组织级</b>动作：与写入口的准入权限（add / upload / save）无关，
+     * 必须额外持有 {@code registration:skill:share}。
+     *
+     * <p>K8（2026-11-04）：本校验此前只挂在 {@code /visibility} 上，创建入口可以把
+     * {@code visibility='public'} 直接透传下去绕过它。现在三处（create / createWithContent /
+     * visibility）统一走本方法，口径不会再分叉。
+     */
+    private void assertShareForPublic(String visibility) {
+        if (SkillServiceImpl.VISIBILITY_PUBLIC.equals(SkillServiceImpl.normalizeVisibility(visibility))
+                && !StpUtil.hasPermission(PermissionConstants.REGISTRATION_SKILL_SHARE)) {
+            throw new BusException("无权将资产设置为「全体公开」，请联系管理员分配 registration:skill:share 权限");
+        }
     }
 }

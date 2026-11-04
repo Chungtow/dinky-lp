@@ -32,12 +32,18 @@ import { parseMentionScope, scoreMention } from './mentionIndex';
 import type { MentionCandidatePayload } from './mentionIndex';
 // 注意与本文件 './service' 里的 `listSkills`（@ 候选用的轻量列表）重名，这里显式起别名
 import {
+  createSkillWithContent,
   detailSkill as fetchSkillDetail,
   listSkills as listSkillInfos
 } from '@/pages/RegCenter/Skills/service';
-import { Authorized } from '@/hooks/useAccess';
+import CreateAssetModal from '@/pages/RegCenter/Skills/components/CreateAssetModal';
+import type { CreateAssetValues } from '@/pages/RegCenter/Skills/components/CreateAssetModal';
+import PushModal from '@/pages/DataStudio/Toolbar/Kb/PushModal';
+import type { KbPushPayload } from '@/pages/DataStudio/Toolbar/Kb/PushModal';
+import { Authorized, HasAuthority } from '@/hooks/useAccess';
 import { PermissionConstants } from '@/types/Public/constants';
 import ToolProcess from './components/ToolProcess';
+import MessageActions from './components/MessageActions';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import CraftDiff from './components/CraftDiff';
@@ -88,12 +94,16 @@ import { resolveEditorKey } from '@/pages/DataStudio/editorKey';
 import { getExecError, getLatestExecError } from '@/services/BusinessCrud';
 import { l } from '@/utils/intl';
 import {
+  CloudUploadOutlined,
   CopyOutlined,
+  DeleteOutlined,
+  EditOutlined,
   LoadingOutlined,
   PlayCircleOutlined,
   RobotOutlined,
   RollbackOutlined,
   SafetyCertificateOutlined,
+  SaveOutlined,
   SendOutlined,
   StopOutlined
 } from '@ant-design/icons';
@@ -291,11 +301,27 @@ const AiChat = (props: AiChatProps) => {
   const [schemas, setSchemas] = useState<any[]>([]);
   const [schemaName, setSchemaName] = useState<string>();
   const [tableName, setTableName] = useState<string>();
-  // 每条 assistant 消息的"思考过程"是否展开
-  const [expandedReasoning, setExpandedReasoning] = useState<Record<number, boolean>>({});
+  // 每条 assistant 消息的"思考过程"是否展开（键为消息 id：删除某轮后不会串到别的消息）
+  const [expandedReasoning, setExpandedReasoning] = useState<Record<string, boolean>>({});
   const abortRef = useRef<AbortController>();
   // 面板级会话标识：首轮不带 sessionId（后端才携带 schema 上下文），后续带上以复用上下文
   const sessionIdRef = useRef<string>(`${Date.now()}`);
+  /** 消息身份自增序号（同毫秒连发也不会撞号；只有本地用途，不发给后端） */
+  const msgSeqRef = useRef(0);
+  /** 「保存为知识文档」目标回答（正文只作为隐藏载荷，不进表单） */
+  const [docTarget, setDocTarget] = useState<{ content: string } | null>(null);
+  /** 「推送到知识库」载荷（复用 Toolbar/Kb 的公共弹窗） */
+  const [pushPayload, setPushPayload] = useState<KbPushPayload | null>(null);
+  // 两个沉淀动作都是写操作：前端先按权限隐去按钮，避免"点了才报没权限"。
+  // 后端仍各自二次校验（skill:add|resource:upload / kb:write），前端只是体验层。
+  //
+  // ⚠️ 必须**逐个无条件调用**：`HasAuthority` 内部用了 useContext，写成
+  // `HasAuthority(A) || HasAuthority(B)` 会因为短路让 hook 调用次数随权限变化，
+  // 触发 "Rendered fewer hooks than expected"。
+  const canAddSkill = HasAuthority(PermissionConstants.REGISTRATION_SKILL_ADD);
+  const canUploadResource = HasAuthority(PermissionConstants.REGISTRATION_RESOURCE_UPLOAD);
+  const canWriteKb = HasAuthority(PermissionConstants.KB_WRITE);
+  const canCreateSkill = canAddSkill || canUploadResource;
   /**
    * P4：上一次发送时的**上下文指纹**。
    *
@@ -1771,10 +1797,13 @@ const AiChat = (props: AiChatProps) => {
 
     // 主动发问时必定要看到回答：强制恢复「贴底跟随」，即使用户刚才在翻历史
     stickToBottomRef.current = true;
+    // 一问一答共享同一个 roundId（「删除」按轮次成对移除的依据）
+    msgSeqRef.current += 1;
+    const roundId = `r-${Date.now()}-${msgSeqRef.current}`;
     setMessages((prev) => [
       ...prev,
-      { role: 'user', content: userContent },
-      { role: 'assistant', content: '' }
+      { id: `${roundId}-u`, roundId, role: 'user', content: userContent },
+      { id: `${roundId}-a`, roundId, role: 'assistant', content: '' }
     ]);
     setInputValue('');
     // 引用是一次性的：发送后清空，避免下一轮提问误带上一轮的表
@@ -2324,6 +2353,166 @@ const AiChat = (props: AiChatProps) => {
     }
   };
 
+  /**
+   * 「编辑」：把历史问题回填到输入框，光标置末尾。
+   *
+   * <p>手法与 `applyMentionText` 一致（textarea 实体在 `resizableTextArea.textArea`），
+   * 不新增输入框能力。
+   *
+   * <p><b>已知降级</b>：回填后原文里的 `@source/...` 只是普通文本——`mentions` 是独立 state，
+   * 由 `@` 候选面板选中才生成，不会因为出现 `@xxx` 字样自动恢复。模型仍看得懂这段字符串，
+   * 但不再享受"元数据注入 + 权限裁剪"的句柄待遇，因此命中 `@` 时给一行提示。
+   */
+  const editQuestion = (text: string) => {
+    setInputValue(text);
+    // 上一轮可能残留 chips，与回填文本对不上；一并清掉（用户需要时重新选）
+    setMentions([]);
+    if (text.includes('@')) {
+      message.info(l('datastudio.aiChat.msg.editHandleLost'));
+    }
+    requestAnimationFrame(() => {
+      const el = inputRef.current?.resizableTextArea?.textArea;
+      if (!el) {
+        return;
+      }
+      el.focus();
+      el.selectionStart = el.selectionEnd = text.length;
+    });
+  };
+
+  /**
+   * 「删除」：按轮次成对移除该问题与其回答。
+   *
+   * <p>只删前端 `messages`——后端不存对话正文（`history` 每轮由前端映射），因此无需任何同步。
+   * 删除会改变后续请求的上下文，所以走 `Modal.confirm` 而不是静默执行。
+   */
+  const deleteRound = (roundId: string) => {
+    setMessages((prev) => prev.filter((item) => item.roundId !== roundId));
+    // 展开态按消息 id 存，被删的键自然失效；条数很少，整体清空最省心
+    setExpandedReasoning({});
+  };
+
+  const confirmDeleteRound = (roundId: string) => {
+    Modal.confirm({
+      title: l('datastudio.aiChat.msg.deleteTitle'),
+      content: l('datastudio.aiChat.msg.deleteConfirm'),
+      okText: l('button.confirm'),
+      cancelText: l('button.cancel'),
+      okButtonProps: { danger: true },
+      onOk: () => deleteRound(roundId)
+    });
+  };
+
+  /**
+   * 组装某条消息的操作项。
+   *
+   * <p><b>正在生成的那条不提供操作</b>：复制会拿到半截内容，删除会打断流式累加器
+   * （`appendToLastAssistant` 写的是"最后一条"）。
+   *
+   * <p>返回空数组时 `MessageActions` 自身渲染 `null`，因此调用处不需要条件判断。
+   */
+  const buildMessageActions = (item: AiChatMessage) => {
+    const isGenerating = loading && !item.finish && messages[messages.length - 1]?.id === item.id;
+    if (isGenerating) {
+      return [];
+    }
+    if (item.role === 'user') {
+      return [
+        {
+          key: 'copy',
+          icon: <CopyOutlined />,
+          label: l('datastudio.aiChat.msg.copyQuestion'),
+          onClick: () => copyToClipboard(item.content)
+        },
+        {
+          key: 'edit',
+          icon: <EditOutlined />,
+          label: l('datastudio.aiChat.msg.edit'),
+          onClick: () => editQuestion(item.content)
+        }
+      ];
+    }
+    return [
+      {
+        key: 'copy',
+        icon: <CopyOutlined />,
+        label: l('datastudio.aiChat.msg.copyAnswer'),
+        // item.content 就是模型原始 markdown（渲染前的那份），复制即"markdown 格式"
+        onClick: () => copyToClipboard(item.content)
+      },
+      {
+        key: 'delete',
+        icon: <DeleteOutlined />,
+        label: l('datastudio.aiChat.msg.delete'),
+        danger: true,
+        onClick: () => confirmDeleteRound(item.roundId)
+      },
+      // 无 skill:add / resource:upload 的环境不出现「保存为知识文档」（后端仍会二次校验）
+      ...(canCreateSkill
+        ? [
+            {
+              key: 'save-doc',
+              icon: <SaveOutlined />,
+              label: l('datastudio.aiChat.msg.saveAsDoc'),
+              // 正文只作为隐藏载荷挂到 docTarget，弹窗里只填名称/说明/可见性
+              onClick: () => setDocTarget({ content: item.content })
+            }
+          ]
+        : []),
+      // 知识库未启用 / 无写权限的环境不该出现死按钮（与 @kb 的显示条件保持一致）
+      ...(config?.kbEnable && canWriteKb
+        ? [
+            {
+              key: 'push-kb',
+              icon: <CloudUploadOutlined />,
+              label: l('datastudio.aiChat.msg.pushToKb'),
+              onClick: () => handlePushToKb(item.content)
+            }
+          ]
+        : [])
+    ];
+  };
+
+  /**
+   * 「保存为知识文档」提交：弹窗只收名称/说明/可见性，正文随请求带上。
+   *
+   * <p>返回 `Boolean(ok)` 交给 `CreateAssetModal` 判成功——`handleOption` 业务失败同样
+   * resolve（返回 undefined），靠异常判失败会让弹窗被误关、输入丢失。
+   */
+  const handleSaveAsDoc = async (values: CreateAssetValues) => {
+    const ok = await createSkillWithContent({
+      ...values,
+      assetType: 'doc',
+      content: docTarget?.content ?? ''
+    });
+    if (ok) {
+      message.success(l('datastudio.aiChat.saveAsDoc.done', '', { name: values.name }));
+    }
+    return Boolean(ok);
+  };
+
+  /**
+   * 「推送到知识库」：直接复用 Toolbar/Kb 的公共弹窗（资源 / 语义项目 / 技能 / 注册中心
+   * 已在用的同一份），这里只负责组装载荷。
+   *
+   * <p>`externalId` 传会话号，让 `dinky_kb_push_record` 有业务键可回溯"这条知识是哪次对话推的"；
+   * 不传则该次推送不记台账。
+   */
+  const handlePushToKb = (content: string) => {
+    const now = new Date();
+    const pad = (n: number) => `${n}`.padStart(2, '0');
+    const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(
+      now.getHours()
+    )}${pad(now.getMinutes())}`;
+    setPushPayload({
+      // 文件名必须带后缀（后缀决定 kb 侧切分方式），弹窗内用户仍可改
+      filename: `ai-chat-${stamp}.md`,
+      content,
+      source: 'aichat',
+      externalId: `aichat:${sessionIdRef.current}`
+    });
+  };
+
   /** 渲染 SQL 校验状态条（生成 → 执行校验 → 报错自动修复） */
   const renderVerify = (verify: AiChatVerify) => {
     if (!verify.status && !verify.sql) {
@@ -2566,7 +2755,9 @@ const AiChat = (props: AiChatProps) => {
         ) : (
           messages.map((item, index) => (
             <div
-              key={index}
+              key={item.id}
+              // ai-chat-msg 是操作条 hover 显现的锚点（见 index.less）
+              className={'ai-chat-msg'}
               style={{
                 textAlign: item.role === 'user' ? 'right' : 'left',
                 marginBottom: 12
@@ -2587,14 +2778,17 @@ const AiChat = (props: AiChatProps) => {
                     <Typography.Link
                       style={{ fontSize: 12 }}
                       onClick={() =>
-                        setExpandedReasoning((prev) => ({ ...prev, [index]: !prev[index] }))
+                        setExpandedReasoning((prev) => ({
+                          ...prev,
+                          [item.id]: !prev[item.id]
+                        }))
                       }
                     >
-                      {expandedReasoning[index]
+                      {expandedReasoning[item.id]
                         ? l('datastudio.aiChat.hideReasoning')
                         : l('datastudio.aiChat.showReasoning')}
                     </Typography.Link>
-                    {expandedReasoning[index] ? (
+                    {expandedReasoning[item.id] ? (
                       <div
                         style={{
                           whiteSpace: 'pre-wrap',
@@ -2629,6 +2823,8 @@ const AiChat = (props: AiChatProps) => {
                   </div>
                 ) : null}
               </div>
+              {/* 操作条渲染在气泡下方（不是气泡内右侧）：窄面板里不会挤压正文排版 */}
+              <MessageActions items={buildMessageActions(item)} />
             </div>
           ))
         )}
@@ -3210,6 +3406,18 @@ const AiChat = (props: AiChatProps) => {
           </>
         )}
       </Modal>
+
+      {/* 保存为知识文档：与注册中心「新建知识文档」是同一个组件（改一处两处生效） */}
+      <CreateAssetModal
+        open={!!docTarget}
+        assetType={'doc'}
+        extraHint={l('datastudio.aiChat.saveAsDoc.hint', '', { chars: docTarget?.content.length ?? 0 })}
+        onSubmit={handleSaveAsDoc}
+        onCancel={() => setDocTarget(null)}
+      />
+
+      {/* 推送到知识库：与资源 / 语义项目 / 技能右键菜单是同一个弹窗 */}
+      <PushModal open={!!pushPayload} payload={pushPayload} onClose={() => setPushPayload(null)} />
     </div>
   );
 };

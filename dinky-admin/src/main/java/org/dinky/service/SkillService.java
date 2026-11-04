@@ -103,6 +103,25 @@ public interface SkillService extends ISuperService<Skill> {
     Skill create(String name, String description, String assetType, Integer actorId, String visibility);
 
     /**
+     * 新建资产并<b>直接写入正文</b>（2026-11-04「消息操作」批次新增）。
+     *
+     * <p><b>为什么需要它</b>：{@link #create} 的正文是服务端模板，{@link #save} 的正文要求调用方
+     * 自己拼好合法 frontmatter 且会把版本推高到 2。AI Chat「保存为知识文档」既有正文、又希望
+     * 新资产停在 {@code version=1}，两次调用还会在第二步失败时留下一个模板空文档。
+     *
+     * <p>本方法在<b>同一事务</b>内完成"建目录 → 写 frontmatter+正文 → 落元数据"，frontmatter
+     * 由服务端拼装（{@code name} / {@code description} 均做单行净化），调用方不必知道
+     * {@code SkillDocParser} 的格式约定。
+     *
+     * <p><b>description 会先被净化</b>：换行折成空格、{@code ---} 折成破折号——否则会提前
+     * 截断 frontmatter 头导致解析失败。
+     *
+     * @param content 正文（不含 frontmatter）。为空则退化为 {@link #create} 的模板正文行为
+     */
+    Skill createWithContent(
+            String name, String description, String assetType, Integer actorId, String visibility, String content);
+
+    /**
      * 修改资产<b>可见性</b>（<b>仅属主</b>；2026-10-14 三档可见性）。
      *
      * <p>改为 {@code tenant} 前会确保 {@code tenant_id} 有值（否则同租户成员看不到）；

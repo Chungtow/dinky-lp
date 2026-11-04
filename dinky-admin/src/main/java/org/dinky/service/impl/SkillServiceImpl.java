@@ -199,6 +199,53 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
     @Override
     @Transactional(rollbackFor = Exception.class)
     public Skill create(String name, String description, String assetType, Integer actorId, String visibility) {
+        return createInternal(name, description, assetType, actorId, visibility, null);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Skill createWithContent(
+            String name, String description, String assetType, Integer actorId, String visibility, String content) {
+        String body = StrUtil.trimToEmpty(content);
+        if (StrUtil.isBlank(body)) {
+            // 没有正文就没必要走"带正文创建"这条路：退化为模板正文，与 /create 完全一致
+            return create(name, description, assetType, actorId, visibility);
+        }
+        // frontmatter 由服务端拼：name 必须与目录名一致（同一 trimmed 值），description 必须是单行。
+        // 净化后的 desc 同时用于 frontmatter 与 dinky_skill.description——两处必须是同一个值，
+        // 否则下次 save 时 frontmatter 会反过来把 DB 里的说明改写掉。
+        String desc = sanitizeOneLine(description);
+        String text = "---\nname: " + StrUtil.trimToEmpty(name) + "\ndescription: " + desc + "\n---\n\n" + body;
+        return createInternal(name, desc, assetType, actorId, visibility, text);
+    }
+
+    /**
+     * 把说明压成单行（2026-11-04）。
+     *
+     * <p>它要进 YAML frontmatter 的 {@code description:} 行：换行会把后续内容挤成新字段，
+     * 裸 {@code ---} 会提前闭合头部让 {@code parse} 拿到残缺的 header。折成破折号最直观。
+     */
+    static String sanitizeOneLine(String text) {
+        String one = StrUtil.replace(StrUtil.nullToEmpty(text), "\r\n", " ");
+        one = StrUtil.replace(one, "\r", " ");
+        one = StrUtil.replace(one, "\n", " ");
+        return StrUtil.trim(StrUtil.replace(one, "---", "—"));
+    }
+
+    /**
+     * 新建资产的唯一实现：{@code contentOverride} 非空则用它当主文件正文（要求已含合法 frontmatter），
+     * 为空则用模板。
+     *
+     * <p>两条路径在同一事务、同一套校验下完成，新资产版本都停在 {@code 1}——所以「带正文创建」
+     * 不会像 {@code create} + {@code save} 那样留下 {@code version=2} 的半成品。
+     */
+    private Skill createInternal(
+            String name,
+            String description,
+            String assetType,
+            Integer actorId,
+            String visibility,
+            String contentOverride) {
         String type = SkillDocParser.ASSET_TYPE_DOC.equalsIgnoreCase(StrUtil.trimToEmpty(assetType))
                 ? SkillDocParser.ASSET_TYPE_DOC
                 : SkillDocParser.ASSET_TYPE_SKILL;
@@ -238,9 +285,19 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
         String dirFullName = StrUtil.nullToEmpty(Convert.toStr(skillDir.getPath()));
 
         // ② 主文件（SKILL.md / DOC.md）：先建资源记录，再写内容（writeContent 负责写文件 + 维护 size + 失效缓存）
-        String content = isDoc
-                ? SkillDocParser.buildDocTemplate(skillName, desc)
-                : SkillDocParser.buildTemplate(skillName, desc);
+        String content;
+        if (contentOverride != null) {
+            // 调用方给的正文：先校验后落盘（大小 + frontmatter 合法性），任一项不过都不产生半成品
+            if (StrUtil.utf8Bytes(contentOverride).length > SkillDocParser.MAX_DOC_SIZE) {
+                throw new BusException(mainFileName + " 过大（最多 " + SkillDocParser.MAX_DOC_SIZE + " 字节）");
+            }
+            SkillDocParser.validate(SkillDocParser.parse(contentOverride), skillName);
+            content = contentOverride;
+        } else {
+            content = isDoc
+                    ? SkillDocParser.buildDocTemplate(skillName, desc)
+                    : SkillDocParser.buildTemplate(skillName, desc);
+        }
         Resources mainFile = new Resources();
         mainFile.setPid(Convert.toInt(skillDir.getId(), -1));
         mainFile.setFileName(mainFileName);

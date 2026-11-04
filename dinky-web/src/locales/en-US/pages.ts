@@ -714,6 +714,20 @@ export default {
   'datastudio.aiChat.copyFailed': 'Copy failed, please select and copy manually',
   'datastudio.aiChat.showReasoning': 'Show reasoning',
   'datastudio.aiChat.hideReasoning': 'Hide reasoning',
+  // 2026-11-04: message actions (copy / edit / delete / save & push)
+  'datastudio.aiChat.msg.copyQuestion': 'Copy question',
+  'datastudio.aiChat.msg.copyAnswer': 'Copy answer',
+  'datastudio.aiChat.msg.edit': 'Edit',
+  'datastudio.aiChat.msg.delete': 'Delete',
+  'datastudio.aiChat.msg.deleteTitle': 'Delete this Q&A round?',
+  'datastudio.aiChat.msg.deleteConfirm':
+    'The question and its answer will both be removed from this conversation context; later questions will no longer reference them (page-local only, server records are untouched).',
+  'datastudio.aiChat.msg.editHandleLost':
+    'The @ references in the original question became plain text; pick them again if needed',
+  'datastudio.aiChat.msg.saveAsDoc': 'Save as knowledge doc',
+  'datastudio.aiChat.msg.pushToKb': 'Push to knowledge base',
+  'datastudio.aiChat.saveAsDoc.hint': 'This answer will be saved as the doc body ({chars} chars)',
+  'datastudio.aiChat.saveAsDoc.done': 'Saved as knowledge doc: {name} (see RegCenter → Skills)',
   'datastudio.aiChat.verify.verifying': 'Verifying SQL executability…',
   'datastudio.aiChat.verify.verified': 'Verified: executable',
   'datastudio.aiChat.verify.retrying': 'Execution failed, auto repairing…',

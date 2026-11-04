@@ -573,6 +573,9 @@ public class KbController {
                 return "skills";
             case "resource":
                 return "资源";
+            case "aichat":
+                // 2026-11-04「消息操作」批次：AI Chat 里"推送到知识库"的回答正文
+                return "AI Chat";
             default:
                 return "编辑器";
         }
