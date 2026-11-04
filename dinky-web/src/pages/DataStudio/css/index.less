@@ -1076,3 +1076,153 @@ body.dock-dragging iframe {
 .dock-panel.dock-style-card .dock-extra-content {
   height: 35px;
 }
+
+//     =======  底部工具面板（服务 / 工具 / Flink SQL Client）空间压缩  =======
+// 这三块面板只有 1 个标签，40px 的标题栏纯属浪费；压到 26px 把高度还给内容区。
+// 注意：不能改 rc-dock 的 group 字符串（DockLayoutFunction.tsx 依赖 'leftBottom' 判位置），
+// 只能通过 group 自动生成的 dock-style-leftBottom 类做样式覆盖。
+.dock-panel.dock-style-leftBottom {
+  // 只改子元素高度是不够的（rc-tabs 的 nav / nav-more / extra-content 都会撑开），
+  // 这里把 bar 自身钉死并裁掉溢出，实测 40px → 26px 生效
+  .dock-bar {
+    height: 26px;
+    min-height: 26px;
+    padding: 0 0 0 6px;
+    overflow: hidden;
+  }
+
+  .dock-nav,
+  .dock-nav-wrap,
+  .dock-nav-list {
+    height: 26px;
+  }
+
+  .dock-tab {
+    height: 26px;
+    line-height: 26px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  .dock-extra-content {
+    height: 26px;
+  }
+
+  .dock-nav-more {
+    height: 26px;
+    width: 26px;
+  }
+
+  .dock-panel-max-btn,
+  .dock-panel-min-btn {
+    height: 16px;
+    width: 16px;
+    margin: 2px 2px 2px 0;
+    padding: 2px;
+  }
+
+  .dock-panel-max-btn:before,
+  .dock-panel-min-btn:before {
+    width: 8px;
+    height: 8px;
+  }
+
+  // 面板内一级 Tabs 更紧凑
+  .ant-tabs-nav {
+    margin-bottom: 2px;
+  }
+
+  .ant-tabs-tab {
+    padding: 4px 8px;
+  }
+
+  .ant-tabs-tab + .ant-tabs-tab {
+    margin-left: 8px;
+  }
+}
+
+// 结果标签（结果-N）的关闭按钮：默认隐藏，悬停标签时显形，避免常驻占位
+.service-result-tab-close {
+  margin-left: 6px;
+  font-size: 10px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.ant-tabs-tab:hover .service-result-tab-close {
+  opacity: 0.6;
+}
+
+//     =======  深色主题下的表格可读性  =======
+// DataStudio 的 ConfigProvider 把 colorBgContainer 指向 CSS 变量后，antd 通过算法推导
+// 出的正文色与真实背景不匹配，深色主题下表格会出现"深底深字"。这里统一用主题变量兜住，
+// 浅色（--text-color:#424242）与深色（#fafafa）同时正确。
+.datastudio-theme {
+  .ant-table {
+    color: var(--text-color);
+    background-color: transparent;
+  }
+
+  .ant-table-thead > tr > th {
+    color: var(--text-color) !important;
+    background-color: var(--second-color) !important;
+    border-bottom-color: var(--border-color) !important;
+  }
+
+  .ant-table-tbody > tr > td {
+    color: var(--text-color);
+    border-bottom-color: var(--border-color);
+  }
+
+  .ant-table-tbody > tr.ant-table-row:hover > td,
+  .ant-table-tbody > tr > td.ant-table-cell-row-hover {
+    background-color: var(--second-color) !important;
+  }
+
+  .ant-table-cell-fix-left,
+  .ant-table-cell-fix-right {
+    background-color: var(--main-background-color) !important;
+  }
+
+  .ant-table-column-sorter,
+  .ant-table-filter-trigger,
+  .ant-table-column-sorters {
+    color: var(--text-color);
+  }
+
+  .ant-pagination,
+  .ant-pagination-item a,
+  .ant-empty-description {
+    color: var(--text-color);
+  }
+
+  // 行高对齐 pgconsole 的 ROW_HEIGHT=28：paddingBlock 8→4、line-height 22→20、字号 14→12
+  // 详见 docs/research/20261104-...调研与方案.md §11
+  .ant-table.ant-table-small {
+    .ant-table-thead > tr > th {
+      padding: 4px 8px;
+      font-size: 12px;
+      line-height: 20px;
+    }
+
+    .ant-table-tbody > tr > td {
+      padding: 4px 8px;
+      font-size: 12px;
+      line-height: 20px;
+    }
+  }
+
+  // 兜底：单元格内容再高也不超过 28px（对齐 pgconsole 的固定行高）
+  .ant-table-tbody > tr > td {
+    height: 28px;
+  }
+
+  // 分页条压到 ~24px（对应 pgconsole 的 h-6 状态条）
+  .ant-pagination.ant-pagination-small {
+    margin: 4px 0;
+  }
+}
+
+.service-result-tab-close:hover {
+  opacity: 1;
+}
