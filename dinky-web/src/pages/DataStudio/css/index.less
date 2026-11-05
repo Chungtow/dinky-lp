@@ -1,4 +1,9 @@
 /*******************配置组件自定义颜色(入口css)******************/
+// ⚠️ 本块只是**首帧兜底**：运行期由 `pages/DataStudio/themeToken.ts` 的 palette 生成同名变量并注入
+// （见 `index.tsx` 里的 DS_PALETTE_STYLE_ID）。改色请改 themeToken.ts，并同步这里的兜底值。
+// 注意 `--primary-color` 的语义是**背景色**，不是 antd 的 `colorPrimary` 主色蓝；
+// 变量名与作用域已冻结：`@` 句柄面板（mentionController.ts）与 AI Chat 的 `@` 浮层都硬编码
+// `var(--primary-color, #fff)`，改名或收敛作用域会让它们回落成白底。
 .light-theme {
   --primary-color: #ffffff;
   --second-color: #f9f9f9;
@@ -6,7 +11,7 @@
   --main-background-color: #ffffff;
   --footer-bg-color: #f4f4f4;
   --btn-color: #000000e0;
-  --btn-active-color: #1890ff;
+  --btn-active-color: #1677ff;
   --btn-background-color: #e6f7ff;
   --border-color: #dfe1e4;
   --text-color: #424242;
