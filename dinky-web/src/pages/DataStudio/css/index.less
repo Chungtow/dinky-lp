@@ -1308,3 +1308,99 @@ body.dock-dragging iframe {
 .service-result-tab-close:hover {
   opacity: 1;
 }
+
+/* ---------- 结果面板滚动架构（第二批 D12）：单一滚动容器 ---------- */
+// 结果 pane 自己不再滚：纵向滚动只发生在表体 .ant-table-body，
+// 从而消除"右侧功能竖条右边那条滚动整个结果页"的第二条滚动条。
+// 注意：本块**不能**放进 .datastudio-theme 里——那个 class 加在 ProTable 上，
+// 而 .ds-result-pane 是它的祖先。
+.ds-result-pane {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+
+  // 高度链：把确定高度从 pane 传到卡片内容区，表体高度（scroll.y）才有可量基准
+  .ant-pro-table,
+  .ant-pro-card {
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .ant-pro-card-body {
+    flex: 1;
+    min-height: 0;
+    // 与 ResultTable 的 cardProps.bodyStyle 保持一致（测量时按此扣 padding）
+    padding: 6px 8px;
+  }
+
+  // mock-sink 多表时中间还有一层 Tabs，高度链要续上
+  .ant-tabs {
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .ant-tabs-nav {
+    flex: none;
+  }
+
+  .ant-tabs-content-holder {
+    flex: 1;
+    min-height: 0;
+  }
+
+  // 覆盖全局 `.ant-tabs-content{overflow-y:auto}`：结果 pane 内不允许出现第二处滚动
+  .ant-tabs-content {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .ant-tabs-tabpane-active {
+    height: 100%;
+  }
+
+  // 分页器常驻可视区底部（它的高度已在 scroll.y 计算时扣除，行数少时 antd 不渲染）
+  .ant-table-pagination {
+    flex: none;
+    margin: 6px 0 0 !important;
+  }
+
+  // 表体是唯一纵向滚动容器；水平滚动条贴在它的内底边 ⇒ 永远停在可视区底部
+  .ant-table-body {
+    overflow-x: auto !important;
+    overflow-y: scroll !important;
+  }
+
+  // 滚动条：细条 + 半透明滑块，宽表深色下不抢视线
+  .ant-table-body::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  .ant-table-body::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .ant-table-body::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.22);
+    border-radius: 6px;
+
+    &:hover {
+      background: rgba(0, 0, 0, 0.36);
+    }
+  }
+}
+
+// 深色主题：滑块提亮一档
+.dark-theme .ds-result-pane .ant-table-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.26);
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.42);
+  }
+}
