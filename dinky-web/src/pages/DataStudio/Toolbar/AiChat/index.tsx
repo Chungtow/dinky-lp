@@ -333,6 +333,12 @@ const AiChat = (props: AiChatProps) => {
   const currentTab = tabs?.find((tab) => tab.id === activeTab);
   const tabParams = currentTab?.params ?? {};
   const dialect: string = tabParams?.dialect ?? '';
+  const { editorRegistry } = useContext(DataStudioContext);
+  /**
+   * 当前 tab 的编辑器注册键：作业 tab 用 taskId；语义文件 tab 用 semantic:<project>:<path>。
+   * 必须与注册方（SqlTask / SemanticFile）同源，否则选区静默为空。
+   */
+  const editorKey = resolveEditorKey(tabParams);
   /**
    * P4 一期：手动覆盖（仅本次会话有效），置空即回落到「跟随编辑区自动绑定」。
    *
@@ -400,12 +406,19 @@ const AiChat = (props: AiChatProps) => {
   const effectiveTableName: string | undefined =
     binding.override?.tableName ?? binding.editor?.tableName;
   /**
-   * 编辑区正文：作业 / 语义文件取 `statement`，**资源文件取 `content`**。
+   * 编辑区正文：**优先现取编辑器内容**，取不到再回落 `tabParams.statement`；资源文件取 `content`。
    *
    * <p>此前一律读 `statement`，资源 tab 因此永远拿到空正文（U32：问「这个文件讲了什么」答不出）。
+   *
+   * <p>2026-11-06（R2/D3）：语义 YAML / 技能 MD 编辑器改**非受控**后，正文不再每键写回 dva model，
+   * `tabParams.statement` 只在「首次打开 / 保存成功」时新鲜。必须优先
+   * {@code editorRegistry.getContent(editorKey)}，否则 AI Chat 拿到的是打开时的旧正文（含未保存改动丢失）。
    */
+  const liveEditorContent: string = editorRegistry?.getContent(editorKey) ?? '';
   const currentSql: string =
-    currentTab?.tabType === 'resource' ? (tabParams?.content ?? '') : (tabParams?.statement ?? '');
+    currentTab?.tabType === 'resource'
+      ? (tabParams?.content ?? '')
+      : liveEditorContent || (tabParams?.statement ?? '');
   /** 语义文件 tab（dbt on HDFS）不是 SQL 作业：EXPLAIN / 执行对它无意义，AI 仍可读写全文 */
   const isSqlJobTab = currentTab?.tabType === 'task';
   /**
@@ -626,7 +639,6 @@ const AiChat = (props: AiChatProps) => {
    * 流式回答每来一个 chunk 都会滚动，不能把正在看历史的用户强行拽回底部。
    */
   const stickToBottomRef = useRef<boolean>(true);
-  const { editorRegistry } = useContext(DataStudioContext);
 
   /** 消息列表滚动：距底 < 40px 视为「仍在底部」，恢复自动跟随 */
   const handleMessageListScroll = (e: any) => {
@@ -646,12 +658,6 @@ const AiChat = (props: AiChatProps) => {
       el.scrollTop = el.scrollHeight;
     }
   }, [messages]);
-
-  /**
-   * 当前 tab 的编辑器注册键：作业 tab 用 taskId；语义文件 tab 用 semantic:<project>:<path>。
-   * 必须与注册方（SqlTask / SemanticFile）同源，否则选区静默为空。
-   */
-  const editorKey = resolveEditorKey(tabParams);
 
   /** 读取当前编辑区的选中片段（无选中时返回空串） */
   const readSelectedSql = () => editorRegistry?.getSelection(editorKey) ?? '';
@@ -1032,7 +1038,10 @@ const AiChat = (props: AiChatProps) => {
       if (tab?.id === activeTab) {
         return;
       }
-      const statement = tab?.params?.statement;
+      // 2026-11-06：编辑器改非受控后正文以实例为准（SqlTask 300ms 节流、语义/skill 保存后才写 model），
+      // 直接读 `params.statement` 会拿到改动前的旧内容 → 优先 getContent，回落 statement
+      const statement =
+        editorRegistry?.getContent(resolveEditorKey(tab?.params)) || tab?.params?.statement;
       if (!statement) {
         return;
       }
@@ -2091,10 +2100,13 @@ const AiChat = (props: AiChatProps) => {
    * <ol>
    *   <li>后端 {@code beforeContent}：写入前静默读到的文件当前内容（最准，含他人已保存的改动）；</li>
    *   <li>编辑区当前文本：后端读不到（资源存储异常 / 空文件）**且**确认框指向的正是当前打开的
-   *       那个文件时，用 {@code tabParams.statement} 兜底——否则左栏会整块空白，用户无法判断改了
+   *       那个文件时，用编辑器正文兜底——否则左栏会整块空白，用户无法判断改了
    *       什么（与 2026-10-21 语义文件 Craft diff「左侧为空」同一类缺陷）；</li>
    *   <li>空串：确实是新建文件，由 {@code newFileHint} 明确告知。</li>
    * </ol>
+   *
+   * <p>2026-11-06：兜底来源由 {@code tabParams.statement} 改为「优先 {@code getContent}，回落 statement」
+   * ——非受控编辑器里的未保存改动不会进 statement。
    */
   const skillConfirmBefore = useMemo(() => {
     if (writeConfirm?.kind !== 'skill_file') {
@@ -2108,8 +2120,11 @@ const AiChat = (props: AiChatProps) => {
       currentTab?.tabType === 'skillFile' &&
       tabParams?.relativePath === writeConfirm?.relativePath &&
       (!writeConfirm?.targetName || tabParams?.skillName === writeConfirm?.targetName);
-    return sameFile ? (tabParams?.statement ?? '') : '';
-  }, [writeConfirm, currentTab, tabParams]);
+    if (!sameFile) {
+      return '';
+    }
+    return editorRegistry?.getContent(editorKey) || (tabParams?.statement ?? '');
+  }, [writeConfirm, currentTab, tabParams, editorRegistry, editorKey]);
 
   /**
    * 阶段 2b：对编辑区选中片段发起 Fix（基于最近执行报错）/ Rewrite（综合优化）。

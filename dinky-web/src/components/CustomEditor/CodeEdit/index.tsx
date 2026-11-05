@@ -27,7 +27,7 @@ import { convertCodeEditTheme } from '@/utils/function';
 import { Editor, loader, Monaco, OnChange } from '@monaco-editor/react';
 import { connect } from '@umijs/max';
 import useMemoCallback from 'rc-menu/es/hooks/useMemoCallback';
-import { memo, useCallback, useContext, useRef } from 'react';
+import { memo, useCallback, useContext, useMemo, useRef } from 'react';
 import { DataStudioState } from '@/pages/DataStudio/model';
 import ITextModel = editor.ITextModel;
 import CompletionItem = languages.CompletionItem;
@@ -243,89 +243,110 @@ const CodeEdit = (props: CodeEditFormProps) => {
 
   // todo: 标记错误信息
 
-  const finalEditorOptions = {
-    ...MonacoEditorOptions, // set default options
-    tabCompletion: 'on', // tab 补全
-    cursorSmoothCaretAnimation: false, // 光标动画
-    screenReaderAnnounceInlineSuggestion: true, // 屏幕阅读器提示
-    formatOnPaste: true, // 粘贴时格式化
-    mouseWheelZoom: true, // 鼠标滚轮缩放
-    autoClosingBrackets: 'always', // 自动闭合括号
-    autoClosingOvertype: 'always', // 用于在右引号或括号上键入的选项
-    autoClosingQuotes: 'always', // 自动闭合引号
-    showUnused: true, // 显示未使用的代码
-    unfoldOnClickAfterEndOfLine: true, // 控制在折叠线之后单击空内容是否会展开该线
-    showFoldingControls: 'always', // 代码折叠控件 'always' | 'mouseover' | 'never'
-    automaticLayout: true, // 自动布局
-    readOnly, // 是否只读
-    glyphMargin: true, // 字形边缘
-    formatOnType: true, // 代码格式化
-    // columnSelection: true, // 列选择
-    wrappingIndent:
-      language === 'yaml' || language === 'yml' || language === 'json' ? 'indent' : 'none',
-    inlineSuggest: {
-      enabled: true,
-      showToolbar: 'always',
-      keepOnBlur: false,
-      allowQuickSuggestions: true,
-      showOnAllSymbols: true
-    },
-    // inlineSuggestionVisible: true,
-    quickSuggestions: enableSuggestions,
-    guides: {
-      bracketPairs: true
-    },
-    bracketPairColorization: {
-      enabled: true,
-      independentColorPoolPerBracketType: true
-    },
-    foldingRanges: true,
-    inlineCompletionsAccessibilityVerbose: true,
-    smartSelect: {
-      selectLeadingAndTrailingWhitespace: true,
-      selectSubwords: true
-    },
-    suggest: {
+  /**
+   * 计划（2026-11-06）§3.5 R3：`options` 原本**每次渲染都新建**（~80 项）。
+   *
+   * <p>`@monaco-editor/react` 以 `options` 引用驱动 `editor.updateOptions(...)`，于是受控编辑器
+   * 每按一次键都要把这份大对象全量下发一遍。改为 `useMemo` 后只在真实依赖变化时重建。
+   *
+   * <p>依赖数组必须显式覆盖所有参与计算的外部值：`language`（wrappingIndent）、`readOnly`、
+   * `lineNumbers`、`autoWrap`、`enableSuggestions`（quickSuggestions）、`enableSuggestionPreview`
+   * （suggest.preview）、`options`（调用方覆盖，优先级最高）。漏项会导致切换只读 / 语言不生效。
+   */
+  const finalEditorOptions = useMemo(
+    () => ({
+      ...MonacoEditorOptions, // set default options
+      tabCompletion: 'on', // tab 补全
+      cursorSmoothCaretAnimation: false, // 光标动画
+      screenReaderAnnounceInlineSuggestion: true, // 屏幕阅读器提示
+      formatOnPaste: true, // 粘贴时格式化
+      mouseWheelZoom: true, // 鼠标滚轮缩放
+      autoClosingBrackets: 'always', // 自动闭合括号
+      autoClosingOvertype: 'always', // 用于在右引号或括号上键入的选项
+      autoClosingQuotes: 'always', // 自动闭合引号
+      showUnused: true, // 显示未使用的代码
+      unfoldOnClickAfterEndOfLine: true, // 控制在折叠线之后单击空内容是否会展开该线
+      showFoldingControls: 'always', // 代码折叠控件 'always' | 'mouseover' | 'never'
+      automaticLayout: true, // 自动布局
+      readOnly, // 是否只读
+      glyphMargin: true, // 字形边缘
+      formatOnType: true, // 代码格式化
+      // columnSelection: true, // 列选择
+      wrappingIndent:
+        language === 'yaml' || language === 'yml' || language === 'json' ? 'indent' : 'none',
+      inlineSuggest: {
+        enabled: true,
+        showToolbar: 'always',
+        keepOnBlur: false,
+        allowQuickSuggestions: true,
+        showOnAllSymbols: true
+      },
+      // inlineSuggestionVisible: true,
       quickSuggestions: enableSuggestions,
-      showStatusBar: true,
-      preview: enableSuggestionPreview,
-      previewMode: 'subword',
-      showInlineDetails: true,
-      showMethods: true,
-      showFunctions: true,
-      showConstructors: true,
-      showFields: true,
-      showEvents: true,
-      showOperators: true,
-      showClasses: true,
-      showModules: true,
-      showStructs: true,
-      showInterfaces: true,
-      showProperties: true,
-      showUnits: true,
-      showValues: true,
-      showConstants: true,
-      showEnums: true,
-      showEnumMembers: true,
-      showKeywords: true,
-      showWords: true,
-      showFolders: true,
-      showReferences: true,
-      showSnippets: true
-    },
-    scrollbar: {
-      useShadows: false,
-      vertical: 'visible',
-      horizontal: 'visible',
-      verticalScrollbarSize: 8,
-      horizontalScrollbarSize: 8,
-      arrowSize: 30
-    },
-    wordWrap: autoWrap,
-    autoDetectHighContrast: true,
-    lineNumbers,
-    ...options
-  };
+      guides: {
+        bracketPairs: true
+      },
+      bracketPairColorization: {
+        enabled: true,
+        independentColorPoolPerBracketType: true
+      },
+      foldingRanges: true,
+      inlineCompletionsAccessibilityVerbose: true,
+      smartSelect: {
+        selectLeadingAndTrailingWhitespace: true,
+        selectSubwords: true
+      },
+      suggest: {
+        quickSuggestions: enableSuggestions,
+        showStatusBar: true,
+        preview: enableSuggestionPreview,
+        previewMode: 'subword',
+        showInlineDetails: true,
+        showMethods: true,
+        showFunctions: true,
+        showConstructors: true,
+        showFields: true,
+        showEvents: true,
+        showOperators: true,
+        showClasses: true,
+        showModules: true,
+        showStructs: true,
+        showInterfaces: true,
+        showProperties: true,
+        showUnits: true,
+        showValues: true,
+        showConstants: true,
+        showEnums: true,
+        showEnumMembers: true,
+        showKeywords: true,
+        showWords: true,
+        showFolders: true,
+        showReferences: true,
+        showSnippets: true
+      },
+      scrollbar: {
+        useShadows: false,
+        vertical: 'visible',
+        horizontal: 'visible',
+        verticalScrollbarSize: 8,
+        horizontalScrollbarSize: 8,
+        arrowSize: 30
+      },
+      wordWrap: autoWrap,
+      autoDetectHighContrast: true,
+      lineNumbers,
+      ...options
+    }),
+    [
+      language,
+      readOnly,
+      lineNumbers,
+      autoWrap,
+      enableSuggestions,
+      enableSuggestionPreview,
+      options
+    ]
+  );
   return (
     <>
       <div className={'monaco-float'}>

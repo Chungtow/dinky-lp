@@ -18,7 +18,7 @@
  */
 
 import { connect } from '@@/exports';
-import { CenterTab, DataStudioState } from '@/pages/DataStudio/model';
+import { CenterTab } from '@/pages/DataStudio/model';
 import { mapDispatchToProps } from '@/pages/DataStudio/DvaFunction';
 import { DataStudioContext } from '@/pages/DataStudio/DataStudioContext';
 import { semanticEditorKey } from '@/pages/DataStudio/editorKey';
@@ -50,6 +50,23 @@ const languageOf = (path: string): string => {
 };
 
 /**
+ * 语义文件编辑器的 options 覆盖（计划 §3.5 R7 / D8）。
+ *
+ * <p>这三项对 yaml 零收益，却要按行 / 按键计算：`formatOnType` 每次回车跑格式化、
+ * `bracketPairColorization` 维护配色池、`inlineSuggest.showOnAllSymbols` 对每个符号都求一次内联建议。
+ * **只在这里覆盖**，不动 `CodeEdit` 默认值（SqlTask 等使用方共用默认）。
+ *
+ * <p>提为模块常量：`CodeEdit` 内部按 options 引用做 `useMemo`，每次渲染新建对象会让 memo 失效。
+ */
+const SEMANTIC_EDITOR_OPTIONS = {
+  wordWrap: 'on' as const,
+  minimap: { enabled: false },
+  inlineSuggest: { enabled: false },
+  formatOnType: false,
+  bracketPairColorization: { enabled: false }
+};
+
+/**
  * 语义文件编辑 tab（dbt on HDFS）。
  *
  * <p>内容与「纯文本作业」同构：正文保存在 {@code tabParams.statement}，因此 AI Chat 无需改造
@@ -59,7 +76,20 @@ const SemanticFile = (props: { tabData: CenterTab; updateCenterTab: (payload: an
   const { tabData, updateCenterTab } = props;
   const { project, path, statement, mtime, readOnly } = tabData.params ?? {};
   const { editorRegistry } = useContext(DataStudioContext);
-  const [code, setCode] = useState<string>(statement ?? '');
+  /**
+   * 交互性能（2026-11-06）：编辑器改为**非受控**，内容以编辑器实例为唯一真相源。
+   *
+   * <p>改造前：`code` 受控 + 每次 onChange `setCode` + `updateCenterTab` 整篇回写 dva model，
+   * 形成「按键 → setState → 组件重渲染 → props 落后于 model → `@monaco-editor/react`
+   * 整篇 `executeEdits(getFullModelRange())`」环路，中文拼音组合文本被反复抹掉（用户反馈
+   * 「拼音停留好一会儿才转中文」）。与 SqlTask 2026-11-05 的修法同构（D2/D3）。
+   *
+   * <p>改造后：内容只进 {@link latestCodeRef}；**保存 / AI Chat 取文一律现取**
+   * （`editorRegistry.getContent(editorKey)`），不再每键写 model；`dirty` 只在
+   * 「干净 ↔ 脏」两个翻转点 setState（D7）。
+   */
+  const latestCodeRef = useRef<string>(statement ?? '');
+  const dirtyRef = useRef<boolean>(false);
   const [dirty, setDirty] = useState<boolean>(false);
   const [saving, setSaving] = useState<boolean>(false);
   const [baseMtime, setBaseMtime] = useState<number>(mtime ?? 0);
@@ -76,9 +106,14 @@ const SemanticFile = (props: { tabData: CenterTab; updateCenterTab: (payload: an
   const feedbackAsset = semanticAssetOf(path);
 
   useEffect(() => {
-    setCode(statement ?? '');
+    latestCodeRef.current = statement ?? '';
+    dirtyRef.current = false;
     setDirty(false);
     setBaseMtime(mtime ?? 0);
+    // 非受控模式下 defaultValue 只认首次挂载：同一实例被复用于另一份文件时，必须显式换内容
+    if (editorKey && editorRegistry?.getContent(editorKey) !== (statement ?? '')) {
+      editorRegistry?.applyFullContent(editorKey, statement ?? '');
+    }
   }, [tabData.id]);
 
   useEffect(() => {
@@ -89,11 +124,19 @@ const SemanticFile = (props: { tabData: CenterTab; updateCenterTab: (payload: an
     };
   }, [editorKey]);
 
+  /** 现取编辑器内容——非受控模式下的唯一取值出口（编辑器未挂载时回落到 ref） */
+  const getContent = (): string => editorRegistry?.getContent(editorKey) ?? latestCodeRef.current ?? '';
+
   const onChange = (value?: string) => {
     const next = value ?? '';
-    setCode(next);
-    setDirty(next !== (statement ?? ''));
-    updateCenterTab({ ...tabData, isUpdate: true, params: { ...tabData.params, statement: next } });
+    latestCodeRef.current = next;
+    // 未保存标记只在翻转点 setState + 写一次 model（关闭提示依赖 tab 的 isUpdate）
+    const nextDirty = next !== (statement ?? '');
+    if (nextDirty !== dirtyRef.current) {
+      dirtyRef.current = nextDirty;
+      setDirty(nextDirty);
+      updateCenterTab({ ...tabData, isUpdate: nextDirty });
+    }
   };
 
   const onSave = async () => {
@@ -107,18 +150,21 @@ const SemanticFile = (props: { tabData: CenterTab; updateCenterTab: (payload: an
     }
     setSaving(true);
     try {
-      const res = await saveSemanticFile({ project, path, content: code, baseMtime });
+      const content = getContent();
+      const res = await saveSemanticFile({ project, path, content, baseMtime });
       if (res?.code !== 0) {
         await WarningMessage(res?.msg ?? l('datastudio.semantic.saveFailed'));
         return;
       }
       const newMtime: number = res?.data ?? 0;
       setBaseMtime(newMtime);
+      dirtyRef.current = false;
       setDirty(false);
+      // 保存成功后仍要同步一次 model（AI Chat 回落、关闭提示、mtime 乐观锁）
       updateCenterTab({
         ...tabData,
         isUpdate: false,
-        params: { ...tabData.params, statement: code, mtime: newMtime }
+        params: { ...tabData.params, statement: content, mtime: newMtime }
       });
       await SuccessMessage(l('datastudio.semantic.saved'));
     } catch (e: any) {
@@ -183,12 +229,15 @@ const SemanticFile = (props: { tabData: CenterTab; updateCenterTab: (payload: an
       </Space>
       <div style={{ flex: 1, minHeight: 0 }}>
         <CodeEdit
-          code={code}
+          defaultValue={statement ?? ''}
           language={languageOf(path)}
           readOnly={Boolean(readOnly)}
           onChange={onChange}
           editorDidMount={onMount}
-          options={{ wordWrap: 'on', minimap: { enabled: false } }}
+          // R4：关闭「按文档分词」的补全（默认 true）——它每键把全文词表塞进 CompletionItem，
+          // 并每 3 秒对全文跑一次 `Intl.Segmenter`，是 YAML 独有的周期性停顿来源（SkillFile 早已关闭）
+          wordSuggestionsEnabled={false}
+          options={SEMANTIC_EDITOR_OPTIONS}
         />
       </div>
 
@@ -206,9 +255,10 @@ const SemanticFile = (props: { tabData: CenterTab; updateCenterTab: (payload: an
 
 // connect 的 OwnProps 推断对本组件（父组件传 tabData）不成立，与 Toolbar/Resource 属同一类既有告警；
 // 这里显式放宽组件类型，运行期注入仍是 mapDispatchToProps 的 updateCenterTab。
+//
+// 2026-11-06（R2）：不再订阅 `centerContent`——本组件从未使用该字段，订阅它会让每次 tab 变动都
+// 重渲染一次编辑器（改造前是「每键一次」），是无谓开销。
 export default connect(
-  ({ DataStudio }: { DataStudio: DataStudioState }) => ({
-    centerContent: DataStudio.centerContent
-  }),
+  null,
   mapDispatchToProps
 )(SemanticFile as any) as React.ComponentType<any>;
