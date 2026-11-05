@@ -130,6 +130,77 @@ const DataStudio: React.FC = (props: any) => {
     return layoutData;
   }, [dataStudioState.layoutData, setLayout]);
 
+  /**
+   * 分栏拖动性能（2026-11-05）：rc-dock 的 `Divider.dragMove` 会在**每一次 mousemove** 时调用
+   * `changeSizes` → `DockBox.forceUpdate()`（见 `rc-dock/src/DockBox.tsx`），而 DockBox 子树里装着
+   * Monaco / AI Chat / 结果表，于是每个鼠标事件都触发一次「整棵树重渲染 + Monaco 按新宽度重排」。
+   *
+   * <p>浏览器 mousemove 频率（可达 120~1000Hz）远高于渲染帧率（60Hz），多出来的事件是纯开销。
+   * 这里**不改 `node_modules`**：rc-dock 的 move 监听挂在 `document` 的 **capture** 阶段，而本组件的
+   * 监听注册得更早，因此可以在同一阶段用 `stopImmediatePropagation()` 丢掉「同一帧内的多余事件」，
+   * 等效于给它加 `requestAnimationFrame` 合帧。
+   *
+   * <p>安全性：rc-dock 的位移量是相对 mousedown 起点的**绝对差值**（不是增量累加），
+   * 丢掉中间事件不影响最终落点，只减少中间帧。
+   */
+  const draggingDividerRef = useRef<boolean>(false);
+  const lastMoveFrameRef = useRef<number>(0);
+
+  useEffect(() => {
+    const onMouseMoveCapture = (event: MouseEvent) => {
+      if (!draggingDividerRef.current) {
+        return;
+      }
+      const now = performance.now();
+      // 同一帧（约 16ms）内只放行第一个事件
+      if (now - lastMoveFrameRef.current < 16) {
+        event.stopImmediatePropagation();
+        return;
+      }
+      lastMoveFrameRef.current = now;
+    };
+    const resetDragState = () => {
+      draggingDividerRef.current = false;
+      lastMoveFrameRef.current = 0;
+      document.body.classList.remove('dock-divider-dragging');
+      delete document.body.dataset.dockDragAxis;
+    };
+    const onMouseUpCapture = () => {
+      if (!draggingDividerRef.current) {
+        return;
+      }
+      resetDragState();
+    };
+    document.addEventListener('mousemove', onMouseMoveCapture, true);
+    document.addEventListener('mouseup', onMouseUpCapture, true);
+    return () => {
+      document.removeEventListener('mousemove', onMouseMoveCapture, true);
+      document.removeEventListener('mouseup', onMouseUpCapture, true);
+      resetDragState();
+    };
+  }, []);
+
+  /**
+   * 命中分隔条时进入拖动态（只做标记，不拦截事件本身，rc-dock 正常启动拖拽）。
+   *
+   * <p>同时记录拖动**方向**：rc-dock 用 `.dock-hbox` / `.dock-vbox` 区分排布，前者子分隔条是
+   * 左右拖（`ew-resize`）、后者是上下拖（`ns-resize`）。拖动过程中指针会离开 4px 宽的分隔条
+   * 落到相邻面板上，若只用单一 `cursor` 值接管，会出现「上下拖动仍显示左右光标」以及
+   * 「光标图标中间多一条与拖拽边界不对齐的竖线」的问题（`col-resize` 的图标正是双箭头夹一条竖线）。
+   */
+  const handleDividerMouseDownCapture = (event: React.MouseEvent) => {
+    const target = event.target as HTMLElement | null;
+    const divider = target?.closest?.('.dock-divider') as HTMLElement | null;
+    if (!divider) {
+      return;
+    }
+    draggingDividerRef.current = true;
+    lastMoveFrameRef.current = 0;
+    const axis = divider.parentElement?.classList.contains('dock-vbox') ? 'y' : 'x';
+    document.body.dataset.dockDragAxis = axis;
+    document.body.classList.add('dock-divider-dragging');
+  };
+
   useAsyncEffect(async () => {
     updateAction({
       actionType: null,
@@ -740,7 +811,12 @@ const DataStudio: React.FC = (props: any) => {
               </Col>
 
               {/* 中间内容栏*/}
-              <Col style={{ height: 'inherit' }} flex='auto' className={'content-container'}>
+              <Col
+                style={{ height: 'inherit' }}
+                flex='auto'
+                className={'content-container'}
+                onMouseDownCapture={handleDividerMouseDownCapture}
+              >
                 <AliveScope>
                   <DockLayout
                     ref={dockLayoutRef}
