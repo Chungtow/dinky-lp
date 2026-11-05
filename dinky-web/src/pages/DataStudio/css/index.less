@@ -1099,8 +1099,10 @@ body.dock-dragging iframe {
 
   .dock-tab {
     height: 26px;
-    line-height: 26px;
-    font-size: 12px;
+    line-height: 24px;
+    // 与面板内的目录树、「输出」、「结果-N」标签一致；v1 为了压高度设成 12px，
+    // 视觉上比内容区小一号，被用户指为"喧宾夺主"
+    font-size: 14px;
     font-weight: 500;
   }
 
@@ -1221,6 +1223,69 @@ body.dock-dragging iframe {
   .ant-pagination.ant-pagination-small {
     margin: 4px 0;
   }
+
+  // 表头吸顶：antd sticky 的 holder 需要自带底色，否则滚动时下方行会透上来
+  .ant-table-sticky-holder {
+    z-index: 3;
+    background: var(--second-color);
+  }
+
+  // 列头搜索下拉：ConfigProvider 把 colorBgContainer 指成 CSS 变量后 colorBgElevated 失效，
+  // 面板底色变透明、背后表格文字会透出来干扰
+  .ant-table-filter-dropdown {
+    background: var(--main-background-color);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+  }
+
+  .ant-table-filter-dropdown .ant-dropdown-menu {
+    background: transparent;
+    box-shadow: none;
+  }
+
+  // 单元格单行省略：**只用 CSS**，DOM 里保留全文 → 「复制当前页」拿到的是完整原文
+  .ant-table-tbody > tr > td .ds-cell-text {
+    display: block;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  // 数字等宽：右对齐后小数点能纵向对齐
+  .ant-table-tbody > tr > td {
+    font-variant-numeric: tabular-nums;
+  }
+
+  // 空值弱化（null / (empty)）
+  .ds-cell-placeholder {
+    font-style: italic;
+    opacity: 0.45;
+  }
+
+  // 搜索命中高亮
+  .ds-cell-hl {
+    color: var(--primary-color);
+    font-weight: 500;
+  }
+}
+
+// hover 全文面板（"方块"形态：自动换行、可选中、可复制）——
+// Popover 渲染在 body 的 portal 里，不在 .datastudio-theme 作用域内，故独立定义
+.ds-cell-fulltext {
+  max-width: 480px;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+  font-size: 12px;
+  line-height: 18px;
+  font-family: var(--font-family-monospace, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+.ds-cell-popover .ant-popover-inner {
+  padding: 8px 10px;
 }
 
 .service-result-tab-close:hover {
