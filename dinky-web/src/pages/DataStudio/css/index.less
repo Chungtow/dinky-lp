@@ -1404,3 +1404,39 @@ body.dock-dragging iframe {
     background: rgba(255, 255, 255, 0.42);
   }
 }
+
+/**
+ * 分栏拖动期（2026-11-05）
+ *
+ * rc-dock 在每次 mousemove 时都会 `DockBox.forceUpdate()` 整棵子树，拖动时页面上同时存在
+ * Monaco / AI Chat / 结果表，这些组件的 hover、选区、光标都会随鼠标位置变化产生额外重绘。
+ * 拖动期间统一收敛交互与选中，只让布局本身跟随（位移合帧在 DataStudio/index.tsx 的
+ * document capture 监听里做）。
+ */
+body.dock-divider-dragging {
+  user-select: none;
+
+  /*
+   * 拖动期间统一光标方向：`.dock-hbox`（左右排布）用 `ew-resize`（纯左右双箭头），
+   * `.dock-vbox`（上下排布）用 `ns-resize`（纯上下双箭头）。
+   *
+   * 不能统一用 `col-resize`——它的图标是「双箭头夹一条竖线」：既与上下拖动不匹配，
+   * 那条竖线还会与真实的拖拽边界产生视觉错位。
+   *
+   * 加 `*` 是因为拖动中指针会离开 4px 宽的分隔条落到相邻面板上，需要沿用同一方向光标。
+   */
+  &[data-dock-drag-axis='x'],
+  &[data-dock-drag-axis='x'] * {
+    cursor: ew-resize !important;
+  }
+
+  &[data-dock-drag-axis='y'],
+  &[data-dock-drag-axis='y'] * {
+    cursor: ns-resize !important;
+  }
+
+  /* 拖动期间编辑器不响应指针事件：避免 hover 高亮、选区扩张引发的额外重绘 */
+  .content-container .monaco-editor {
+    pointer-events: none;
+  }
+}
