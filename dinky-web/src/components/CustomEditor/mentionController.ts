@@ -306,10 +306,6 @@ export function attachMentionController(
       return;
     }
     const mySeq = (seq += 1);
-    const items = await collectMentionItems(token.query);
-    if (mySeq !== seq || !editor.getModel()) {
-      return; // 过期结果
-    }
     replaceRange = new monaco.Range(
       position.lineNumber,
       token.start + 1,
@@ -317,15 +313,31 @@ export function attachMentionController(
       token.end + 1
     );
     anchorRef = { lineNumber: position.lineNumber, column: token.start + 1 };
-    rows =
-      items.length > 0
-        ? items.map((item) => ({ item }))
-        : [{ placeholder: `无匹配：${lastMentionDiagnostic || `「${token.query}」没有命中的资源`}` }];
-    activeIndex = items.length > 0 ? 0 : -1;
-    render();
-    // 新一轮候选从顶部开始看（否则沿用上一轮滚动位置，用户会以为列表"卡住了"）
-    dom.scrollTop = 0;
-    show();
+    const applyItems = (items: MentionItem[]) => {
+      rows =
+        items.length > 0
+          ? items.map((item) => ({ item }))
+          : [{ placeholder: `无匹配：${lastMentionDiagnostic || `「${token.query}」没有命中的资源`}` }];
+      activeIndex = items.length > 0 ? 0 : -1;
+      render();
+      // 新一轮候选从顶部开始看（否则沿用上一轮滚动位置，用户会以为列表"卡住了"）
+      dom.scrollTop = 0;
+      show();
+    };
+
+    // ① 本地候选：先出结果，不受服务端表名搜索的 250ms 防抖影响
+    const localItems = await collectMentionItems(token.query, { includeRemoteTables: false });
+    if (mySeq !== seq || !editor.getModel()) {
+      return; // 过期结果
+    }
+    applyItems(localItems);
+
+    // ② 服务端表名补充：后到则整体替换；过期结果由 seq 丢弃（`@` 输入越快，这一跳越常被跳过）
+    const fullItems = await collectMentionItems(token.query, { includeRemoteTables: true });
+    if (mySeq !== seq || !editor.getModel() || fullItems.length === localItems.length) {
+      return;
+    }
+    applyItems(fullItems);
   };
 
   /** 选中一条候选：中间层级补 `/` 并继续，叶子整体插入（含反引号） */

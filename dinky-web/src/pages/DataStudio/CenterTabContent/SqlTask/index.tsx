@@ -20,7 +20,7 @@
 import { CenterTab, DataStudioState } from '@/pages/DataStudio/model';
 import { Button, Col, Divider, Flex, Row, Skeleton, TabsProps } from 'antd';
 import '../index.less';
-import React, { memo, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import React, { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { registerEditorKeyBindingAndAction } from '@/utils/function';
 import { Monaco } from '@monaco-editor/react';
 import { Panel, PanelGroup } from 'react-resizable-panels';
@@ -184,6 +184,78 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
     status: '',
     mockSinkFunction: true
   });
+
+  /**
+   * 交互性能（2026-11-05）：编辑器改为**非受控**，内容以编辑器实例为唯一真相源。
+   *
+   * <p>改造前：`code` 受控 + 每次 onChange 写 dva model 与组件 state，形成
+   * 「按键 → setState → 整页重渲染 → 回写 monaco value」环路（用户反馈「字符显示滞后于键盘」）。
+   *
+   * <p>改造后：内容只进 {@link statementRef}；`currentState.statement` 与 tab params 由
+   * {@link syncStatementToModel} 节流（300ms）同步一次，仅服务于未保存标记、AI 上下文摘录
+   * 与关闭提示。**保存 / 执行 / 校验 / DAG / 血缘一律经 {@link getEditorStatement} 现取**，
+   * 不读 state，避免节流窗口内取到旧值。
+   */
+  const statementRef = useRef<string>('');
+  /** 未保存标记：首次编辑置 true，保存成功后复位；不再逐键与 originStatementValue 比全文 */
+  const dirtyRef = useRef<boolean>(false);
+  const tabDataRef = useRef<any>(props.tabData);
+  const currentStateRef = useRef<TaskState>(currentState);
+  useEffect(() => {
+    tabDataRef.current = props.tabData;
+  }, [props.tabData]);
+  useEffect(() => {
+    currentStateRef.current = currentState;
+  }, [currentState]);
+  /** 初始化值落到 ref（非受控模式下贴住编辑器初始内容，供 getEditorStatement 兜底） */
+  useEffect(() => {
+    statementRef.current = originStatementValue;
+  }, [originStatementValue]);
+
+  const syncStatementToModel = useMemo(
+    () =>
+      debounce((value: string) => {
+        setCurrentState((prevState) =>
+          prevState.statement === value ? prevState : { ...prevState, statement: value }
+        );
+        updateCenterTab({
+          ...tabDataRef.current,
+          params: { ...currentStateRef.current, statement: value }
+        });
+      }, 300),
+    [updateCenterTab]
+  );
+
+  /** 现取编辑器内容——非受控模式下的唯一取值出口（编辑器未挂载时回落到 ref / state） */
+  const getEditorStatement = useCallback(
+    (fallback?: string) => editorInstance.current?.getValue() ?? fallback ?? statementRef.current,
+    []
+  );
+
+  /** 运行时替换编辑器内容：初始化之外的 setOriginStatementValue 场景（Diff 选版本 / 版本回滚）必须走这里 */
+  const applyStatementToEditor = useCallback((statement: string) => {
+    const next = statement ?? '';
+    statementRef.current = next;
+    setOriginStatementValue(next);
+    setCurrentState((prevState) => ({ ...prevState, statement: next }));
+    const instance = editorInstance.current;
+    if (instance && instance.getValue() !== next) {
+      instance.setValue(next);
+    }
+  }, []);
+
+  const onEditorChange = useCallback(
+    (value: string | undefined) => {
+      statementRef.current = value ?? '';
+      // 未保存标记只在首次编辑时翻转一次，避免每键 dispatch
+      if (!dirtyRef.current) {
+        dirtyRef.current = true;
+        updateCenterTab({ ...tabDataRef.current, isUpdate: true });
+      }
+      syncStatementToModel(statementRef.current);
+    },
+    [syncStatementToModel, updateCenterTab]
+  );
   // 代码恢复
   const [openDiffModal, setOpenDiffModal] = useState(false);
   const [diff, setDiff] = useState<any>([]);
@@ -335,14 +407,17 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
   const updateTask = (useServerVersion: boolean) => {
     const statement = useServerVersion ? diff[0].server : diff[0].cache;
     if (useServerVersion) {
+      dirtyRef.current = false;
       updateCenterTab({
         ...props.tabData,
         isUpdate: false,
         params: { ...currentState, statement }
       });
+    } else {
+      dirtyRef.current = true;
     }
-    setCurrentState((prevState) => ({ ...prevState, statement }));
-    setOriginStatementValue(statement);
+    // 非受控模式：必须显式写入编辑器，否则编辑区内容不会变（改造前靠受控 value 自动同步）
+    applyStatementToEditor(statement);
 
     setOpenDiffModal(false);
   };
@@ -424,15 +499,6 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
     updateCenterTab({ ...props.tabData, isUpdate: true, params: nextState });
   }, [props?.action?.actionType, props?.action?.params]);
 
-  const onEditorChange = (value: string | undefined, ev: editor.IModelContentChangedEvent) => {
-    updateCenterTab({
-      ...props.tabData,
-      isUpdate: originStatementValue !== value,
-      params: { ...currentState, statement: value ?? '' }
-    });
-    setCurrentState((prevState) => ({ ...prevState, statement: value ?? '' }));
-  };
-
   const onValuesChange = (changedValues: any, allValues: TaskState) => {
     if ('flinkMode' in allValues) {
       const mode = (allValues['flinkMode'] as [string, number])[0] as FlinkTaskRunType;
@@ -509,11 +575,37 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
       // 更新当前编辑器内的sql语句
       const task = await getTaskDetails(taskId);
       if (task) {
-        setOriginStatementValue(task.statement);
+        dirtyRef.current = false;
         setCurrentState((prevState) => ({ ...prevState, ...task }));
+        // 非受控模式：回滚后必须显式写入编辑器（改造前靠受控 value 自动同步）
+        applyStatementToEditor(task.statement);
       }
     }
   };
+
+  /**
+   * 编辑器 options 必须是**稳定引用**：内联对象字面量每次渲染都是新引用，会让 `memo(CodeEdit)`
+   * 的浅比较必然失败——父组件每渲染一次，编辑器整棵子树就重渲染一次（输入卡顿的放大器之一）。
+   *
+   * <p>`formatOnType` / `inlineSuggest` 在本项目的 SQL 场景下**无实际收益**（无对应格式化 provider、
+   * 幽灵文本与自有 `@` 候选面板叠加），但每次按键都会触发额外的语法树遍历与异步补全调度，故关闭。
+   * 只作用于本编辑器，`CodeEdit` 的全局默认值不动，其余 16 处使用方行为不变。
+   */
+  const editorOptions = useMemo(
+    () => ({
+      readOnlyMessage: {
+        value: isLockTask
+          ? l('pages.datastudio.editor.onlyread.lock')
+          : l('pages.datastudio.editor.onlyread')
+      },
+      readOnly: currentState?.step == JOB_LIFE_CYCLE.PUBLISH || isLockTask,
+      scrollBeyondLastLine: false,
+      wordWrap: 'on' as const,
+      formatOnType: false,
+      inlineSuggest: { enabled: false }
+    }),
+    [isLockTask, currentState?.step]
+  );
 
   const rightToolbarItem: TabsProps['items'] = [];
   if (
@@ -565,16 +657,17 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
     const statement =
       currentState.dialect.toLowerCase() === DIALECT.FLINKJAR
         ? (await flinkJarFormConvertSql(sqlForm))!!
-        : currentState.statement;
+        : getEditorStatement(currentState.statement);
     await handlePutDataJson(API_CONSTANTS.TASK, { ...currentState, statement });
+    dirtyRef.current = false;
     updateCenterTab({ ...props.tabData, isUpdate: false });
-  }, [currentState, updateCenterTab, props.tabData, sqlForm]);
+  }, [currentState, updateCenterTab, props.tabData, sqlForm, getEditorStatement]);
 
   const handleCheck = useCallback(async () => {
     const statement =
       currentState.dialect.toLowerCase() === DIALECT.FLINKJAR
         ? (await flinkJarFormConvertSql(sqlForm))!!
-        : currentState.statement;
+        : getEditorStatement(currentState.statement);
     const res = await explainSql(
       l('pages.datastudio.editor.checking', '', { jobName: currentState?.name }),
       { ...currentState, statement }
@@ -586,13 +679,13 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
         data: res.data
       }
     });
-  }, [currentState, updateAction]);
+  }, [currentState, updateAction, getEditorStatement]);
 
   const handleDAG = useCallback(async () => {
     const statement =
       currentState.dialect.toLowerCase() === DIALECT.FLINKJAR
         ? (await flinkJarFormConvertSql(sqlForm))!!
-        : currentState.statement;
+        : getEditorStatement(currentState.statement);
     const res = await getJobPlan(l('pages.datastudio.editor.explain.tip'), {
       ...currentState,
       statement
@@ -604,15 +697,16 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
         data: res.data
       }
     });
-  }, [currentState, updateAction]);
+  }, [currentState, updateAction, getEditorStatement]);
 
   const handleLineage = useCallback(async () => {
-    const { dialect, databaseId, statement, envId, fragment, taskId } = currentState;
+    const { dialect, databaseId, envId, fragment, taskId } = currentState;
     const params: StudioLineageParams = {
       dialect: dialect,
       envId: envId ?? -1,
       fragment: fragment,
-      statement: statement,
+      // 血缘按编辑器当前内容计算，避免 300ms 节流窗口内取到旧 SQL
+      statement: getEditorStatement(currentState.statement),
       statementSet: true,
       databaseId: databaseId ?? 0,
       variables: {},
@@ -630,7 +724,7 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
         data: data
       }
     });
-  }, [currentState, updateAction]);
+  }, [currentState, updateAction, getEditorStatement]);
 
   const handleSubmit = useCallback(async () => {
     setIsSubmitting(true);
@@ -1151,24 +1245,16 @@ export const SqlTask = memo((props: FlinkSqlProps & any) => {
                       databaseDataList={tempData.dataSourceDataList}
                       readOnly={currentState?.step == JOB_LIFE_CYCLE.PUBLISH || isLockTask}
                     />
-                  ) : (
+                  ) : loading ? null : (
+                    // 注意：非受控模式依赖挂载时即有初值，故等任务详情加载完成后再挂载编辑器
                     <CodeEdit
                       monacoRef={editorInstance}
-                      code={originStatementValue}
+                      defaultValue={originStatementValue}
                       language={matchLanguage(currentState.dialect)}
                       editorDidMount={editorDidMount}
-                      onChange={debounce(onEditorChange, 50)}
+                      onChange={onEditorChange}
                       enableSuggestions={true}
-                      options={{
-                        readOnlyMessage: {
-                          value: isLockTask
-                            ? l('pages.datastudio.editor.onlyread.lock')
-                            : l('pages.datastudio.editor.onlyread')
-                        },
-                        readOnly: currentState?.step == JOB_LIFE_CYCLE.PUBLISH || isLockTask,
-                        scrollBeyondLastLine: false,
-                        wordWrap: 'on'
-                      }}
+                      options={editorOptions}
                     />
                   )}
                 </Panel>

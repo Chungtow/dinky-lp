@@ -310,8 +310,14 @@ const prefixItems = (): MentionItem[] =>
  * 按 `@` 之后的 query 收集候选（UI 无关，供 content widget 渲染）。
  *
  * @param query `@` 之后的全部文本（不含 `@`），例如 `''`、`source/`、`source/meta-dolphin/`
+ * @param options.includeRemoteTables 是否合并**服务端表名搜索**结果（默认 true）。
+ *   传 false 时只返回本地索引候选，可**同步快速**渲染；调用方随后再取一次 true 的结果做后补，
+ *   这样 250ms 防抖不会拖慢本地候选的首屏（见 `mentionController.refresh`）。
  */
-export async function collectMentionItems(query: string): Promise<MentionItem[]> {
+export async function collectMentionItems(
+  query: string,
+  options?: { includeRemoteTables?: boolean }
+): Promise<MentionItem[]> {
   // `@table/` `@column/` 已下线（编辑器没有"当前 schema"上下文，硬给会给出用户预期外的表）
   if (/^(table|column)[-/]/i.test((query ?? '').trim())) {
     return [
@@ -348,7 +354,7 @@ export async function collectMentionItems(query: string): Promise<MentionItem[]>
         chainable: it.type === 'semantic'
       }));
     // C1.5：表名服务端搜索（表不在预取索引里，≥2 字符才触发；失败静默，不影响其它候选）
-    const tables = await searchTableItems(keyword);
+    const tables = options?.includeRemoteTables === false ? [] : await searchTableItems(keyword);
     const merged = tables.filter((item) => !matched.some((hit) => hit.code === item.code));
     return [...prefixItems(), ...matched, ...merged].slice(0, MAX_ITEMS + PREFIX_ENTRIES.length);
   }
@@ -590,37 +596,106 @@ async function semanticItems(scope: MentionScope): Promise<MentionItem[]> {
  *
  * <p>命中项仍是 `source` 类型（`code=<数据源>/<库>/<表>`），因此插入的是
  * `@source/<ds>/<db>/<tbl>`——与手工路径式下钻完全同构，校验 / 装配都不需要新分支。
+ *
+ * <p>输入性能（2026-11-05）：本函数由 `refresh()` 在**每次内容变化**时调用，改造前
+ * keyword ≥2 字符即直接发请求——连续输入 4 个字符就是 4 次跨数据源表搜索，这是
+ * 「编辑区输入滞后」的真实来源之一。现改为：
+ * ① **250ms 静默后**才真正发请求（本地候选不受影响，先出结果、远端再补）；
+ * ② 按 keyword 做 **32 条 / 60s 的 LRU 缓存**，回删重输不重复请求。
+ * 接口契约不变，仍是 `fetchMentionCandidates(undefined, keyword, 10)`。
  */
-async function searchTableItems(keyword: string): Promise<MentionItem[]> {
-  if (keyword.length < 2) {
-    return [];
+const TABLE_SEARCH_DEBOUNCE_MS = 250;
+const TABLE_SEARCH_CACHE_TTL_MS = 60_000;
+const TABLE_SEARCH_CACHE_MAX = 32;
+
+const tableSearchCache = new Map<string, { items: MentionItem[]; ts: number }>();
+
+function readTableSearchCache(keyword: string): MentionItem[] | null {
+  const hit = tableSearchCache.get(keyword);
+  if (!hit) {
+    return null;
   }
-  const payload: any = await withTimeout(
-    fetchMentionCandidates(undefined, keyword, 10),
-    METADATA_TIMEOUT,
-    null
-  );
-  const types: string[] = payload?.types ?? [];
-  const codes: string[] = payload?.codes ?? [];
-  const titles: string[] = payload?.titles ?? [];
-  const subs: string[] = payload?.subs ?? [];
-  const items: MentionItem[] = [];
-  for (let i = 0; i < codes.length; i += 1) {
-    // 只保留表命中：快照类命中（skill/doc/semantic/kb）本地已有一份，重复出现会干扰排序
-    if (`${types[i] ?? ''}` !== 'source' || !codes[i]) {
-      continue;
+  if (Date.now() - hit.ts > TABLE_SEARCH_CACHE_TTL_MS) {
+    tableSearchCache.delete(keyword);
+    return null;
+  }
+  // 命中即刷新 LRU 位置（Map 保持插入序，最旧的在前）
+  tableSearchCache.delete(keyword);
+  tableSearchCache.set(keyword, hit);
+  return hit.items;
+}
+
+function writeTableSearchCache(keyword: string, items: MentionItem[]) {
+  tableSearchCache.delete(keyword);
+  tableSearchCache.set(keyword, { items, ts: Date.now() });
+  while (tableSearchCache.size > TABLE_SEARCH_CACHE_MAX) {
+    const oldest = tableSearchCache.keys().next().value;
+    if (!oldest) {
+      break;
     }
-    items.push({
-      id: `source:${codes[i]}`,
-      kind: 'resource' as const,
-      type: 'source' as const,
-      code: codes[i],
-      title: titles[i] || codes[i],
-      right: subs[i] ?? '跨数据源表',
-      chainable: false
-    });
+    tableSearchCache.delete(oldest);
   }
-  return items;
+}
+
+let tableSearchTimer: ReturnType<typeof setTimeout> | null = null;
+let tableSearchWaiters: Array<(items: MentionItem[]) => void> = [];
+
+function searchTableItems(keyword: string): Promise<MentionItem[]> {
+  if (keyword.length < 2) {
+    return Promise.resolve([]);
+  }
+  const cached = readTableSearchCache(keyword);
+  if (cached) {
+    return Promise.resolve(cached);
+  }
+  return new Promise<MentionItem[]>((resolve) => {
+    // 新输入到来：立即释放上一批等待者（返回空），避免其 Promise 悬挂到本次请求返回
+    if (tableSearchTimer) {
+      clearTimeout(tableSearchTimer);
+      tableSearchTimer = null;
+      const stale = tableSearchWaiters;
+      tableSearchWaiters = [];
+      stale.forEach((waiter) => waiter([]));
+    }
+    tableSearchWaiters.push(resolve);
+    tableSearchTimer = setTimeout(async () => {
+      tableSearchTimer = null;
+      const waiters = tableSearchWaiters;
+      tableSearchWaiters = [];
+      let items: MentionItem[] = [];
+      try {
+        const payload: any = await withTimeout(
+          fetchMentionCandidates(undefined, keyword, 10),
+          METADATA_TIMEOUT,
+          null
+        );
+        const types: string[] = payload?.types ?? [];
+        const codes: string[] = payload?.codes ?? [];
+        const titles: string[] = payload?.titles ?? [];
+        const subs: string[] = payload?.subs ?? [];
+        for (let i = 0; i < codes.length; i += 1) {
+          // 只保留表命中：快照类命中（skill/doc/semantic/kb）本地已有一份，重复出现会干扰排序
+          if (`${types[i] ?? ''}` !== 'source' || !codes[i]) {
+            continue;
+          }
+          items.push({
+            id: `source:${codes[i]}`,
+            kind: 'resource' as const,
+            type: 'source' as const,
+            code: codes[i],
+            title: titles[i] || codes[i],
+            right: subs[i] ?? '跨数据源表',
+            chainable: false
+          });
+        }
+      } catch (e) {
+        // 搜索失败不阻塞本地候选展示，按空结果处理
+        items = [];
+      }
+      writeTableSearchCache(keyword, items);
+      waiters.forEach((waiter) => waiter(items));
+    }, TABLE_SEARCH_DEBOUNCE_MS);
+  });
 }
 
 /** `@topic/` `@env/`：名册接口（零连接） */
