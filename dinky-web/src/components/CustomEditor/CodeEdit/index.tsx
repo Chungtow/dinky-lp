@@ -50,7 +50,21 @@ export type CodeEditFormProps = {
   language: string;
   options?: any;
   onChange?: OnChange;
-  code: string;
+  /**
+   * 受控内容。与 {@link defaultValue} **互斥**，二者都不传时为空编辑器。
+   *
+   * <p>高频输入场景（数据开发 SQL 编辑器）**不要**用 `code`：受控模式下每次 onChange 若回写
+   * state，会形成「按键 → setState → 重渲染 → 回写 monaco value」环路，表现为字符显示滞后于键盘。
+   * 改用 {@link defaultValue} + `editorRegistry.getContent()` 取值（见 `SqlTask`）。
+   */
+  code?: string;
+  /**
+   * 非受控初始内容（仅在首次挂载建 model 时生效，后续变化**不会**回写编辑器）。
+   *
+   * <p>需要运行时替换内容时，调用方应直接操作编辑器实例：
+   * `editorInstance.current?.setValue(next)` 或 `trigger('...','type',{text})`。
+   */
+  defaultValue?: string;
   readOnly?: boolean;
   lineNumbers?: string;
   autoWrap?: string;
@@ -89,7 +103,8 @@ const CodeEdit = (props: CodeEditFormProps) => {
     language, // edit language
     options,
     onChange, // edit change callback
-    code, // content
+    code, // content（受控，与 defaultValue 互斥）
+    defaultValue, // content（非受控初始值）
     readOnly = false, // is readOnly
     lineNumbers, // show lineNumbers
     enableSuggestions = false, // enable suggestions
@@ -318,7 +333,8 @@ const CodeEdit = (props: CodeEditFormProps) => {
           beforeMount={(monaco) => handleInitEditorAndLanguageOnBeforeMount(monaco, true)}
           width={width}
           height={height}
-          value={code}
+          // 受控（code 已传）与非受控（defaultValue）互斥，避免 @monaco-editor/react 行为不确定
+          {...(code !== undefined ? { value: code } : { defaultValue: defaultValue ?? '' })}
           language={language}
           options={finalEditorOptions}
           className={'editor-develop'}
