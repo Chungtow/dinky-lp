@@ -25,7 +25,7 @@ import { InsightCard } from '@antv/ava-react';
 import type { Datum, InsightsResult } from '@antv/ava/lib/insight/types';
 import { Drawer, message, Tabs, TabsProps } from 'antd';
 import React, { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
-import { useResultColumns } from './columns';
+import { getCellCopyValue, stringifyCellValue, useResultColumns } from './columns';
 import ResultToolRail from './ResultToolRail';
 import { ResultColumnsState, ResultData, ResultEntry } from './useResultEntries';
 
@@ -73,10 +73,18 @@ const ResultTable: React.FC<ResultTableProps> = (props) => {
       return undefined;
     }
     const _utf = '\uFEFF';
-    const csvDataBlob = new Blob(
-      [_utf + transformTableDataToCsv(activeData.columns, activeData.rowData ?? [])],
-      { type: 'text/csv' }
-    );
+    // 导出与单元格展示保持同一套取值口径：结构化值序列化成 JSON，
+    // 否则 CSV 里同样是 `[object Object]`（导出的是原文，不带显示层占位符）
+    const csvRows = (activeData.rowData ?? []).map((row: any) => {
+      const formatted: Record<string, string> = {};
+      activeData.columns.forEach((column: string) => {
+        formatted[column] = stringifyCellValue(row?.[column]);
+      });
+      return formatted;
+    });
+    const csvDataBlob = new Blob([_utf + transformTableDataToCsv(activeData.columns, csvRows)], {
+      type: 'text/csv'
+    });
     return URL.createObjectURL(csvDataBlob);
   }, [activeData]);
 
@@ -122,20 +130,21 @@ const ResultTable: React.FC<ResultTableProps> = (props) => {
     if (!root) {
       return;
     }
-    const table = (isSingle
-      ? root.querySelector('.ant-table')
-      : root.querySelector('.ant-tabs-tabpane-active .ant-table')) as HTMLElement | null;
+    // 只认主表：开启 sticky 后 antd 会克隆一份"只有表头"的 .ant-table 到
+    // .ant-table-sticky-holder，直接 querySelector('.ant-table') 可能命中它。
+    // tbody 只存在于主表，用它反查最稳。
+    const scope = isSingle ? root : (root.querySelector('.ant-tabs-tabpane-active') ?? root);
+    const table = scope.querySelector('.ant-table-tbody')?.closest('table') as HTMLElement | null;
     if (!table) {
       return;
     }
-    const cellText = (el: Element) => (el.textContent ?? '').replace(/\s+/g, ' ').trim();
     const headers = Array.from(table.querySelectorAll('thead th'))
       .filter((th) => !th.classList.contains('ant-table-cell-scrollbar'))
-      .map(cellText);
+      .map(getCellCopyValue);
     const rows = Array.from(table.querySelectorAll('tbody tr.ant-table-row')).map((tr) =>
       Array.from(tr.querySelectorAll('td'))
         .filter((td) => !td.classList.contains('ant-table-cell-scrollbar'))
-        .map(cellText)
+        .map(getCellCopyValue)
     );
     if (headers.length === 0 && rows.length === 0) {
       return;
@@ -159,26 +168,48 @@ const ResultTable: React.FC<ResultTableProps> = (props) => {
     message.success(l('pages.datastudio.label.result.copy.success', '', { rowCount: rows.length }));
   }, [isSingle]);
 
-  const renderTable = (data: ResultData) => (
-    <ProTable
-      className={'datastudio-theme'}
-      cardBordered
-      columns={getColumns(data?.columns)}
-      size='small'
-      scroll={{ x: 'max-content' }}
-      dataSource={(data?.rowData ?? []).map((item: any, index: number) => ({ ...item, key: index }))}
-      options={false}
-      toolBarRender={false}
-      cardProps={{ bodyStyle: { padding: '6px 8px' } }}
-      columnsState={{
-        value: columnsState,
-        onChange: (map) => onColumnsStateChange(entry.id, map as ResultColumnsState)
-      }}
-      search={false}
-      loading={loading}
-      pagination={{ showSizeChanger: true, defaultPageSize: 50, size: 'small', hideOnSinglePage: true }}
-    />
-  );
+  const renderTable = (data: ResultData) => {
+    const columnsDef = getColumns(data?.columns, data?.rowData);
+    const totalWidth = columnsDef.reduce(
+      (sum: number, column: any) => sum + (column.width ?? 120),
+      0
+    );
+    return (
+      <ProTable
+        className={'datastudio-theme'}
+        cardBordered
+        columns={columnsDef}
+        size='small'
+        // 列宽由表头/样本估算（80~360），总宽作为横向滚动基准；
+        // 不再是 max-content，否则超长文本会把列无限撑开、ellipsis 永远不触发
+        scroll={{ x: totalWidth }}
+        // 表头吸顶：滚动容器是面板内的 .ant-tabs-content（不是 window）
+        sticky={{
+          getContainer: () =>
+            (tableWrapRef.current?.closest('.ant-tabs-content') as HTMLElement) ?? document.body
+        }}
+        dataSource={(data?.rowData ?? []).map((item: any, index: number) => ({
+          ...item,
+          key: index
+        }))}
+        options={false}
+        toolBarRender={false}
+        cardProps={{ bodyStyle: { padding: '6px 8px' } }}
+        columnsState={{
+          value: columnsState,
+          onChange: (map) => onColumnsStateChange(entry.id, map as ResultColumnsState)
+        }}
+        search={false}
+        loading={loading}
+        pagination={{
+          showSizeChanger: true,
+          defaultPageSize: 50,
+          size: 'small',
+          hideOnSinglePage: true
+        }}
+      />
+    );
+  };
 
   const innerItems: TabsProps['items'] = dataList.map((data, index) => ({
     key: tableKeyOf(data, index),

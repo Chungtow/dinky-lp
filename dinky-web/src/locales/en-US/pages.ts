@@ -598,6 +598,7 @@ export default {
   'pages.datastudio.label.result.empty': 'Results will appear here as separate tabs after execution',
   'pages.datastudio.label.result.copy': 'Copy current page',
   'pages.datastudio.label.result.copy.success': 'Copied {rowCount} rows on current page',
+  'pages.datastudio.label.result.copy.cell.success': 'Copied',
   'pages.datastudio.label.version': 'Version History',
   'pages.datastudio.label.version.diff': 'Version Diff',
   'pages.datastudio.label.version.leftTitle':

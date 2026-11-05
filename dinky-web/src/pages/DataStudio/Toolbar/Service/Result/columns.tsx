@@ -19,16 +19,212 @@
 
 import { l } from '@/utils/intl';
 import { SearchOutlined } from '@ant-design/icons';
-import { Highlight } from '@ant-design/pro-layout/es/components/Help/Search';
 import { ProColumns } from '@ant-design/pro-table/es/typing';
-import { Button, Input, InputRef, Space } from 'antd';
+import { Button, Input, InputRef, message, Popover, Space } from 'antd';
 import { ColumnType } from 'antd/es/table';
 import { FilterConfirmProps } from 'antd/es/table/interface';
-import { useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
+
+/** 列宽上下限（对齐 pgconsole 的 80~400 夹取，这里上限收紧到 360 以免宽表横向滚动过远） */
+const COLUMN_MIN_WIDTH = 80;
+const COLUMN_MAX_WIDTH = 360;
+/** 估算宽度时预留：左右 padding + 排序/筛选图标 */
+const COLUMN_PADDING = 44;
+/** 类型推断与宽度估算的采样行数 */
+const SAMPLE_SIZE = 200;
+
+/** 看起来像"标识符"的列名：虽然值是数字，但右对齐反而不利于扫读（手机号/订单号…） */
+const IDENTIFIER_COLUMN_RE =
+  /(^|_)(id|code|no)$|phone|mobile|tel|zip|postcode|编号|电话|邮编|身份证|卡号/i;
+/** 纯数字字符串（不允许前导 0，避免把 "007" / "13800138000" 当成数值） */
+const NUMERIC_TEXT_RE = /^-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?$/;
+/** 粗略判定 CJK 字符（宽度按 12px 估，ASCII 按 7px 估） */
+const CJK_RE = /[\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef]/;
 
 /**
- * 结果表格列定义：列头带排序 + 搜索。
- * 每个表格实例各持一份搜索状态（原来是 Result 单实例内共享，提升到一级 Tabs 后需按表格隔离）。
+ * 单元格原始值 → 可显示文本。
+ *
+ * <p>结果集 `rowData` 的 value 在 Java 侧是 `Object`，标量只占多数：ROW / STRUCT /
+ * JSON 列以及缺少序列化器的类型都会以**对象**下发。以前一律 `String(value)`，
+ * 这类单元格就会整列显示 `[object Object]`——内容全丢，且所有列按同一个固定文本
+ * 估算宽度，宽表被压成一排等宽列。
+ *
+ * <p>这里把非标量统一序列化成**单行** JSON（多行会让"单行省略 + hover 全文"失效），
+ * 至少保证「看得见、可复制、可搜索」。
+ */
+export const stringifyCellValue = (value: any): string => {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  const type = typeof value;
+  if (type === 'string') {
+    return value;
+  }
+  if (type === 'number' || type === 'boolean' || type === 'bigint') {
+    return String(value);
+  }
+  if (type === 'symbol') {
+    return value.toString();
+  }
+  if (type === 'function') {
+    return String(value);
+  }
+  // Date 不序列化成 {"...": ...}，直接用 ISO 文本
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? String(value) : value.toISOString();
+  }
+  try {
+    // BigInt 在 JSON.stringify 里会抛 TypeError，需先降级成字符串
+    const json = JSON.stringify(value, (_key, val) =>
+      typeof val === 'bigint' ? val.toString() : val
+    );
+    // 循环引用会抛错、纯 undefined 会返回 undefined，都要兜底
+    return json ?? String(value);
+  } catch (e) {
+    return String(value);
+  }
+};
+
+/** 是否为需要按 JSON 文本展示的「结构化」值（对象/数组，Date 除外） */
+export const isStructuredCellValue = (value: any): boolean =>
+  value !== null && typeof value === 'object' && !(value instanceof Date);
+
+/**
+ * 估算一段文本的像素宽度。
+ * 结果集没有 JDBC 类型信息，只能用字符宽度启发式估算（12px 字号下 CJK≈12px、ASCII≈7px）。
+ */
+export const estimateTextWidth = (text: string): number => {
+  let width = 0;
+  for (const char of text) {
+    width += CJK_RE.test(char) ? 12 : 7;
+  }
+  return width;
+};
+
+/** 采样估算列宽，夹取 [80, 360] */
+export const estimateColumnWidth = (header: string, rows: any[], dataIndex: string): number => {
+  let maxWidth = estimateTextWidth(String(header ?? ''));
+  const sample = (rows ?? []).slice(0, SAMPLE_SIZE);
+  for (const row of sample) {
+    const value = row?.[dataIndex];
+    if (value === null || value === undefined || value === '') {
+      continue;
+    }
+    // 结构化值按序列化后的 JSON 文本估宽，否则 `String(value)` 恒为 `[object Object]`
+    const width = estimateTextWidth(stringifyCellValue(value));
+    if (width > maxWidth) {
+      maxWidth = width;
+    }
+    if (maxWidth >= COLUMN_MAX_WIDTH) {
+      break;
+    }
+  }
+  return Math.min(Math.max(maxWidth + COLUMN_PADDING, COLUMN_MIN_WIDTH), COLUMN_MAX_WIDTH);
+};
+
+/**
+ * 判定数值列：采样行里所有非空值都是有限数字（或纯数字字符串），且列名不像标识符。
+ */
+export const isNumericColumn = (header: string, rows: any[], dataIndex: string): boolean => {
+  if (IDENTIFIER_COLUMN_RE.test(header ?? '')) {
+    return false;
+  }
+  let seen = 0;
+  const sample = (rows ?? []).slice(0, SAMPLE_SIZE);
+  for (const row of sample) {
+    const value = row?.[dataIndex];
+    if (value === null || value === undefined || value === '') {
+      continue;
+    }
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) {
+        return false;
+      }
+    } else if (typeof value === 'string') {
+      if (!NUMERIC_TEXT_RE.test(value.trim())) {
+        return false;
+      }
+    } else {
+      return false;
+    }
+    seen += 1;
+  }
+  return seen > 0;
+};
+
+/**
+ * 取单元格的"可复制值"。
+ *
+ * <p>空值占位（`null` / `(empty)`）会污染 `textContent`，因此占位元素上带 `data-copy=""`，
+ * 这里优先读它 —— 保证「复制当前页」与「单元格复制」拿到的都是**原始值**。
+ */
+export const getCellCopyValue = (cell: Element): string => {
+  const rawNode = cell.querySelector('[data-copy]');
+  if (rawNode) {
+    return rawNode.getAttribute('data-copy') ?? '';
+  }
+  return (cell.textContent ?? '').replace(/\s+/g, ' ').trim();
+};
+
+/** 写剪贴板：优先 Clipboard API，内网 HTTP 下降级 textarea + execCommand */
+export const copyTextToClipboard = async (text: string): Promise<void> => {
+  try {
+    if (!navigator?.clipboard) {
+      throw new Error('clipboard api unavailable');
+    }
+    await navigator.clipboard.writeText(text);
+  } catch (e) {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+  }
+};
+
+/**
+ * 安全的关键词高亮。
+ *
+ * <p>**不再使用** `@ant-design/pro-layout` 内部的 `Highlight`：它的实现是
+ * `while (matchText.length) { matchText = matchText.slice(matchLength) }`，
+ * 空关键词时 `matchLength === 0` 会死循环（列头搜索点「重置」导致页面崩溃的根因）。
+ * 这里空关键词直接返回原文，并用 `String.split(捕获组)` 实现，不存在零长度循环。
+ */
+export const HighlightText: React.FC<{ text: string; keyword?: string }> = ({ text, keyword }) => {
+  const keywordTrimmed = (keyword ?? '').trim();
+  if (!keywordTrimmed) {
+    return <>{text}</>;
+  }
+  const escaped = keywordTrimmed.replace(/[-[\]/{}()*+?.\\^$|]/g, '\\$&');
+  const parts = text.split(new RegExp(`(${escaped})`, 'gi'));
+  return (
+    <>
+      {parts.map((part, index) =>
+        // split 带捕获组时，奇数下标即命中片段
+        index % 2 === 1 ? (
+          <span key={index} className={'ds-cell-hl'}>
+            {part}
+          </span>
+        ) : (
+          part
+        )
+      )}
+    </>
+  );
+};
+
+/** 单元格复制：双击触发，toast 提示 */
+const handleCellCopy = async (text: string) => {
+  await copyTextToClipboard(text);
+  message.success(l('pages.datastudio.label.result.copy.cell.success'));
+};
+
+/**
+ * 结果表格列定义：列头带排序 + 搜索；单元格带空值弱化、超长省略 + hover 全文面板、双击复制。
+ * 每个表格实例各持一份搜索状态（提升到一级 Tabs 后需按表格隔离）。
  */
 export const useResultColumns = () => {
   const [searchText, setSearchText] = useState('');
@@ -38,6 +234,8 @@ export const useResultColumns = () => {
   const handleReset = (clearFilters: () => void) => {
     clearFilters();
     setSearchText('');
+    // 必须一起清：否则 render 仍走高亮分支且关键词为空串（旧版「重置」崩溃的根因）
+    setSearchedColumn('');
   };
 
   const handleSearch = (
@@ -57,7 +255,11 @@ export const useResultColumns = () => {
 
   const getColumnSearchProps = (dataIndex: string): ColumnType<any> => ({
     filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }) => (
-      <div style={{ padding: 8 }} onKeyDown={(e) => e.stopPropagation()}>
+      <div
+        className={'ds-column-search-dropdown'}
+        style={{ padding: 8 }}
+        onKeyDown={(e) => e.stopPropagation()}
+      >
         <Input
           ref={searchInput}
           placeholder={`Search ${dataIndex}`}
@@ -87,38 +289,117 @@ export const useResultColumns = () => {
       </div>
     ),
     filterIcon: (filtered: boolean) => (
-      <SearchOutlined style={{ color: filtered ? '#1677ff' : undefined }} />
+      // 这里同样不能再用 --primary-color：它是页面背景色（亮色 #ffffff / 暗色 #2b2d30），
+      // 拿来当图标色会让"已筛选"状态的放大镜直接白化看不见
+      <SearchOutlined
+        style={{ color: filtered ? 'var(--ds-highlight-color, #1677ff)' : undefined }}
+      />
     ),
     onFilter: (value, record) =>
-      String(record[dataIndex] ?? '')
+      // 与单元格展示保持一致：对象值也按 JSON 文本参与匹配
+      stringifyCellValue(record[dataIndex])
         .toLowerCase()
         .includes(String(value ?? '').toLowerCase()),
     onFilterDropdownOpenChange: (visible) => {
       if (visible) {
         setTimeout(() => searchInput.current?.select(), 100);
       }
-    },
-    render: (text) => {
-      // 统一字符串化：React 对 JS 原生 boolean/null/undefined 渲染为空，需显式转字符串展示
-      const displayText = text == null ? '' : String(text);
-      return searchedColumn === dataIndex ? (
-        <Highlight label={displayText} words={[searchText]} />
-      ) : (
-        displayText
-      );
     }
   });
 
-  const getColumns = (columns: string[] = []) => {
+  /** 单元格内容：空值弱化 / 关键词高亮 / 超宽时挂 hover 全文面板 / 双击复制 */
+  const renderCell = (value: any, columnWidth: number, keyword: string, matched: boolean) => {
+    if (value === null || value === undefined) {
+      return (
+        <span
+          className={'ds-cell-placeholder ds-cell-null'}
+          data-copy={''}
+          onDoubleClick={() => handleCellCopy('')}
+        >
+          {'null'}
+        </span>
+      );
+    }
+    if (value === '') {
+      return (
+        <span
+          className={'ds-cell-placeholder ds-cell-empty'}
+          data-copy={''}
+          onDoubleClick={() => handleCellCopy('')}
+        >
+          {'(empty)'}
+        </span>
+      );
+    }
+
+    const text = stringifyCellValue(value);
+    const structured = isStructuredCellValue(value);
+    const needFullTextPanel = estimateTextWidth(text) > columnWidth - COLUMN_PADDING;
+    const content = matched ? <HighlightText text={text} keyword={keyword} /> : text;
+
+    const cell = (
+      <span
+        className={structured ? 'ds-cell-text ds-cell-json' : 'ds-cell-text'}
+        onDoubleClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          handleCellCopy(text);
+        }}
+      >
+        {content}
+      </span>
+    );
+
+    if (!needFullTextPanel) {
+      return cell;
+    }
+    return (
+      <Popover
+        trigger={'hover'}
+        placement={'topLeft'}
+        mouseEnterDelay={0.3}
+        overlayClassName={'ds-cell-popover'}
+        content={<div className={'ds-cell-fulltext'}>{text}</div>}
+      >
+        {cell}
+      </Popover>
+    );
+  };
+
+  const getColumns = (columns: string[] = [], rows: any[] = []) => {
     return columns?.map((item) => {
+      const width = estimateColumnWidth(item, rows, item);
+      const numeric = isNumericColumn(item, rows, item);
       return {
         title: item,
         dataIndex: item,
+        width,
+        align: numeric ? 'right' : 'left',
+        // 单行省略 + hover 全文面板由本文件自己的 .ds-cell-text / Popover 实现，
+        // **不能**再配 ProTable 的 `ellipsis`：见 render 上的注释（它会把 render 的
+        // 第一个入参从原始值换成 React 元素）。
         sorter: (a: any, b: any) =>
-          String(a[item] ?? '').localeCompare(String(b[item] ?? ''), undefined, {
+          stringifyCellValue(a[item]).localeCompare(stringifyCellValue(b[item]), undefined, {
             numeric: true
           }),
-        ...getColumnSearchProps(item)
+        ...getColumnSearchProps(item),
+        /**
+         * 取值必须用**第二个参数 `record`**，不能用第一个参数。
+         *
+         * <p>ProTable（`@ant-design/pro-table`）的 ProColumns `render` 签名是
+         * `render(dom, record, index, action, schema)`：首参是框架**已渲染好的 dom**，
+         * 不是单元格原值（见 `utils/columnRender.js` 里 `columnProps.render(dom, rowData, ...)`）。
+         * 且当列上配了 `ellipsis`/`copyable` 时，`genCopyable()` 会先把内容包成
+         * `<Typography.Text style={{width:'100%',margin:0,padding:0}} title="" ellipsis>`，
+         * 于是首参变成**一个 React 元素**：
+         * - `String(dom)` → `[object Object]`
+         * - `JSON.stringify(dom)` → `{"type":{},"key":null,"ref":null,"props":{...},...}`
+         * 而空单元格还会被替换成 `columnEmptyText`（默认 `-`），所以元素 children 常是 `-`。
+         *
+         * <p>只有第二个参数是真正的行数据，`record[item]` 才是该列的原始 value。
+         */
+        render: (_dom: any, record: any) =>
+          renderCell(record?.[item], width, searchText, searchedColumn === item && !!searchText)
       };
     }) as ProColumns[];
   };
