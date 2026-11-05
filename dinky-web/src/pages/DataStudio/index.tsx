@@ -20,7 +20,7 @@
 import { DockLayout, TabData } from 'rc-dock';
 import React, { lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { PageContainer } from '@ant-design/pro-layout';
-import { Col, ConfigProvider, Row, Spin, theme as antdTheme } from 'antd';
+import { Col, ConfigProvider, Row, Spin } from 'antd';
 import Toolbar from '@/pages/DataStudio/Toolbar';
 import { DataStudioActionType, RightContextMenuState } from '@/pages/DataStudio/data.d';
 import {
@@ -48,6 +48,12 @@ import { useTheme } from '@/hooks/useThemeValue';
 import { DataStudioContext, EditorRegistry } from '@/pages/DataStudio/DataStudioContext';
 import './css/index.less';
 import { getTenantByLocalStorage } from '@/utils/function';
+import {
+  buildDataStudioTheme,
+  DS_PALETTE_STYLE_ID,
+  paletteCssText
+} from '@/pages/DataStudio/themeToken';
+import type { DsThemeMode } from '@/pages/DataStudio/themeToken';
 import FooterContainer from '@/pages/DataStudio/FooterContainer';
 import { useToken } from 'antd/es/theme/internal';
 import { TAG_RIGHT_CONTEXT_MENU } from '@/pages/DataStudio/constants';
@@ -111,13 +117,37 @@ const DataStudio: React.FC = (props: any) => {
 
   const [loading, setLoading] = useState<boolean>(true);
   const theme = useTheme() as 'realDark' | 'light';
-  const themeAlgorithm = useMemo(() => {
-    const algorithms = [theme === 'light' ? antdTheme.defaultAlgorithm : antdTheme.darkAlgorithm];
-    if (dataStudioState.theme.compact) {
-      algorithms.push(antdTheme.compactAlgorithm);
+  /** 主题模式（`realDark` 归一到 `dark`），palette 与 antd 算法共用这一个口径 */
+  const themeMode: DsThemeMode = theme === 'light' ? 'light' : 'dark';
+  /**
+   * antd 主题配置。**不再向 token 传 CSS 变量字符串**：改造前 `colorBgContainer: 'var(--primary-color)'`
+   * 会让 TinyColor 把底色当黑色合成，凡是「由底色派生」的颜色（Tag 默认底色、Table 选中态混色等）全部算错。
+   * 现由 `themeToken.ts` 的 palette 提供真实 hex，详见该文件顶部说明。
+   */
+  const dataStudioTheme = useMemo(
+    () => buildDataStudioTheme(themeMode, dataStudioState.theme.compact),
+    [dataStudioState.theme.compact, themeMode]
+  );
+
+  /**
+   * 把 palette 写成 CSS 变量（运行期单真源）。
+   *
+   * <p>注入到 `<head>` 而不是写到某个节点的行内 style：`.page-container` 是 `PageContainer` 自己的根节点，
+   * 拿不到它的 ref；且变量必须落在**中区编辑器与右侧 AI Chat 的共同祖先**上——`@` 句柄面板
+   * （`mentionController.ts`）与 AI Chat 的 `@` 引用浮层都硬编码 `var(--primary-color, #fff)`，
+   * 变量一旦取不到就会回落成白底（深色主题下白底浅字不可读）。
+   *
+   * <p>`css/index.less` 里同名变量的静态值保留为首帧兜底，两者的值必须逐项一致。
+   */
+  useEffect(() => {
+    let styleEl = document.getElementById(DS_PALETTE_STYLE_ID) as HTMLStyleElement | null;
+    if (!styleEl) {
+      styleEl = document.createElement('style');
+      styleEl.id = DS_PALETTE_STYLE_ID;
+      document.head.appendChild(styleEl);
     }
-    return algorithms;
-  }, [dataStudioState.theme.compact, theme]);
+    styleEl.textContent = paletteCssText(themeMode);
+  }, [themeMode]);
 
   const layout = useMemo(() => {
     const layoutData = getLayoutState(dataStudioState.layoutData, didMount);
@@ -742,27 +772,7 @@ const DataStudio: React.FC = (props: any) => {
   );
   return (
     <DataStudioContext.Provider value={{ theme: theme, editorRegistry }}>
-      <ConfigProvider
-        theme={{
-          token: {
-            colorBgContainer: 'var(--primary-color)'
-          },
-          components: {
-            Table: {
-              headerBg: 'var(--second-color)',
-              rowHoverBg: 'var(--second-color)',
-              rowSelectedBg: 'var(--second-color)',
-              rowSelectedHoverBg: 'var(--second-color)',
-              headerFilterHoverBg: 'var(--primary-color)',
-              headerSortActiveBg: 'var(--primary-color)',
-              headerSortHoverBg: 'var(--primary-color)',
-              fixedHeaderSortActiveBg: 'var(--primary-color)',
-              bodySortBg: 'var(--second-color)'
-            }
-          },
-          algorithm: themeAlgorithm
-        }}
-      >
+      <ConfigProvider theme={dataStudioTheme}>
         <PageContainer
           breadcrumb={{}}
           title={false}

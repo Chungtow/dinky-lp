@@ -25,8 +25,10 @@ const Settings: ProLayoutProps & {
   logo?: string;
 } = {
   navTheme: 'light',
-  // 拂晓蓝
-  colorPrimary: '#1890ff',
+  // 主色统一为 antd 5 默认蓝（2026-11-05）：改造前这里是 `#1890ff`，而 antd 全局没配 theme，
+  // 按钮/链接实际走的是 antd 默认 `#1677ff`，于是「菜单选中一种蓝、按钮另一种蓝」。
+  // 现统一到 `#1677ff`（DataStudio 侧见 `pages/DataStudio/themeToken.ts`）。
+  colorPrimary: '#1677ff',
   layout: 'mix',
   contentWidth: 'Fluid',
   fixedHeader: false,
