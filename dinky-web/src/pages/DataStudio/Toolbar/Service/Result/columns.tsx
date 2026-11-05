@@ -42,6 +42,54 @@ const NUMERIC_TEXT_RE = /^-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?$/;
 const CJK_RE = /[\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef]/;
 
 /**
+ * 单元格原始值 → 可显示文本。
+ *
+ * <p>结果集 `rowData` 的 value 在 Java 侧是 `Object`，标量只占多数：ROW / STRUCT /
+ * JSON 列以及缺少序列化器的类型都会以**对象**下发。以前一律 `String(value)`，
+ * 这类单元格就会整列显示 `[object Object]`——内容全丢，且所有列按同一个固定文本
+ * 估算宽度，宽表被压成一排等宽列。
+ *
+ * <p>这里把非标量统一序列化成**单行** JSON（多行会让"单行省略 + hover 全文"失效），
+ * 至少保证「看得见、可复制、可搜索」。
+ */
+export const stringifyCellValue = (value: any): string => {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  const type = typeof value;
+  if (type === 'string') {
+    return value;
+  }
+  if (type === 'number' || type === 'boolean' || type === 'bigint') {
+    return String(value);
+  }
+  if (type === 'symbol') {
+    return value.toString();
+  }
+  if (type === 'function') {
+    return String(value);
+  }
+  // Date 不序列化成 {"...": ...}，直接用 ISO 文本
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? String(value) : value.toISOString();
+  }
+  try {
+    // BigInt 在 JSON.stringify 里会抛 TypeError，需先降级成字符串
+    const json = JSON.stringify(value, (_key, val) =>
+      typeof val === 'bigint' ? val.toString() : val
+    );
+    // 循环引用会抛错、纯 undefined 会返回 undefined，都要兜底
+    return json ?? String(value);
+  } catch (e) {
+    return String(value);
+  }
+};
+
+/** 是否为需要按 JSON 文本展示的「结构化」值（对象/数组，Date 除外） */
+export const isStructuredCellValue = (value: any): boolean =>
+  value !== null && typeof value === 'object' && !(value instanceof Date);
+
+/**
  * 估算一段文本的像素宽度。
  * 结果集没有 JDBC 类型信息，只能用字符宽度启发式估算（12px 字号下 CJK≈12px、ASCII≈7px）。
  */
@@ -62,7 +110,8 @@ export const estimateColumnWidth = (header: string, rows: any[], dataIndex: stri
     if (value === null || value === undefined || value === '') {
       continue;
     }
-    const width = estimateTextWidth(String(value));
+    // 结构化值按序列化后的 JSON 文本估宽，否则 `String(value)` 恒为 `[object Object]`
+    const width = estimateTextWidth(stringifyCellValue(value));
     if (width > maxWidth) {
       maxWidth = width;
     }
@@ -240,10 +289,15 @@ export const useResultColumns = () => {
       </div>
     ),
     filterIcon: (filtered: boolean) => (
-      <SearchOutlined style={{ color: filtered ? 'var(--primary-color)' : undefined }} />
+      // 这里同样不能再用 --primary-color：它是页面背景色（亮色 #ffffff / 暗色 #2b2d30），
+      // 拿来当图标色会让"已筛选"状态的放大镜直接白化看不见
+      <SearchOutlined
+        style={{ color: filtered ? 'var(--ds-highlight-color, #1677ff)' : undefined }}
+      />
     ),
     onFilter: (value, record) =>
-      String(record[dataIndex] ?? '')
+      // 与单元格展示保持一致：对象值也按 JSON 文本参与匹配
+      stringifyCellValue(record[dataIndex])
         .toLowerCase()
         .includes(String(value ?? '').toLowerCase()),
     onFilterDropdownOpenChange: (visible) => {
@@ -278,13 +332,14 @@ export const useResultColumns = () => {
       );
     }
 
-    const text = String(value);
+    const text = stringifyCellValue(value);
+    const structured = isStructuredCellValue(value);
     const needFullTextPanel = estimateTextWidth(text) > columnWidth - COLUMN_PADDING;
     const content = matched ? <HighlightText text={text} keyword={keyword} /> : text;
 
     const cell = (
       <span
-        className={'ds-cell-text'}
+        className={structured ? 'ds-cell-text ds-cell-json' : 'ds-cell-text'}
         onDoubleClick={(e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -320,14 +375,31 @@ export const useResultColumns = () => {
         dataIndex: item,
         width,
         align: numeric ? 'right' : 'left',
-        ellipsis: { showTitle: false },
+        // 单行省略 + hover 全文面板由本文件自己的 .ds-cell-text / Popover 实现，
+        // **不能**再配 ProTable 的 `ellipsis`：见 render 上的注释（它会把 render 的
+        // 第一个入参从原始值换成 React 元素）。
         sorter: (a: any, b: any) =>
-          String(a[item] ?? '').localeCompare(String(b[item] ?? ''), undefined, {
+          stringifyCellValue(a[item]).localeCompare(stringifyCellValue(b[item]), undefined, {
             numeric: true
           }),
         ...getColumnSearchProps(item),
-        render: (text: any) =>
-          renderCell(text, width, searchText, searchedColumn === item && !!searchText)
+        /**
+         * 取值必须用**第二个参数 `record`**，不能用第一个参数。
+         *
+         * <p>ProTable（`@ant-design/pro-table`）的 ProColumns `render` 签名是
+         * `render(dom, record, index, action, schema)`：首参是框架**已渲染好的 dom**，
+         * 不是单元格原值（见 `utils/columnRender.js` 里 `columnProps.render(dom, rowData, ...)`）。
+         * 且当列上配了 `ellipsis`/`copyable` 时，`genCopyable()` 会先把内容包成
+         * `<Typography.Text style={{width:'100%',margin:0,padding:0}} title="" ellipsis>`，
+         * 于是首参变成**一个 React 元素**：
+         * - `String(dom)` → `[object Object]`
+         * - `JSON.stringify(dom)` → `{"type":{},"key":null,"ref":null,"props":{...},...}`
+         * 而空单元格还会被替换成 `columnEmptyText`（默认 `-`），所以元素 children 常是 `-`。
+         *
+         * <p>只有第二个参数是真正的行数据，`record[item]` 才是该列的原始 value。
+         */
+        render: (_dom: any, record: any) =>
+          renderCell(record?.[item], width, searchText, searchedColumn === item && !!searchText)
       };
     }) as ProColumns[];
   };

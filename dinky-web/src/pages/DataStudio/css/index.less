@@ -15,6 +15,10 @@
   --close-btn-img: url('./imgs/close-light.svg');
   --center-content-bg-color: #f2f2f2;
   --center-content-active-bg-color: var(--primary-color);
+  // 搜索结果高亮（**不能**复用 --primary-color：那是页面背景色，亮色下是 #ffffff，
+  // 当文字色用就成了"白字白底"看不见）
+  --ds-highlight-color: #1677ff;
+  --ds-highlight-bg: rgba(22, 119, 255, 0.14);
 }
 
 .dark-theme {
@@ -34,6 +38,9 @@
   --close-btn-img: url('./imgs/close-dark.svg');
   --centerContent-bg-color: #2b2d30;
   --center-content-active-bg-color: #434343;
+  // 暗色下 #1677ff 压在 #2b2d30 上偏暗，提亮一档（antd blue-5 / blue-3 底）
+  --ds-highlight-color: #4096ff;
+  --ds-highlight-bg: rgba(64, 150, 255, 0.22);
 }
 
 .page-container {
@@ -1263,10 +1270,20 @@ body.dock-dragging iframe {
     opacity: 0.45;
   }
 
-  // 搜索命中高亮
+  // 结构化值（ROW/STRUCT/JSON 列）：等宽字体 + 弱化，和普通文本区分开
+  .ds-cell-json {
+    font-family: var(--font-family-monospace, ui-monospace, SFMono-Regular, Menlo, monospace);
+    opacity: 0.75;
+  }
+
+  // 搜索命中高亮：亮色白底 / 暗色深底都要能看清，所以用专门的 --ds-highlight-*，
+  // 并给 hex 兜底（万一主题变量没继承下来，也不会退化成不可见的颜色）
   .ds-cell-hl {
-    color: var(--primary-color);
-    font-weight: 500;
+    color: var(--ds-highlight-color, #1677ff);
+    background: var(--ds-highlight-bg, rgba(22, 119, 255, 0.14));
+    font-weight: 600;
+    border-radius: 2px;
+    padding: 0 1px;
   }
 }
 
