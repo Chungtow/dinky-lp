@@ -160,7 +160,7 @@ const LoginForm: React.FC<LoginFormProps> = (props) => {
                   style={{ color: '#00b0ff', marginBottom: 60, justifyContent: 'center' }}
                   align={'middle'}
                 >
-                  <img src={'./dinky.svg'} width={150} alt={''} />
+                  <img src={'./brand-logo.svg'} width={150} alt={''} />
                   <h1 style={{ margin: '0' }}>{l('layouts.userLayout.title')}</h1>
                 </Row>
               </Col>

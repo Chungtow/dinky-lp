@@ -1,0 +1,23 @@
+{
+  "$comment": "品牌元数据（唯一维护点）。构建期由 config/config.ts 读取；浏览器端由 src/branding/index.ts 经 __BRAND__ 读取。新增品牌：复制本文件为 <id>.json，并建 public/brand/<id>/ 素材目录。",
+  "id": "dinky",
+  "documentTitle": "Dinky",
+  "name": "Dinky 实时计算平台",
+  "nameEn": "Dinky Real-time Platform",
+  "copyright": "Produced by Dinky Community",
+  "logo": "brand-logo.svg",
+  "theme": {
+    "colorPrimary": "#1890ff"
+  },
+  "links": {
+    "website": "http://www.dinky.org.cn/",
+    "docs": "http://www.dinky.org.cn/",
+    "github": "https://github.com/DataLinkDC/dinky",
+    "gitee": "https://gitee.com/DataLinkDC/Dinky",
+    "bilibili": "https://space.bilibili.com/366484959/video"
+  },
+  "assets": {
+    "required": ["brand-logo.svg", "favicon.ico"],
+    "recommended": ["imgs/login_background.jpg", "icons/footer-bg.svg"]
+  }
+}

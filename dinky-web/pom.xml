@@ -29,6 +29,12 @@
 
     <name>Dinky : Web</name>
 
+    <properties>
+        <!-- 白标多品牌：构建期传给前端（config/config.ts 读 process.env.BRAND）的品牌 id；
+             由 build.sh 的 brand 参数经 -Dbrand=<id> 覆盖，默认 dinky -->
+        <brand>dinky</brand>
+    </properties>
+
     <build>
         <finalName>${project.artifactId}-${project.version}</finalName>
         <resources>
@@ -77,6 +83,9 @@
                     </goals>
                     <configuration>
                       <arguments>run build</arguments>
+                      <environmentVariables>
+                        <BRAND>${brand}</BRAND>
+                      </environmentVariables>
                     </configuration>
                   </execution>
                 </executions>
