@@ -24,6 +24,46 @@ import routes from './routes';
 
 const { REACT_APP_ENV = 'dev' } = process.env;
 const MonacoWebpackPlugin = require('monaco-editor-webpack-plugin');
+const fs = require('fs');
+const StripBrandDirPlugin = require('./plugins/strip-brand-dir');
+
+/**
+ * @name 品牌（白标）解析
+ * @description 构建期由 `build.sh --brand <id>` 经 pom 的 environmentVariables 传入 BRAND，默认 dinky。
+ *              元数据在 `dinky-web/brand/<id>.json`，素材在 `dinky-web/public/brand/<id>/`（覆盖式注入 dist 根）。
+ * @@doc docs/plan/20261106-Dinky-LP Web端商业化白标多品牌切换实施计划.md
+ */
+const BRAND_ID = process.env.BRAND || 'dinky';
+const BRAND_META_FILE = join(__dirname, '..', 'brand', `${BRAND_ID}.json`);
+const BRAND_ASSET_DIR = join(__dirname, '..', 'public', 'brand', BRAND_ID);
+
+if (!fs.existsSync(BRAND_META_FILE)) {
+  throw new Error(
+    `[brand] 找不到品牌元数据：${BRAND_META_FILE}（可用品牌见 dinky-web/brand/*.json）`
+  );
+}
+const brandMeta = JSON.parse(fs.readFileSync(BRAND_META_FILE, 'utf-8'));
+
+const REQUIRED_ASSETS: string[] = brandMeta?.assets?.required || ['brand-logo.svg', 'favicon.ico'];
+const missingAssets = REQUIRED_ASSETS.filter(
+  (name: string) => !fs.existsSync(join(BRAND_ASSET_DIR, name))
+);
+if (missingAssets.length > 0) {
+  throw new Error(
+    `[brand:${BRAND_ID}] 缺少必选品牌素材：${missingAssets.join(', ')}（目录：${BRAND_ASSET_DIR}）`
+  );
+}
+const RECOMMENDED_ASSETS: string[] = brandMeta?.assets?.recommended || [];
+const missingRecommended = RECOMMENDED_ASSETS.filter(
+  (name: string) => !fs.existsSync(join(BRAND_ASSET_DIR, name))
+);
+if (missingRecommended.length > 0) {
+  console.warn(
+    `[brand:${BRAND_ID}] 未提供推荐素材，将使用 public/ 的中性版本：${missingRecommended.join(', ')}`
+  );
+}
+console.log(`[brand] 构建品牌 = ${BRAND_ID}（${brandMeta.documentTitle || brandMeta.name || ''}）`);
+
 // @ts-ignore
 export default defineConfig({
   /**
@@ -111,7 +151,21 @@ export default defineConfig({
    * @name layout 插件
    * @doc https://umijs.org/docs/max/layout-menu
    */
-  title: 'Dinky',
+  title: brandMeta.documentTitle || 'Dinky',
+  /**
+   * @name 品牌素材覆盖注入
+   * @description 把 `public/brand/<id>/` 的内容注入到 dist **根**（与 public/ 同名文件"后者覆盖"），
+   *              因此代码里的 `./brand-logo.svg`、`./icons/footer-bg.svg` 等引用路径无需改动。
+   *              `to` 必须是含 dist 的相对路径（umi 内部按 cwd 解析）。
+   */
+  copy: [{ from: `public/brand/${BRAND_ID}`, to: 'dist' }],
+  /**
+   * @name 注入浏览器端品牌常量
+   * @description `src/branding/index.ts` 从这里取值，组件与 i18n 文案统一引用 BRAND。
+   */
+  define: {
+    __BRAND__: brandMeta
+  },
   layout: {
     locale: true,
     ...defaultSettings
@@ -202,6 +256,11 @@ export default defineConfig({
     memo.plugin('monaco-editor-webpack-plugin').use(MonacoWebpackPlugin, [
       // 按需配置
       { languages: ['shell', 'json', 'java', 'sql', 'python', 'scala', 'yaml'] }
+    ]);
+
+    // 品牌素材只保留选中品牌：构建后剥离 dist/brand/，并断言 logo 已落到 dist 根
+    memo.plugin('strip-brand-dir').use(StripBrandDirPlugin, [
+      { assetProbe: brandMeta.logo || 'brand-logo.svg' }
     ]);
 
     return memo;

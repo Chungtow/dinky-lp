@@ -37,10 +37,38 @@ set -e
 
 cd "$(dirname "$0")"
 
+# 0. 品牌参数（白标多品牌切换）
+#    - 品牌元数据: dinky-web/brand/<id>.json
+#    - 品牌素材:   dinky-web/public/brand/<id>/（覆盖式注入 dist 根）
+#    - 详见 docs/plan/20261106-Dinky-LP Web端商业化白标多品牌切换实施计划.md
+BRAND="dinky"
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --brand)
+            if [ -z "$2" ]; then
+                echo "✗ --brand 需要品牌 id，例如: ./build.sh --brand liangpu"
+                exit 1
+            fi
+            BRAND="$2"; shift 2 ;;
+        --brand=*)
+            BRAND="${1#*=}"; shift ;;
+        -h|--help)
+            echo "用法: ./build.sh [--brand <id>]"
+            echo "  <id> 取值见 dinky-web/brand/*.json（默认 dinky）"
+            exit 0 ;;
+        *)
+            echo "✗ 未知参数: $1"
+            echo "用法: ./build.sh [--brand <id>]"
+            exit 1 ;;
+    esac
+done
+export BRAND
+
 echo "=== Dinky-LP 构建（固化 Profile） ==="
 echo "Maven: ./mvnw（Wrapper 3.8.4，禁用系统 mvn）"
 echo "JDK: $(java -version 2>&1 | head -1)"
 echo "Profile: prod,web,aliyun,flink-single-version,flink-1.17,fast"
+echo "品牌: ${BRAND}（元数据 dinky-web/brand/${BRAND}.json）"
 echo "=========================================="
 
 # 1. 检查 JDK 8
@@ -78,8 +106,9 @@ echo "清理 .umi-production 缓存与 dist 旧产物..."
 rm -rf dinky-web/.umi-production dinky-web/src/.umi-production dinky-web/dist 2>/dev/null || true
 
 # 3. 构建（./mvnw 而非系统 mvn）
-echo "执行: ./mvnw clean package -Dmaven.test.skip=true -P prod,web,aliyun,flink-single-version,flink-1.17,fast"
+echo "执行: ./mvnw clean package -Dmaven.test.skip=true -Dbrand=${BRAND} -P prod,web,aliyun,flink-single-version,flink-1.17,fast"
 ./mvnw clean package -Dmaven.test.skip=true \
+    -Dbrand="${BRAND}" \
     -P prod,web,aliyun,flink-single-version,flink-1.17,fast
 
 echo ""
