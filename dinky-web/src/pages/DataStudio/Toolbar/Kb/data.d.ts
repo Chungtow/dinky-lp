@@ -95,8 +95,8 @@ export type KbPushRequest = {
   filename: string;
   content: string;
   collections: string[];
-  /** semantic / skill / resource → 服务端映射成 path 标记 */
-  source: 'semantic' | 'skill' | 'resource';
+  /** semantic / skill / resource / aichat → 服务端映射成 path 标记（2026-11-04 新增 aichat） */
+  source: 'semantic' | 'skill' | 'resource' | 'aichat';
   externalId?: string;
 };
 

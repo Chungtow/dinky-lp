@@ -195,6 +195,21 @@ export enum API_CONSTANTS {
   AI_CHAT_CANCEL = '/api/aiChat/cancel',
   /** P1-A：{@code @topic/} 候选（名册版，零连接 Kafka） */
   AI_CHAT_MENTION_TOPICS = '/api/aiChat/mentionTopics',
+  // P2（2026-11-04）：@job/ 候选——本租户 FlinkSQL 作业清单（id + name）
+  AI_CHAT_MENTION_JOBS = '/api/aiChat/mentionJobs',
+  /** 规则校验直连接口（只读、不调模型）：前端「校验 SQL」按钮用，判据稳定且不消耗模型额度 */
+  AI_CHAT_VALIDATE_DRAFT = '/api/aiChat/validateDraft',
+
+  /** --------------------------------------------  @ 候选统一索引（C1）  ------------------------------------------------------- */
+  /**
+   * {@code @} 候选（列式）：无 `q` = 全量预取（skill/doc/semantic/kb），有 `q` = 服务端搜索。
+   *
+   * <p>替代原先按类型分派的多个接口（skill/list、semantic/published/*、kb/collections）；
+   * 那些接口<b>仍然保留</b>（其它页面在用），只是浮层不再直接调。
+   */
+  AI_MENTION_CANDIDATES = '/api/ai/mention/candidates',
+  /** {@code @} 候选详情（副标题/摘要，选中后再拉） */
+  AI_MENTION_DETAIL = '/api/ai/mention/detail',
 
   /** --------------------------------------------  知识库（@kb 接入 v1.0）  ------------------------------------------------------- */
   /** 当前用户可见的知识库列表（{@code @kb/} 候选来源；只返回 code / name / description） */
@@ -221,6 +236,8 @@ export enum API_CONSTANTS {
   SKILL_LIST = '/api/skill/list',
   SKILL_DETAIL = '/api/skill/detail',
   SKILL_CREATE = '/api/skill/create',
+  /** 2026-11-04：建资产并直接写入正文（同一事务，frontmatter 由服务端拼） */
+  SKILL_CREATE_WITH_CONTENT = '/api/skill/createWithContent',
   SKILL_SAVE = '/api/skill/save',
   SKILL_REMOVE = '/api/skill/remove',
   // 2026-10-14 三档可见性：修改 skill/doc 可见性（private / tenant / public）
@@ -231,6 +248,8 @@ export enum API_CONSTANTS {
   SKILL_FILE_MKDIR = '/api/skill/file/mkdir',
   SKILL_FILE_RENAME = '/api/skill/file/rename',
   SKILL_FILE_REMOVE = '/api/skill/file/remove',
+  /** 保存后校验 `@` 句柄（只读；警告不阻断保存） */
+  SKILL_VALIDATE = '/api/skill/validate',
 
   // ------------------------------------ system log ------------------------------------
   SYSTEM_ROOT_LOG = '/api/system/getRootLog',

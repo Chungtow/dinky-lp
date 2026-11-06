@@ -20,6 +20,7 @@
 package org.dinky.controller;
 
 import org.dinky.assertion.Asserts;
+import org.dinky.cache.MetadataSchemaCache;
 import org.dinky.data.annotations.Log;
 import org.dinky.data.constant.CommonConstant;
 import org.dinky.data.constant.PermissionConstants;
@@ -43,8 +44,6 @@ import org.dinky.utils.HadoopConfReader;
 
 import java.util.List;
 
-import org.springframework.cache.annotation.CacheEvict;
-import org.springframework.cache.annotation.Cacheable;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -79,13 +78,14 @@ public class DataSourceController {
 
     private final DataBaseService databaseService;
 
+    private final MetadataSchemaCache metadataSchemaCache;
+
     /**
      * save or update database
      *
      * @param dataBaseDTO {@link DataBaseDTO}
      * @return {@link Result}< {@link Void}>
      */
-    @CacheEvict(cacheNames = "metadata_schema", key = "#dataBaseDTO.id", condition = "#dataBaseDTO.id != null")
     @PutMapping("/saveOrUpdate")
     @Log(title = "Insert Or Update DataBase", businessType = BusinessType.INSERT_OR_UPDATE)
     @ApiOperation("Insert Or Update DataBase")
@@ -103,6 +103,8 @@ public class DataSourceController {
     public Result<Void> saveOrUpdateDataBase(@RequestBody DataBaseDTO dataBaseDTO) {
         if (databaseService.saveOrUpdateDataBase(dataBaseDTO)) {
             DriverPool.remove(dataBaseDTO.getName());
+            // 连接配置可能变了，旧元数据立刻作废（等价于原 @CacheEvict）
+            metadataSchemaCache.invalidate(dataBaseDTO.getId());
             return Result.succeed(Status.SAVE_SUCCESS);
         } else {
             return Result.failed(Status.SAVE_FAILED);
@@ -141,6 +143,7 @@ public class DataSourceController {
     @SaCheckPermission(PermissionConstants.REGISTRATION_DATA_SOURCE_DELETE)
     public Result<Void> deleteDataBaseById(@RequestParam Integer id) {
         if (databaseService.removeById(id)) {
+            metadataSchemaCache.invalidate(id);
             return Result.succeed(Status.DELETE_SUCCESS);
         }
         return Result.failed(Status.DELETE_FAILED);
@@ -244,7 +247,6 @@ public class DataSourceController {
      * @param id {@link Integer}
      * @return {@link Result}< {@link List}< {@link Schema}>>
      */
-    @Cacheable(cacheNames = "metadata_schema", key = "#id")
     @GetMapping("/getSchemasAndTables")
     @ApiOperation("Get All Schemas And Tables")
     @ApiImplicitParam(
@@ -257,7 +259,8 @@ public class DataSourceController {
             example = "1")
     @SaCheckPermission(PermissionConstants.REGISTRATION_DATA_SOURCE_DETAIL_TREE)
     public Result<List<Schema>> getSchemasAndTables(@RequestParam Integer id) {
-        return Result.succeed(databaseService.getSchemasAndTables(id));
+        return Result.succeed(
+                metadataSchemaCache.getSchemasAndTables(id, () -> databaseService.getSchemasAndTables(id)));
     }
 
     /**
@@ -266,7 +269,6 @@ public class DataSourceController {
      * @param id {@link Integer}
      * @return {@link Result}< {@link List}< {@link Schema}>>
      */
-    @Cacheable(cacheNames = "metadata_schema", key = "#id")
     @GetMapping("/getSchemas")
     @ApiOperation("Get All Schemas And Tables")
     @ApiImplicitParam(
@@ -279,7 +281,7 @@ public class DataSourceController {
             example = "1")
     @SaCheckPermission(PermissionConstants.REGISTRATION_DATA_SOURCE_DETAIL_TREE)
     public Result<List<Schema>> getSchemas(@RequestParam Integer id) {
-        return Result.succeed(databaseService.getSchemas(id));
+        return Result.succeed(metadataSchemaCache.getSchemas(id, () -> databaseService.getSchemas(id)));
     }
 
     /**
@@ -300,7 +302,8 @@ public class DataSourceController {
             example = "1")
     @SaCheckPermission(PermissionConstants.REGISTRATION_DATA_SOURCE_DETAIL_TREE)
     public Result<List<Table>> getTables(@RequestParam Integer id, @RequestParam String schemaName) {
-        return Result.succeed(databaseService.getTables(id, schemaName));
+        return Result.succeed(
+                metadataSchemaCache.getTables(id, schemaName, () -> databaseService.getTables(id, schemaName)));
     }
 
     /**
@@ -309,7 +312,6 @@ public class DataSourceController {
      * @param id {@link Integer}
      * @return {@link Result}< {@link String}>
      */
-    @CacheEvict(cacheNames = "metadata_schema", key = "#id")
     @GetMapping("/unCacheSchemasAndTables")
     @ApiOperation("Clear Cache Of Schemas And Tables")
     @ApiImplicitParam(
@@ -328,6 +330,7 @@ public class DataSourceController {
             },
             mode = SaMode.OR)
     public Result<String> unCacheSchemasAndTables(@RequestParam Integer id) {
+        metadataSchemaCache.invalidate(id);
         return Result.succeed(Status.DATASOURCE_CLEAR_CACHE_SUCCESS);
     }
 

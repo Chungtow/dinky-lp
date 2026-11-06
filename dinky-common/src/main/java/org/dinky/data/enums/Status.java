@@ -343,6 +343,27 @@ public enum Status {
 
     SYS_FLINK_SETTINGS_USERESTAPI(100, "sys.flink.settings.useRestAPI"),
     SYS_FLINK_SETTINGS_USERESTAPI_NOTE(101, "sys.flink.settings.useRestAPI.note"),
+    /**
+     * AI 生成 FlinkSQL 时的默认 sink 数据源（P0，2026-11-03）。
+     *
+     * <p>存 {@code dinky_database.id}；{@code 0} = 未配置。取值来自「注册中心 → 数据源」的 id 列。
+     *
+     * <p><b>2026-11-03 起降级为兼容通道</b>：id 只在租户内唯一，而这个键是全局配置
+     * （{@code dinky_sys_config} 无 tenant_id），必然出现"对某个租户不可用"。
+     * 新增按<b>名称</b>解析的 {@link #SYS_FLINK_SETTINGS_AIDEFAULTSINKDATABASENAME} 为主通道，
+     * 本键仅在本租户历史配置已存在且未填名称时兜底。
+     */
+    SYS_FLINK_SETTINGS_AIDEFAULTSINKDATABASEID(102, "sys.flink.settings.aiDefaultSinkDataBaseId"),
+    SYS_FLINK_SETTINGS_AIDEFAULTSINKDATABASEID_NOTE(103, "sys.flink.settings.aiDefaultSinkDataBaseId.note"),
+    /**
+     * AI 默认 sink 数据源的<b>名称</b>（主通道，2026-11-03 起）。
+     *
+     * <p>为什么从 id 换成名称：id 是"租户内唯一"的，全局键一旦存 id 就天然对别的租户失效；
+     * 名称同样是租户内唯一（{@code UNIQUE(name, tenant_id)}），但它<b>可以被各租户各自注册一份</b>，
+     * 于是"一份全局配置"对所有租户都成立——解析时只在当前租户内按名称查，取本租户自己的凭证。
+     */
+    SYS_FLINK_SETTINGS_AIDEFAULTSINKDATABASENAME(200, "sys.flink.settings.aiDefaultSinkDataBaseName"),
+    SYS_FLINK_SETTINGS_AIDEFAULTSINKDATABASENAME_NOTE(201, "sys.flink.settings.aiDefaultSinkDataBaseName.note"),
     SYS_FLINK_SETTINGS_JOBIDWAIT(104, "sys.flink.settings.jobIdWait"),
     SYS_FLINK_SETTINGS_JOBIDWAIT_NOTE(105, "sys.flink.settings.jobIdWait.note"),
     SYS_MAVEN_SETTINGS_SETTINGSFILEPATH(106, "sys.maven.settings.settingsFilePath"),
@@ -491,6 +512,15 @@ public enum Status {
     /** 阶段 4a：skill 注入预算（字符） */
     SYS_LLM_SETTINGS_SKILLMAXCHARS(276, "sys.llm.settings.skillMaxChars"),
     SYS_LLM_SETTINGS_SKILLMAXCHARS_NOTE(277, "sys.llm.settings.skillMaxChars.note"),
+    /**
+     * 句柄闭环（S1 装配，2026-10-31）：skill 正文 {@code @} 句柄装配块预算（字符）。
+     *
+     * <p><b>为什么必须独立于 {@link #SYS_LLM_SETTINGS_SKILLMAXCHARS}</b>：正文预算是 4000，
+     * 装配块与正文共享同一个上限时，一个大表结构就能把正文挤没；反之正文写满 3999 也会
+     * 让装配只剩 1 个字符。两者各管一层，互不挤占（实施计划 H5 / 纲领 T3）。
+     */
+    SYS_LLM_SETTINGS_SKILLASSETMAXCHARS(464, "sys.llm.settings.skillAssetMaxChars"),
+    SYS_LLM_SETTINGS_SKILLASSETMAXCHARS_NOTE(465, "sys.llm.settings.skillAssetMaxChars.note"),
     /** 阶段 4b：skill 只读工具开关（list_skills / read_skill） */
     SYS_LLM_SETTINGS_TOOLSKILLENABLE(278, "sys.llm.settings.toolSkillEnable"),
     SYS_LLM_SETTINGS_TOOLSKILLENABLE_NOTE(279, "sys.llm.settings.toolSkillEnable.note"),
@@ -573,6 +603,19 @@ public enum Status {
     SYS_LLM_SETTINGS_TOOLRESULTMAXCHARS_NOTE(453, "sys.llm.settings.toolResultMaxChars.note"),
     SYS_LLM_SETTINGS_HISTORYMAXMESSAGES(454, "sys.llm.settings.historyMaxMessages"),
     SYS_LLM_SETTINGS_HISTORYMAXMESSAGES_NOTE(455, "sys.llm.settings.historyMaxMessages.note"),
+    /**
+     * M1：FlinkSQL 规则引擎总开关（2026-11-02）。
+     *
+     * <p>关掉即回到"纯提示词"时代（提示词红线仍在，但写入前不再拦）—— 用于规则误报时的紧急回滚。
+     */
+    SYS_LLM_SETTINGS_RULEENGINEENABLE(466, "sys.llm.settings.ruleEngineEnable"),
+    SYS_LLM_SETTINGS_RULEENGINEENABLE_NOTE(467, "sys.llm.settings.ruleEngineEnable.note"),
+    /** M1：{@code create_task} 写类工具开关（默认关闭，与 toolExecSqlEnable 同一保守口径） */
+    SYS_LLM_SETTINGS_TOOLWRITETASKENABLE(468, "sys.llm.settings.toolWriteTaskEnable"),
+    SYS_LLM_SETTINGS_TOOLWRITETASKENABLE_NOTE(469, "sys.llm.settings.toolWriteTaskEnable.note"),
+    /** M1：试跑前的最小空闲 slot（低于此值拒绝提交，避免把常驻作业挤下线） */
+    SYS_LLM_SETTINGS_TRIALSLOTSFLOOR(470, "sys.llm.settings.trialSlotsFloor"),
+    SYS_LLM_SETTINGS_TRIALSLOTSFLOOR_NOTE(471, "sys.llm.settings.trialSlotsFloor.note"),
     /**
      * 知识库（{@code @kb}）连接与检索能力（2026-10-27 引入，v1.9 迁出 LLM 命名空间）。
      *

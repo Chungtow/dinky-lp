@@ -38,6 +38,7 @@ import { PermissionConstants } from '@/types/Public/constants';
 import { DataSources } from '@/types/RegCenter/data.d';
 import { InitDataSourceState } from '@/types/RegCenter/init.d';
 import { DataSourceState } from '@/types/RegCenter/state.d';
+import { handleCopyToClipboard } from '@/utils/function';
 import { l } from '@/utils/intl';
 import { WarningMessage } from '@/utils/messages';
 import {
@@ -146,6 +147,21 @@ export default () => {
           <Tooltip key={item.name} title={item.name}>
             {item.name}
           </Tooltip>
+        </DescriptionsItem>
+        {/* 显式透出数据源 ID：配置中心里若干项（如 AI 生成作业的默认 sink 数据源）
+            以 id 引用数据源，而此前界面上根本看不到 id，用户无从填写。 */}
+        <DescriptionsItem key={`id-${item.id}`}>
+          <Space size={4}>
+            <Tooltip title={l('rc.ds.idTip')}>
+              <span style={{ color: 'rgba(128, 128, 128, 0.9)' }}>{`ID: ${item.id}`}</span>
+            </Tooltip>
+            <Tooltip title={l('rc.ds.copyId')}>
+              <CopyTwoTone
+                style={{ cursor: 'pointer' }}
+                onClick={() => handleCopyToClipboard(String(item.id))}
+              />
+            </Tooltip>
+          </Space>
         </DescriptionsItem>
       </Descriptions>
     );

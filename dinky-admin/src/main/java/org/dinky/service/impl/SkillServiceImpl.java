@@ -19,6 +19,7 @@
 
 package org.dinky.service.impl;
 
+import org.dinky.ai.asset.MentionCandidateService;
 import org.dinky.ai.skill.SkillDoc;
 import org.dinky.ai.skill.SkillDocParser;
 import org.dinky.ai.skill.SkillPathGuard;
@@ -42,6 +43,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -87,6 +89,30 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
 
     private final ResourcesService resourcesService;
 
+    /**
+     * {@code @} 候选快照失效器。
+     *
+     * <p><b>为什么用 {@code ObjectProvider} 而不是直接注入</b>：存在构造器循环依赖
+     * {@code SkillServiceImpl → MentionCandidateService → SkillAssetProvider → SkillService}
+     * （Spring Boot 2.6+ 默认禁止循环引用）。{@code ObjectProvider} 延迟到调用时解析，
+     * 失效是旁路操作，取不到就不做（后端 60s TTL 兜底）。
+     */
+    private final ObjectProvider<MentionCandidateService> mentionCandidateService;
+
+    /**
+     * 技能写操作后失效 {@code @} 候选快照。
+     *
+     * <p>技能候选的 {@code title = name}、{@code subtitle = description}，二者都参与 ETag 计算；
+     * 但"浏览器是否拿得到新内容"取决于后端是否已经产生新快照——所以列表类写操作（新建 /
+     * 正文含 description / 可见性 / 删除）都必须在这里主动失效，否则最长 60s 内候选仍是旧值。
+     */
+    private void invalidateMentionIndex() {
+        MentionCandidateService service = mentionCandidateService.getIfAvailable();
+        if (service != null) {
+            service.invalidate(Convert.toInt(TenantContextHolder.get(), null));
+        }
+    }
+
     @Override
     public List<Skill> listVisible() {
         return list(visibleWrapper().orderByDesc(Skill::getUpdateTime));
@@ -111,6 +137,18 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
                 Skill::getUpdateTime, Comparator.nullsLast(Comparator.<LocalDateTime>reverseOrder()));
         candidates.sort(byMine.thenComparing(byVisibility).thenComparing(byTime));
         return candidates.get(0);
+    }
+
+    @Override
+    public Skill findAnyByName(String name) {
+        if (StrUtil.isBlank(name)) {
+            return null;
+        }
+        // 只按名字取一条，**不加可见性条件**：校验端点靠它区分 not_found 与 denied
+        List<Skill> candidates = list(new LambdaQueryWrapper<Skill>()
+                .eq(Skill::getName, StrUtil.trim(name))
+                .last("limit 1"));
+        return candidates.isEmpty() ? null : candidates.get(0);
     }
 
     @Override
@@ -161,6 +199,53 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
     @Override
     @Transactional(rollbackFor = Exception.class)
     public Skill create(String name, String description, String assetType, Integer actorId, String visibility) {
+        return createInternal(name, description, assetType, actorId, visibility, null);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Skill createWithContent(
+            String name, String description, String assetType, Integer actorId, String visibility, String content) {
+        String body = StrUtil.trimToEmpty(content);
+        if (StrUtil.isBlank(body)) {
+            // 没有正文就没必要走"带正文创建"这条路：退化为模板正文，与 /create 完全一致
+            return create(name, description, assetType, actorId, visibility);
+        }
+        // frontmatter 由服务端拼：name 必须与目录名一致（同一 trimmed 值），description 必须是单行。
+        // 净化后的 desc 同时用于 frontmatter 与 dinky_skill.description——两处必须是同一个值，
+        // 否则下次 save 时 frontmatter 会反过来把 DB 里的说明改写掉。
+        String desc = sanitizeOneLine(description);
+        String text = "---\nname: " + StrUtil.trimToEmpty(name) + "\ndescription: " + desc + "\n---\n\n" + body;
+        return createInternal(name, desc, assetType, actorId, visibility, text);
+    }
+
+    /**
+     * 把说明压成单行（2026-11-04）。
+     *
+     * <p>它要进 YAML frontmatter 的 {@code description:} 行：换行会把后续内容挤成新字段，
+     * 裸 {@code ---} 会提前闭合头部让 {@code parse} 拿到残缺的 header。折成破折号最直观。
+     */
+    static String sanitizeOneLine(String text) {
+        String one = StrUtil.replace(StrUtil.nullToEmpty(text), "\r\n", " ");
+        one = StrUtil.replace(one, "\r", " ");
+        one = StrUtil.replace(one, "\n", " ");
+        return StrUtil.trim(StrUtil.replace(one, "---", "—"));
+    }
+
+    /**
+     * 新建资产的唯一实现：{@code contentOverride} 非空则用它当主文件正文（要求已含合法 frontmatter），
+     * 为空则用模板。
+     *
+     * <p>两条路径在同一事务、同一套校验下完成，新资产版本都停在 {@code 1}——所以「带正文创建」
+     * 不会像 {@code create} + {@code save} 那样留下 {@code version=2} 的半成品。
+     */
+    private Skill createInternal(
+            String name,
+            String description,
+            String assetType,
+            Integer actorId,
+            String visibility,
+            String contentOverride) {
         String type = SkillDocParser.ASSET_TYPE_DOC.equalsIgnoreCase(StrUtil.trimToEmpty(assetType))
                 ? SkillDocParser.ASSET_TYPE_DOC
                 : SkillDocParser.ASSET_TYPE_SKILL;
@@ -200,9 +285,19 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
         String dirFullName = StrUtil.nullToEmpty(Convert.toStr(skillDir.getPath()));
 
         // ② 主文件（SKILL.md / DOC.md）：先建资源记录，再写内容（writeContent 负责写文件 + 维护 size + 失效缓存）
-        String content = isDoc
-                ? SkillDocParser.buildDocTemplate(skillName, desc)
-                : SkillDocParser.buildTemplate(skillName, desc);
+        String content;
+        if (contentOverride != null) {
+            // 调用方给的正文：先校验后落盘（大小 + frontmatter 合法性），任一项不过都不产生半成品
+            if (StrUtil.utf8Bytes(contentOverride).length > SkillDocParser.MAX_DOC_SIZE) {
+                throw new BusException(mainFileName + " 过大（最多 " + SkillDocParser.MAX_DOC_SIZE + " 字节）");
+            }
+            SkillDocParser.validate(SkillDocParser.parse(contentOverride), skillName);
+            content = contentOverride;
+        } else {
+            content = isDoc
+                    ? SkillDocParser.buildDocTemplate(skillName, desc)
+                    : SkillDocParser.buildTemplate(skillName, desc);
+        }
         Resources mainFile = new Resources();
         mainFile.setPid(Convert.toInt(skillDir.getId(), -1));
         mainFile.setFileName(mainFileName);
@@ -229,6 +324,8 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
         skill.setContentHash(SecureUtil.sha256(content));
         save(skill);
         log.info("Asset created: name={}, dir={}, owner={}, assetType={}", skillName, dirFullName, me, type);
+        // 新增 skill / doc → 候选多一条
+        invalidateMentionIndex();
         return skill;
     }
 
@@ -266,6 +363,8 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
         skill.setContentHash(SecureUtil.sha256(text));
         updateById(skill);
         log.info("Skill saved: name={}, version={}", skill.getName(), skill.getVersion());
+        // 正文里的 frontmatter 会同步 description（= 候选副标题），必须失效
+        invalidateMentionIndex();
         return skill;
     }
 
@@ -298,6 +397,8 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
         }
         updateById(skill);
         log.info("Skill visibility updated: id={}, name={}, visibility={}", id, skill.getName(), vis);
+        // 可见性变更 → 候选可见集合变化
+        invalidateMentionIndex();
         return skill;
     }
 
@@ -320,6 +421,8 @@ public class SkillServiceImpl extends SuperServiceImpl<SkillMapper, Skill> imple
         removePhysical(skill, skill.getDirFullName());
         removeById(id);
         log.info("Skill removed: name={}, dir={}", skill.getName(), skill.getDirFullName());
+        // 删除 → 候选少一条
+        invalidateMentionIndex();
     }
 
     // ==================== 文件管理（阶段 4b：人与 AI 共用同一组能力） ====================

@@ -22,6 +22,8 @@ import { queryDataByParams } from '@/services/BusinessCrud';
 import { API_CONSTANTS } from '@/services/endpoints';
 import { buildTenantHeader } from '@/utils/function';
 
+import type { MentionCandidatePayload } from './mentionIndex';
+
 /**
  * ⚠️ 本文件含**原生 fetch**（对话流 / 写确认 / 中断），它们**绕开 umi-request 拦截器**：
  * 每个 fetch 的 headers **必须**合并 `buildTenantHeader()`，否则后端租户上下文为空 →
@@ -155,6 +157,20 @@ export type AiChatFinish = {
 
 /** 页面内的一条消息（reasoning 为模型的思考过程，仅部分模型提供） */
 export type AiChatMessage = {
+  /**
+   * 前端消息身份（2026-11-04「消息操作」批次新增）。
+   *
+   * <p>只在本会话内有效，<b>不发给后端</b>——后端不存对话正文（{@code history} 只映射
+   * {@code role+content}），多发字段没有接收方。它解决两件事：React key 稳定、删除后
+   * 「思考过程」展开态不串位（此前二者都用列表 index，一删就错位）。
+   */
+  id: string;
+  /**
+   * 轮次身份：一问一答共享同一个值。
+   *
+   * <p>「删一条 = 删一轮」的依据。发送时两条一起生成，此后不再变。
+   */
+  roundId: string;
   role: AiChatRole;
   content: string;
   reasoning?: string;
@@ -228,6 +244,15 @@ export type AiChatMentionItem = {
     | 'topic'
     | 'env'
     /**
+     * P2（2026-11-04）：{@code @job/} 候选（本租户 FlinkSQL 作业）。
+     *
+     * <p><b>为什么另起一个 type 而不是复用 `job`</b>：已有的 `job` 表示"其它已打开标签页"，
+     * 它的 {@code content} 是**前端内存里的 SQL 正文**，选中即把正文塞进上下文；
+     * 而 `job-ref` 只是**作业名**，正文由后端按名/ id 去查库（`JobRefRenderer`）——
+     * 两者数据来源与注入路径都不同。选中落地时会转回 `job` 再上报给后端。
+     */
+    | 'job-ref'
+    /**
      * P3b：语义资产引用。{@code name} 存**路径式句柄**（{@code project} 或 {@code project/asset}），
      * 与后端 {@code MentionType.SEMANTIC} 及 {@code AiChatMention.name} 的存法一致（D19）。
      */
@@ -270,6 +295,18 @@ export type AiChatMentionItem = {
    * 该字段只在本地判定用，**不进请求体**（后端 {@code AiChatMention} 无此字段）。
    */
   chainable?: boolean;
+  /**
+   * 候选面板右侧的**提示信息**（不参与插入、不进请求体）。
+   *
+   * <p>存在的理由：有些候选的 {@code name} 天生不可读——知识库的 name 必须是库编码
+   * （{@code ima_kb_62blyRRR}，要写进 {@code filter.collection}），而用户认的是库名
+   * "Traccar 运维教程（IMA）"。没有这一行提示时，多个名字带"运维"的库完全无从选择。
+   *
+   * <p>取值来源：索引条目的 {@code subs} 列（kb=库名、skill/doc=描述、semantic=版本规模），
+   * 或既有候选的 {@code content}（kb 的库名、skill/doc 的描述）。<b>不用于</b>
+   * job / selection（它们的 content 是 SQL 正文，不能出现在浮层）。
+   */
+  hint?: string;
 };
 
 /** 对话请求体：只携带元数据定位信息，绝不携带业务数据 */
@@ -412,6 +449,45 @@ export const getAiChatConfig = async (): Promise<AiChatConfig> => {
   return (res?.data ?? {}) as AiChatConfig;
 };
 
+/** 规则校验报告里的一条违规（后端 {@code RuleReport} 同结构） */
+export type AiRuleViolation = {
+  id?: string;
+  title?: string;
+  severity?: string; // error / warn
+  phase?: string; // draft / precheck / runtime
+  status?: string; // fail / unknown
+  message?: string;
+  fix?: string;
+  detail?: string;
+};
+
+export type AiRuleReport = {
+  passed?: boolean;
+  counts?: { error?: number; warn?: number; unknown?: number };
+  violations?: AiRuleViolation[];
+  message?: string;
+};
+
+/**
+ * 规则校验**直连**（不经过大模型）。
+ *
+ * <p><b>为什么要有这条路</b>：审核类问题让模型转述会出现两种失真——模型压根没调校验工具
+ * （实测 tool_call_count=0 却照样输出"命中/未命中"），或把 error 说成建议。
+ * 按钮直连拿到的是规则引擎原文，判据稳定且不消耗模型额度。
+ */
+export const validateFlinkDraft = async (params: {
+  sql: string;
+  name?: string;
+  parallelism?: number;
+  taskId?: number;
+  envId?: number;
+  clusterId?: number;
+  customConfig?: { key: string; value: string }[];
+}): Promise<AiRuleReport> => {
+  const res: any = await postAll(API_CONSTANTS.AI_CHAT_VALIDATE_DRAFT, params);
+  return (res?.data ?? res ?? {}) as AiRuleReport;
+};
+
 /**
  * 拉取当前用户可见的 skill 列表（阶段 4a：{@code @skill/<名>} 的候选来源）。
  *
@@ -425,17 +501,40 @@ export const getAiChatConfig = async (): Promise<AiChatConfig> => {
  * 不新增后端接口。失败时返回空数组（不阻断输入框）。
  */
 /**
- * P1-A：{@code @topic/} 候选（**名册版**）。
+ * P1-A：{@code @topic/} 候选。
  *
- * <p>后端取值全部来自命名名册（本租户 `FlinkSql`/`FlinkSqlEnv` 作业的 DDL），
- * **不连接 Kafka**——因此候选只含"已被作业使用"的 topic；
- * "平台里存在但没任何作业消费"的 topic 需等批次 2 的 {@code list_topics}。
+ * <p>2026-11-04 更新：后端已改为 **broker 实时列举 ∪ 名册**。
+ * 此前只给名册（"已被作业使用"的 topic），导致平台上真实存在、但还没有作业消费过的 topic
+ * 在 `@` 菜单里根本选不到——用户只能手打，手打错了还不知道。
  */
 export const listMentionTopics = async (): Promise<string[]> => {
   try {
     const res: any = await getData(API_CONSTANTS.AI_CHAT_MENTION_TOPICS);
-    return res ?? [];
+    // 2026-11-04 修：全局响应拦截器返回的是**整个 body**（`{code,data,msg,time}`），不是 `data`。
+    // 这里原先写 `return res ?? []`，拿到的是对象，上层 `.map` 直接抛 TypeError，
+    // 又被本函数的 catch 吞成 `[]` —— 于是候选永远是空，且**一点报错都看不到**。
+    // 即：`@topic/` 候选自 P1-A 上线起就没有真正工作过。
+    return (res?.data ?? res ?? []) as string[];
   } catch (e) {
+    // 别静默吞：候选"无缘无故为空"是最难排查的一类问题（本次就查了半天才发现是解包写错）
+    console.warn('[aiChat] listMentionTopics failed', e);
+    return [];
+  }
+};
+
+/**
+ * P2（2026-11-04）：{@code @job/} 候选——本租户 FlinkSQL 作业清单。
+ *
+ * <p>返回 `{id, name}`，插入到输入框时写成 `@job/<name>`（重名时用 id 更稳，
+ * 后端两种都认）。
+ */
+export const listMentionJobs = async (): Promise<{ id: number; name: string }[]> => {
+  try {
+    const res: any = await getData(API_CONSTANTS.AI_CHAT_MENTION_JOBS);
+    // 同 listMentionTopics：必须解包 `res.data`，否则拿到的是整个 Result 对象
+    return (res?.data ?? res ?? []) as { id: number; name: string }[];
+  } catch (e) {
+    console.warn('[aiChat] listMentionJobs failed', e);
     return [];
   }
 };
@@ -481,6 +580,72 @@ export const listKbCollections = async (): Promise<AiChatMentionItem[]> => {
   } catch (e) {
     // 批次 A 的开关默认关闭 / 后端未升级时，候选缺失不应影响其他 @ 功能
     return [];
+  }
+};
+
+/**
+ * C1：{@code @} 候选统一索引——**一次预取，本地匹配**。
+ *
+ * <p>无 {@code q} 时返回全量列式快照（skill / doc / semantic 项目 / kb），
+ * 之后每个按键都在浏览器本地打分，不再打后端；有 {@code q} 时走服务端过滤
+ * （条目超阈值或预取失败时的降级路径）。
+ *
+ * <p><b>失败不抛错</b>：候选浮层是辅助功能，索引拉取失败时返回空索引，
+ * 其它 {@code @} 类型（表 / 数据源 / 环境…）照旧可用——绝不能让"新端点没部署好"
+ * 变成"整个 @ 用不了"。
+ */
+export const fetchMentionCandidates = async (
+  types?: string[],
+  q?: string,
+  limit?: number
+): Promise<MentionCandidatePayload> => {
+  const params = new URLSearchParams();
+  if (types && types.length > 0) {
+    params.set('types', types.join(','));
+  }
+  if (q) {
+    params.set('q', q);
+  }
+  if (limit) {
+    params.set('limit', String(limit));
+  }
+  const suffix = params.toString();
+  try {
+    const res: any = await getData(
+      `${API_CONSTANTS.AI_MENTION_CANDIDATES}${suffix ? `?${suffix}` : ''}`
+    );
+    return (res?.data ?? res ?? {}) as MentionCandidatePayload;
+  } catch (e) {
+    return { types: [], codes: [], titles: [], count: 0 };
+  }
+};
+
+/**
+ * C1：候选详情（副标题 / 摘要）——预取不携带 subtitle，选中后再按需拉一条。
+ *
+ * <p>服务端此时会**再判一次可见性**（不看候选缓存），因此"权限刚被撤销"的用户拿不到详情。
+ */
+export const fetchMentionDetail = async (
+  type: string,
+  code: string
+): Promise<AiChatMentionItem | null> => {
+  try {
+    const res: any = await getData(
+      `${API_CONSTANTS.AI_MENTION_DETAIL}?type=${encodeURIComponent(type)}&code=${encodeURIComponent(
+        code
+      )}`
+    );
+    const row = res?.data ?? res;
+    if (!row || !row.code) {
+      return null;
+    }
+    return {
+      type: `${row.type ?? type}` as AiChatMentionItem['type'],
+      name: row.code,
+      content: row.subtitle ?? undefined
+    };
+  } catch (e) {
+    return null;
   }
 };
 

@@ -30,8 +30,12 @@ export type KbPushPayload = {
   /** 文件名，必须带后缀（后缀决定切分方式），默认取来源文件名 */
   filename: string;
   content: string;
-  /** semantic / skill / resource（服务端据此写 provider 旁边的 path 标记） */
-  source: 'semantic' | 'skill' | 'resource';
+  /**
+   * semantic / skill / resource / aichat（服务端据此写 provider 旁边的 path 标记）。
+   *
+   * <p>2026-11-04 新增 `aichat`：AI Chat 里"推送到知识库"的回答正文，服务端映射为 `AI Chat`。
+   */
+  source: 'semantic' | 'skill' | 'resource' | 'aichat';
   /** Dinky 侧业务主键（skill id / 项目路径），便于回溯 */
   externalId?: string;
 };

@@ -23,6 +23,7 @@ import { DeleteOutlined, FileAddOutlined, FolderAddOutlined, SaveOutlined } from
 import { Button, Drawer, Empty, Input, Modal, Space, Tooltip, Tree, Typography, message } from 'antd';
 import { useEffect, useState } from 'react';
 import { listSkillFiles, mkdirSkill, readSkillFile, removeSkillFile, writeSkillFile } from '../../service';
+import { notifyHandleValidation } from '../handleValidation';
 
 const { TextArea } = Input;
 
@@ -133,6 +134,8 @@ const SkillFilePanel = ({ skillId, skillName, assetType, open, editable = true, 
       setDirty(false);
       load(selected);
     });
+    // 保存已成功 → 再校验句柄（警告不阻断；失败静默，不打扰用户）
+    await notifyHandleValidation(content);
   };
 
   /** 解析用户输入：以 / 开头视为相对资产根，否则拼到基准目录之后 */

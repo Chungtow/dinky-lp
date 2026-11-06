@@ -28,19 +28,31 @@ import {
 import { decideMentionBackspace } from './mentionBackspace';
 import type { MentionBackspaceArm } from './mentionBackspace';
 import { finalizePathMention, isMentionTrigger, replaceMentionToken } from './mentionPath';
+import { parseMentionScope, scoreMention } from './mentionIndex';
+import type { MentionCandidatePayload } from './mentionIndex';
 // 注意与本文件 './service' 里的 `listSkills`（@ 候选用的轻量列表）重名，这里显式起别名
 import {
+  createSkillWithContent,
   detailSkill as fetchSkillDetail,
   listSkills as listSkillInfos
 } from '@/pages/RegCenter/Skills/service';
-import { Authorized } from '@/hooks/useAccess';
+import CreateAssetModal from '@/pages/RegCenter/Skills/components/CreateAssetModal';
+import type { CreateAssetValues } from '@/pages/RegCenter/Skills/components/CreateAssetModal';
+import PushModal from '@/pages/DataStudio/Toolbar/Kb/PushModal';
+import type { KbPushPayload } from '@/pages/DataStudio/Toolbar/Kb/PushModal';
+import { Authorized, HasAuthority } from '@/hooks/useAccess';
 import { PermissionConstants } from '@/types/Public/constants';
 import ToolProcess from './components/ToolProcess';
+import MessageActions from './components/MessageActions';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import CraftDiff from './components/CraftDiff';
 import SqlDiff from './components/SqlDiff';
 import SkillDiff from './components/SkillDiff';
+import FlinkJobCard from './components/FlinkJobCard';
+import { parseFlinkJobDraft } from './flinkJobDraft';
+import type { FlinkJobDraft } from './flinkJobDraft';
+import type { AiRuleReport } from './service';
 import ContextBar from './ContextBar';
 import type { ContextScope } from './ContextBar';
 import {
@@ -61,26 +73,37 @@ import {
   aiChatStream,
   cancelAiChat,
   confirmAiChat,
+  fetchMentionCandidates,
   getAiChatConfig,
   listFlinkSqlEnvs,
+  listMentionJobs,
   listMentionTopics,
   listPublishedSemanticAssets,
   listPublishedSemanticProjects,
   listKbCollections,
   listSkills,
   listTableColumns,
-  reportCraftWrite
+  reportCraftWrite,
+  validateFlinkDraft
 } from './service';
 import { DataStudioContext } from '@/pages/DataStudio/DataStudioContext';
+// DataStudio 的 colorBgContainer 是 CSS 变量串，antd Tag 默认底色会被算成近黑（"一团黑"），
+// 因此**不带 color 的标签**必须用 ThemeChip；带 color 的 Tag 不受影响。
+import ThemeChip from '@/components/ThemeChip';
 import { resolveEditorKey } from '@/pages/DataStudio/editorKey';
 import { getExecError, getLatestExecError } from '@/services/BusinessCrud';
 import { l } from '@/utils/intl';
 import {
+  CloudUploadOutlined,
   CopyOutlined,
+  DeleteOutlined,
+  EditOutlined,
   LoadingOutlined,
   PlayCircleOutlined,
   RobotOutlined,
   RollbackOutlined,
+  SafetyCertificateOutlined,
+  SaveOutlined,
   SendOutlined,
   StopOutlined
 } from '@ant-design/icons';
@@ -102,8 +125,19 @@ import {
 import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 const CODE_BLOCK_REGEX = /```[a-zA-Z]*\s*\n?([\s\S]*?)```/g;
+/** 四段式作业围栏（M1-D）：命中后渲染卡片，而不是普通代码块 */
+const FLINK_JOB_FENCE = '```flinksql-job';
 /** 「最近使用」的 @ 引用名（localStorage key） */
 const RECENT_MENTION_KEY = 'dinky.ai-chat.recent-mentions';
+
+/**
+ * `@` 统一候选索引的**本地续期周期**（毫秒）。
+ *
+ * <p>与后端 `MentionCandidateService` 的快照 TTL（60s）同口径：本地索引超过该时长后，
+ * 再次打开 `@` 浮层会重新拉取。取值过大 → 资产改名后在本会话内长期不可见；
+ * 过小 → 频繁回源（虽有后端快照兜底，但没必要）。
+ */
+const MENTION_INDEX_TTL_MILLIS = 60_000;
 
 /** 纯修饰键（按下它们不算"打断 @串两下删除"） */
 const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Dead']);
@@ -124,6 +158,91 @@ const resolveSourceDs = (list: any[], typed: string) => {
     list.find((item: any) => `${item.name}`.toLowerCase() === typed.toLowerCase())
   );
 };
+
+/**
+ * C1：统一索引的类型 → 候选分组词条。
+ *
+ * <p>索引条目只带协议值（{@code skill}/{@code doc}/…），分组文案在前端映射，
+ * 避免后端为了一个展示串引入 i18n 依赖（后端返回的 group 也无法本地化）。
+ */
+const mentionGroupOfType = (type: string): string => {
+  switch (type) {
+    case 'skill':
+      return l('datastudio.aiChat.mention.groupSkill');
+    case 'doc':
+      return l('datastudio.aiChat.mention.groupDoc');
+    case 'semantic':
+      return l('datastudio.aiChat.mention.groupSemantic');
+    case 'kb':
+      return l('datastudio.aiChat.mention.groupKb');
+    default:
+      return l('datastudio.aiChat.mention.groupTable');
+  }
+};
+
+/**
+ * 候选面板右侧的提示文案（2026-10-30）。
+ *
+ * <p><b>为什么需要</b>：部分候选的 {@code name} 天生不可读——kb 的 name 必须是库编码
+ * （{@code ima_kb_62blyRRR}，系统生成、要写进 {@code filter.collection}），而用户认的是库名。
+ * 只显示编码时，多个名字都带"运维"的库根本无从选择。
+ *
+ * <p>取值优先级：索引下发的 {@code hint}（kb=库名 / skill·doc=描述 / semantic=版本规模）
+ * → 既有候选的 {@code content} 兜底（前缀路径 {@code @kb/}、{@code @skill/} 走的是老来源，
+ * 那里 content 放的正是库名/描述）。
+ *
+ * <p>⚠️ <b>只对 kb / skill / doc 兜底</b>：job 与 selection 的 {@code content} 是 SQL 正文，
+ * 出现在浮层里既无意义、又可能把整段 SQL 摆到屏幕上。
+ */
+const mentionHintOf = (item: AiChatMentionItem): string | undefined => {
+  if (item.hint) {
+    return item.hint;
+  }
+  if (item.type === 'kb' || item.type === 'skill' || item.type === 'doc') {
+    const text = `${item.content ?? ''}`.trim();
+    return text || undefined;
+  }
+  return undefined;
+};
+
+/**
+ * 候选右侧的完整文案：**名称/说明在前，分组（或「最近用过」）在后**。
+ *
+ * <p><b>顺序为什么不能反</b>：右侧可用宽度只有一半，超长时从<b>尾部</b>截断。
+ * 把「最近用过」这类可有可无的标记放尾部，截断先丢它；把库名放最前，
+ * 才能保证 `ima_kb_62blyRRR` 一定带出「Traccar 运维教程（IMA）」。
+ *
+ * <p><b>为什么单独抽这个函数</b>（2026-10-30 UAT 反馈）：第一版把「最近用过」写成了
+ * 独立三元分支（recent ? 最近用过 : hint ? …），于是<b>最近用过的知识库永远看不到库名</b>
+ * ——用户截图里正是这个现象：`ima_kb_62blyRRR` 右侧只有「最近用过」。
+ * 现在两者并存，且名称优先。
+ *
+ * <p>hint 与 name 完全相同时不重复展示（如库名恰好等于编码、skill 无描述）。
+ */
+const mentionRightText = (item: AiChatMentionItem, recent: boolean): string => {
+  const hint = mentionHintOf(item);
+  const tail = recent ? l('datastudio.aiChat.mention.recent') : item.group;
+  if (!hint || hint === item.name) {
+    return tail;
+  }
+  return `${hint} · ${tail}`;
+};
+
+/**
+ * C1：一级前缀入口（`source/`、`semantic/`…）。
+ *
+ * <p>无类型前缀输入时也参与本地匹配——打 {@code sou} 就能看到 {@code source/}，
+ * 选中即收敛到该类型（与 `@` 空输入时的入口完全等价）。
+ */
+const MENTION_PREFIX_ENTRIES: { name: string; groupKey: string }[] = [
+  { name: 'source/', groupKey: 'datastudio.aiChat.mention.groupSource' },
+  { name: 'skill/', groupKey: 'datastudio.aiChat.mention.groupSkill' },
+  { name: 'doc/', groupKey: 'datastudio.aiChat.mention.groupDoc' },
+  { name: 'semantic/', groupKey: 'datastudio.aiChat.mention.groupSemantic' },
+  { name: 'kb/', groupKey: 'datastudio.aiChat.mention.groupKb' },
+  { name: 'topic/', groupKey: 'datastudio.aiChat.mention.groupTopic' },
+  { name: 'env/', groupKey: 'datastudio.aiChat.mention.groupEnv' }
+];
 
 type AiChatProps = {
   tabs: any[];
@@ -174,15 +293,35 @@ const AiChat = (props: AiChatProps) => {
   const [messages, setMessages] = useState<AiChatMessage[]>([]);
   const [inputValue, setInputValue] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
+  /** 规则校验直连（不调模型）的报告与加载态：「校验 SQL」按钮用 */
+  const [ruleReport, setRuleReport] = useState<AiRuleReport | null>(null);
+  const [ruleReportOpen, setRuleReportOpen] = useState<boolean>(false);
+  const [validating, setValidating] = useState<boolean>(false);
   const [config, setConfig] = useState<AiChatConfig>();
   const [schemas, setSchemas] = useState<any[]>([]);
   const [schemaName, setSchemaName] = useState<string>();
   const [tableName, setTableName] = useState<string>();
-  // 每条 assistant 消息的"思考过程"是否展开
-  const [expandedReasoning, setExpandedReasoning] = useState<Record<number, boolean>>({});
+  // 每条 assistant 消息的"思考过程"是否展开（键为消息 id：删除某轮后不会串到别的消息）
+  const [expandedReasoning, setExpandedReasoning] = useState<Record<string, boolean>>({});
   const abortRef = useRef<AbortController>();
   // 面板级会话标识：首轮不带 sessionId（后端才携带 schema 上下文），后续带上以复用上下文
   const sessionIdRef = useRef<string>(`${Date.now()}`);
+  /** 消息身份自增序号（同毫秒连发也不会撞号；只有本地用途，不发给后端） */
+  const msgSeqRef = useRef(0);
+  /** 「保存为知识文档」目标回答（正文只作为隐藏载荷，不进表单） */
+  const [docTarget, setDocTarget] = useState<{ content: string } | null>(null);
+  /** 「推送到知识库」载荷（复用 Toolbar/Kb 的公共弹窗） */
+  const [pushPayload, setPushPayload] = useState<KbPushPayload | null>(null);
+  // 两个沉淀动作都是写操作：前端先按权限隐去按钮，避免"点了才报没权限"。
+  // 后端仍各自二次校验（skill:add|resource:upload / kb:write），前端只是体验层。
+  //
+  // ⚠️ 必须**逐个无条件调用**：`HasAuthority` 内部用了 useContext，写成
+  // `HasAuthority(A) || HasAuthority(B)` 会因为短路让 hook 调用次数随权限变化，
+  // 触发 "Rendered fewer hooks than expected"。
+  const canAddSkill = HasAuthority(PermissionConstants.REGISTRATION_SKILL_ADD);
+  const canUploadResource = HasAuthority(PermissionConstants.REGISTRATION_RESOURCE_UPLOAD);
+  const canWriteKb = HasAuthority(PermissionConstants.KB_WRITE);
+  const canCreateSkill = canAddSkill || canUploadResource;
   /**
    * P4：上一次发送时的**上下文指纹**。
    *
@@ -194,6 +333,12 @@ const AiChat = (props: AiChatProps) => {
   const currentTab = tabs?.find((tab) => tab.id === activeTab);
   const tabParams = currentTab?.params ?? {};
   const dialect: string = tabParams?.dialect ?? '';
+  const { editorRegistry } = useContext(DataStudioContext);
+  /**
+   * 当前 tab 的编辑器注册键：作业 tab 用 taskId；语义文件 tab 用 semantic:<project>:<path>。
+   * 必须与注册方（SqlTask / SemanticFile）同源，否则选区静默为空。
+   */
+  const editorKey = resolveEditorKey(tabParams);
   /**
    * P4 一期：手动覆盖（仅本次会话有效），置空即回落到「跟随编辑区自动绑定」。
    *
@@ -261,12 +406,19 @@ const AiChat = (props: AiChatProps) => {
   const effectiveTableName: string | undefined =
     binding.override?.tableName ?? binding.editor?.tableName;
   /**
-   * 编辑区正文：作业 / 语义文件取 `statement`，**资源文件取 `content`**。
+   * 编辑区正文：**优先现取编辑器内容**，取不到再回落 `tabParams.statement`；资源文件取 `content`。
    *
    * <p>此前一律读 `statement`，资源 tab 因此永远拿到空正文（U32：问「这个文件讲了什么」答不出）。
+   *
+   * <p>2026-11-06（R2/D3）：语义 YAML / 技能 MD 编辑器改**非受控**后，正文不再每键写回 dva model，
+   * `tabParams.statement` 只在「首次打开 / 保存成功」时新鲜。必须优先
+   * {@code editorRegistry.getContent(editorKey)}，否则 AI Chat 拿到的是打开时的旧正文（含未保存改动丢失）。
    */
+  const liveEditorContent: string = editorRegistry?.getContent(editorKey) ?? '';
   const currentSql: string =
-    currentTab?.tabType === 'resource' ? (tabParams?.content ?? '') : (tabParams?.statement ?? '');
+    currentTab?.tabType === 'resource'
+      ? (tabParams?.content ?? '')
+      : liveEditorContent || (tabParams?.statement ?? '');
   /** 语义文件 tab（dbt on HDFS）不是 SQL 作业：EXPLAIN / 执行对它无意义，AI 仍可读写全文 */
   const isSqlJobTab = currentTab?.tabType === 'task';
   /**
@@ -418,6 +570,28 @@ const AiChat = (props: AiChatProps) => {
 
   /** 知识库 @kb 接入 v1.0：{@code @kb/} 候选（当前用户可见的库，name 存库编码） */
   const [kbOptions, setKbOptions] = useState<AiChatMentionItem[]>([]);
+  /**
+   * C1：{@code @} 候选统一索引（列式，含 skill / doc / semantic 项目 / kb）。
+   *
+   * <p>**按 TTL 续期**（2026-10-31 修复）：早期是"只在首次打开浮层时拉一次，此后整个组件
+   * 生命周期内不再拉"，导致资产改名后即便服务端已更新，关闭再打开浮层仍是旧名称
+   * （SPA 内切页面也不会重建组件）。现改为与后端快照同口径的 60s TTL：超过 TTL 再次打开
+   * 浮层即重新拉取；未超时则沿用本地索引，保持"每键 0 请求"的既有收益。
+   *
+   * <p>空索引（未部署 / 无可见资产）也照常落地，避免每次打开浮层都重试。
+   */
+  const [assetIndex, setAssetIndex] = useState<MentionCandidatePayload | null>(null);
+  /** 上次成功拉取统一索引的时间戳（配合 {@link MENTION_INDEX_TTL_MILLIS} 决定是否续期） */
+  const assetIndexAtRef = useRef(0);
+  /**
+   * C1.5（2026-10-31）：**表名服务端搜索结果**。
+   *
+   * <p>表是万级、{@code prefetchable=false}，永远不进 {@link assetIndex} 预取快照；宿主要
+   * "记不住表在哪个库"，只能在输入 ≥2 字符且无类型前缀时按需问后端（后端 5 分钟缓存 +
+   * 单源超时，见 {@code TableNameSearchService}）。命中项 type 恒为 {@code source}，
+   * name/code 为 {@code <数据源>/<库>/<表>}，与路径式下钻产出的东西完全同构。
+   */
+  const [remoteTables, setRemoteTables] = useState<(AiChatMentionItem & { group?: string })[]>([]);
   // P1：跨源引用（@source/ / @env/）的候选与懒加载缓存。
   // @source/ 是四级渐进披露（数据源 → 库 → 表），只在用户逐层往下敲时才拉下一层，
   // 避免"刚敲 @source/ 就把全部数据源的全部库表都拉下来"。
@@ -425,6 +599,10 @@ const AiChat = (props: AiChatProps) => {
   const [envOptions, setEnvOptions] = useState<AiChatMentionItem[]>([]);
   /** P1-A：{@code @topic/} 候选（名册版：仅含已被作业使用的 topic，不连 Kafka） */
   const [topicOptions, setTopicOptions] = useState<AiChatMentionItem[]>([]);
+  // P2（2026-11-04）：@job/ 候选（本租户 FlinkSQL 作业），首次用到时拉一次
+  const [jobOptions, setJobOptions] = useState<AiChatMentionItem[]>([]);
+  /** 已拉过 @job/ 候选（空结果也算拉过，避免重复请求） */
+  const jobLoadedRef = useRef(false);
   /** 数据源名 → 该数据源的 schemas（含 tables）缓存 */
   const sourceTreeRef = useRef<Map<string, any[]>>(new Map());
   /**
@@ -461,7 +639,6 @@ const AiChat = (props: AiChatProps) => {
    * 流式回答每来一个 chunk 都会滚动，不能把正在看历史的用户强行拽回底部。
    */
   const stickToBottomRef = useRef<boolean>(true);
-  const { editorRegistry } = useContext(DataStudioContext);
 
   /** 消息列表滚动：距底 < 40px 视为「仍在底部」，恢复自动跟随 */
   const handleMessageListScroll = (e: any) => {
@@ -481,12 +658,6 @@ const AiChat = (props: AiChatProps) => {
       el.scrollTop = el.scrollHeight;
     }
   }, [messages]);
-
-  /**
-   * 当前 tab 的编辑器注册键：作业 tab 用 taskId；语义文件 tab 用 semantic:<project>:<path>。
-   * 必须与注册方（SqlTask / SemanticFile）同源，否则选区静默为空。
-   */
-  const editorKey = resolveEditorKey(tabParams);
 
   /** 读取当前编辑区的选中片段（无选中时返回空串） */
   const readSelectedSql = () => editorRegistry?.getSelection(editorKey) ?? '';
@@ -674,6 +845,77 @@ const AiChat = (props: AiChatProps) => {
       .catch(() => setKbOptions([]));
   }, [config?.kbEnable]);
 
+  // C1：候选统一索引——列式快照，按键在本地匹配（0 请求）。
+  // 续期策略（2026-10-31 修复）：与后端快照同口径 60s TTL，超时后再次打开浮层就重拉；
+  // 未超时沿用本地索引。早期"整个组件生命周期只拉一次"会让资产改名在 SPA 内永不生效。
+  // 失败也不影响其它 @ 类型：索引为空时，表 / 数据源 / 环境等候选照旧由各自的 provider 给出。
+  useEffect(() => {
+    if (!mentionOpen) {
+      return;
+    }
+    const fresh = assetIndex != null && Date.now() - assetIndexAtRef.current < MENTION_INDEX_TTL_MILLIS;
+    if (fresh) {
+      return;
+    }
+    fetchMentionCandidates()
+      .then((payload) => {
+        assetIndexAtRef.current = Date.now();
+        setAssetIndex(payload ?? {});
+      })
+      .catch(() => setAssetIndex({}));
+  }, [mentionOpen, assetIndex]);
+
+  // C1.5（2026-10-31）：表名搜索——**只**在"无类型前缀且 ≥2 字符"时触发。
+  //
+  // 为什么不能按键就查：`getSchemasAndTables` 是真实连接操作（Hive / Presto 上可能秒级），
+  // 每键一请求正是 C1 之前被吐槽的行为。这里三道闸：① 无前缀（`@source/` 等走路径式下钻）；
+  // ② 关键词 ≥2 字符；③ debounce 250ms。后端还有 5 分钟缓存 + 单源超时兜底。
+  useEffect(() => {
+    const raw = mentionQuery.trim();
+    const hasTypePrefix = /^[A-Za-z]+[-/]/.test(raw);
+    if (!mentionOpen || hasTypePrefix || raw.length < 2) {
+      setRemoteTables([]);
+      return undefined;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      fetchMentionCandidates(undefined, raw, 10)
+        .then((payload) => {
+          if (cancelled) {
+            return;
+          }
+          const types = payload?.types ?? [];
+          const codes = payload?.codes ?? [];
+          const titles = payload?.titles ?? [];
+          const subs = payload?.subs ?? [];
+          const list: (AiChatMentionItem & { group?: string })[] = [];
+          for (let i = 0; i < codes.length; i += 1) {
+            // 只接表命中：快照类（skill/doc/semantic/kb）本地索引里已有，重复出现会抢排序
+            if (`${types[i] ?? ''}` !== 'source' || !codes[i]) {
+              continue;
+            }
+            list.push({
+              type: 'source' as const,
+              name: codes[i],
+              content: titles[i] || codes[i],
+              hint: subs[i] ?? undefined,
+              group: l('datastudio.aiChat.mention.groupTable')
+            });
+          }
+          setRemoteTables(list);
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setRemoteTables([]);
+          }
+        });
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [mentionOpen, mentionQuery]);
+
   // P1：{@code @source/} 第一层候选——数据源清单（首次用到时才拉，且只拉一次）
   useEffect(() => {
     if (!sourceQuery || dataSources.length > 0) {
@@ -755,6 +997,30 @@ const AiChat = (props: AiChatProps) => {
       .catch(() => setTopicOptions([]));
   }, [mentionQuery, topicOptions.length]);
 
+  // P2（2026-11-04）：{@code @job/} 候选——首次用到时拉一次本租户 FlinkSQL 作业清单。
+  // 选中的名字写成作业名（后端也认 id），这样插入后的文本 `@job/uat_device_top5` 可读性最好。
+  useEffect(() => {
+    // 用 ref 记住"已经拉过"，而不是用 jobOptions.length——否则接口返回空数组时 length 恒为 0，
+    // 用户每敲一个字都会重新打一次接口（请求风暴），且永远等不到结果。
+    if (!/^job[-/]/.test(mentionQuery.trim().toLowerCase()) || jobLoadedRef.current) {
+      return;
+    }
+    jobLoadedRef.current = true;
+    listMentionJobs()
+      .then((items) =>
+        setJobOptions(
+          (items ?? []).map((item: any) => ({
+            type: 'job-ref' as const,
+            name: item.name,
+            // 带上方言：候选里有 Hive(42) / DataX(24) / SparkSql(13) / FlinkSql(7) / Mysql(7)…
+            // 同名或近似名作业不带类型根本分不清；右侧那栏就显示 "作业 · DataX"
+            group: `${l('datastudio.aiChat.mention.groupJobRef')}${item.dialect ? ` · ${item.dialect}` : ''}`
+          }))
+        )
+      )
+      .catch(() => setJobOptions([]));
+  }, [mentionQuery]);
+
   const mentionCandidates = useMemo(() => {
     const list: (AiChatMentionItem & { group: string })[] = [];
     // provider 1：当前 schema 下的表（P4：按实际生效的 schema，表 tab 打开即有候选）
@@ -772,7 +1038,10 @@ const AiChat = (props: AiChatProps) => {
       if (tab?.id === activeTab) {
         return;
       }
-      const statement = tab?.params?.statement;
+      // 2026-11-06：编辑器改非受控后正文以实例为准（SqlTask 300ms 节流、语义/skill 保存后才写 model），
+      // 直接读 `params.statement` 会拿到改动前的旧内容 → 优先 getContent，回落 statement
+      const statement =
+        editorRegistry?.getContent(resolveEditorKey(tab?.params)) || tab?.params?.statement;
       if (!statement) {
         return;
       }
@@ -863,6 +1132,10 @@ const AiChat = (props: AiChatProps) => {
     // 平台里存在但无任何作业消费的 topic ，需等批次 2 的 list_topics（AdminClient）。
     if (/^topic[-/]/.test(mentionQuery.trim().toLowerCase())) {
       return topicOptions;
+    }
+    // provider 8b（P2，2026-11-04）：@job/ 候选——本租户 FlinkSQL 作业，选中后由后端按名查库。
+    if (/^job[-/]/.test(mentionQuery.trim().toLowerCase())) {
+      return jobOptions;
     }
     // provider 10（知识库 @kb 接入 v1.0）：@kb/ 候选——**单级**（库编码），无层级下钻。
     // 与 @source/ @semantic/ 不同：知识库是"检索范围"而不是"可引用对象"，选中即插入库编码，
@@ -975,6 +1248,8 @@ const AiChat = (props: AiChatProps) => {
         // 故这里不做开关判断——多一个条件就多一处漏判风险）
         prefixItem('kb/', l('datastudio.aiChat.mention.groupKb')),
         prefixItem('env/', l('datastudio.aiChat.mention.groupEnv')),
+        // P2（2026-11-04）：@job/ —— 引用另一个作业当 few-shot 参考
+        prefixItem('job/', l('datastudio.aiChat.mention.groupJobRef')),
         ...list
       ].slice(0, 30);
     }
@@ -995,6 +1270,9 @@ const AiChat = (props: AiChatProps) => {
     dataSources,
     envOptions,
     topicOptions,
+    // P2（2026-11-04）：漏了这个依赖 → jobOptions 更新后 useMemo 不重算，候选恒为空。
+    // 这类"数据到了但 UI 不刷新"的坑，只有把候选集真跑一遍才会发现。
+    jobOptions,
     sourceTreeTick,
     semanticQuery,
     semanticProjects,
@@ -1022,7 +1300,9 @@ const AiChat = (props: AiChatProps) => {
                   ? 'semantic'
                   : /^kb[-/]/.test(q)
                     ? 'kb'
-                    : '';
+                    : /^job[-/]/.test(q)
+                      ? 'job'
+                      : '';
     if (assetPrefix) {
       // 知识库 @kb 接入 v1.0：候选 name 是库**编码**（c_xxx / 外部原标识），不在 name 里带 "kb/"，
       // 若走下面 assetKey 分支会因 "kb/" 拼不进编码而恒空（与 @table/ 当年的坑同源）。
@@ -1038,6 +1318,19 @@ const AiChat = (props: AiChatProps) => {
           )
           .slice(0, 20);
       }
+      if (assetPrefix === 'job') {
+        // P2（2026-11-04）：@job/ 候选。**不能**走下面 `c.type === assetPrefix` 的通用分支——
+        // 候选的 type 是 `job-ref`（与"已打开标签页"的 `job` 区分），按 `job` 比会恒空。
+        // 这里按作业名做一次关键字筛选（支持继续输入 `@job/uat` 收窄）。
+        const jobKey = q.slice('job/'.length);
+        return mentionCandidates
+          .filter(
+            (c) =>
+              c.type === 'job-ref' &&
+              (!jobKey || `${c.name ?? ''}`.toLowerCase().includes(jobKey))
+          )
+          .slice(0, 20);
+      }
       if (assetPrefix === 'source' || assetPrefix === 'semantic') {
         // P1/P3b：路径式前缀的候选已在 mentionCandidates 里按「层级 + 该层关键字」算好，
         // 而名字是路径（ds/db/tbl 或 project/asset）——再拿整串 query 过滤一次只会把候选全过滤掉。
@@ -1049,28 +1342,70 @@ const AiChat = (props: AiChatProps) => {
         .filter((c) => c.type === assetPrefix && c.name?.toLowerCase().includes(assetKey))
         .slice(0, 20);
     }
-    const matched = q
-      ? mentionCandidates.filter((c) =>
-          c.type === 'column'
-            ? `${c.name}.${c.columnName}`.toLowerCase().includes(q)
-            : c.name?.toLowerCase().includes(q)
-        )
-      : mentionCandidates;
-    return [...matched]
-      .sort((a, b) => {
-        const ra = recentMentions.indexOf(a.name);
-        const rb = recentMentions.indexOf(b.name);
-        if (ra !== -1 || rb !== -1) {
-          return (
-            (ra === -1 ? Number.MAX_SAFE_INTEGER : ra) - (rb === -1 ? Number.MAX_SAFE_INTEGER : rb)
-          );
+    // ---- 无类型前缀：跨类型混合匹配（C1 核心）----
+    // 改造前这里只有「上下文候选（当前 schema 表 / 已开作业 / 选区）」，输入任意串时
+    // 表里没有就空白；现在把统一索引（skill / doc / semantic 项目 / kb）并进来，
+    // 于是 `@ord` 能同时命中表名、文档名与 skill 名。
+    const pool: (AiChatMentionItem & { group?: string })[] = [...mentionCandidates];
+    const indexCodes = assetIndex?.codes ?? [];
+    const indexTypes = assetIndex?.types ?? [];
+    const indexTitles = assetIndex?.titles ?? [];
+    const indexCount = Math.min(indexCodes.length, indexTypes.length, indexTitles.length);
+    for (let i = 0; i < indexCount; i += 1) {
+      const name = `${indexCodes[i] ?? ''}`;
+      if (!name) {
+        continue;
+      }
+      const type = `${indexTypes[i] ?? ''}`;
+      const subtitle = `${assetIndex?.subs?.[i] ?? ''}`.trim();
+      pool.push({
+        type: type as AiChatMentionItem['type'],
+        name,
+        // 索引的 title 是展示名（kb 是库名、不是编码 c_xxx）。放进 content 而不是 name，
+        // 与既有 listKbCollections 的约定一致：name 存可寻址标识，content 存展示/描述。
+        content: indexTitles[i],
+        // 右侧提示：优先服务端副标题（kb=库名 / skill·doc=描述 / semantic=版本规模）；
+        // 服务端因条目超阈值整列省略时，kb 退回 title（title 本身就是库名）
+        hint: subtitle || (type === 'kb' ? indexTitles[i] : undefined),
+        group: mentionGroupOfType(type)
+      });
+    }
+    // C1.5：表名服务端命中（索引里没有表，因此不会与之重复；仍按 name+type 去掉同一张表）
+    remoteTables.forEach((item) => {
+      if (!pool.some((row) => row.type === item.type && row.name === item.name)) {
+        pool.push(item);
+      }
+    });
+    if (!q) {
+      return pool.slice(0, 20);
+    }
+    // 前缀入口也参与匹配：打 `sou` 就能看到 `source/`，选中即收敛到该类型。
+    // （只在有关键字时追加——空输入时 mentionCandidates 已给出完整入口列表。）
+    MENTION_PREFIX_ENTRIES.forEach((entry) => {
+      pool.push({ type: 'prefix', name: entry.name, group: l(entry.groupKey) });
+    });
+    // 本地打分：全等 > 前缀 > 子串 > 子序列；最近用过的稳定置顶
+    const scored = pool
+      .map((item) => ({
+        item,
+        score: scoreMention([item.name, item.content, item.columnName], q),
+        recent: recentMentions.indexOf(item.name)
+      }))
+      .filter((row) => row.score > 0);
+    scored.sort((a, b) => {
+      if (a.recent !== b.recent) {
+        if (a.recent === -1) {
+          return 1;
         }
-        const pa = a.name?.toLowerCase().startsWith(q) ? 0 : 1;
-        const pb = b.name?.toLowerCase().startsWith(q) ? 0 : 1;
-        return pa - pb;
-      })
-      .slice(0, 20);
-  }, [mentionCandidates, mentionQuery, recentMentions]);
+        if (b.recent === -1) {
+          return -1;
+        }
+        return a.recent - b.recent;
+      }
+      return b.score - a.score;
+    });
+    return scored.slice(0, 20).map((row) => row.item);
+  }, [mentionCandidates, mentionQuery, recentMentions, assetIndex, remoteTables]);
 
   /**
    * 键盘上下选择时让高亮项跟随滚动（UAT 2026-10-29）。
@@ -1236,8 +1571,18 @@ const AiChat = (props: AiChatProps) => {
     // `@<表名>`——保证 C2「与迭代前完全一致」这条兼容性红线不被破坏。
     // 2026-10-06：分隔符统一为斜杠，选中后一律生成新语法；手打旧语法（连字符）后端仍解析。
     const viaTablePrefix = /^table[-/]/.test(mentionQuery.trim().toLowerCase());
+    // P2（2026-11-04）：@job/ 候选落地时统一生成 `@job/<作业名>`。
+    // 候选的 type 用 'job-ref' 是为了与"其它已打开作业"(type='job'，带 SQL 正文) 区分开——
+    // 那个是"把 SQL 塞进上下文"，这个是"让后端按名字去查作业"。
+    const viaJobPrefix = /^job[-/]/.test(mentionQuery.trim().toLowerCase());
     const token =
-      item.type === 'table' && viaTablePrefix ? `@table/${item.name}` : mentionToken(item);
+      item.type === 'table' && viaTablePrefix
+        ? `@table/${item.name}`
+        : item.type === 'job-ref' && viaJobPrefix
+          ? `@job/${item.name}`
+          : mentionToken(item);
+    // 记入 mentions 时换成后端认识的 type（后端按 MentionType.JOB 分发）
+    const mentionedItem = item.type === 'job-ref' ? { ...item, type: 'job' } : item;
 
     // 中间层级：补斜杠、保持浮层（不建 chip、不记最近使用——这一层还不是一次「引用」）
     if (item.chainable && !forceFinal) {
@@ -1252,10 +1597,13 @@ const AiChat = (props: AiChatProps) => {
     applyMentionText(`${token} `);
     setMentions((prev) =>
       prev.some(
-        (m) => m.type === item.type && m.name === item.name && m.columnName === item.columnName
+        (m) =>
+          m.type === mentionedItem.type &&
+          m.name === mentionedItem.name &&
+          m.columnName === mentionedItem.columnName
       )
         ? prev
-        : [...prev, item]
+        : [...prev, mentionedItem as AiChatMentionItem]
     );
     setMentionOpen(false);
     setMentionQuery('');
@@ -1458,10 +1806,13 @@ const AiChat = (props: AiChatProps) => {
 
     // 主动发问时必定要看到回答：强制恢复「贴底跟随」，即使用户刚才在翻历史
     stickToBottomRef.current = true;
+    // 一问一答共享同一个 roundId（「删除」按轮次成对移除的依据）
+    msgSeqRef.current += 1;
+    const roundId = `r-${Date.now()}-${msgSeqRef.current}`;
     setMessages((prev) => [
       ...prev,
-      { role: 'user', content: userContent },
-      { role: 'assistant', content: '' }
+      { id: `${roundId}-u`, roundId, role: 'user', content: userContent },
+      { id: `${roundId}-a`, roundId, role: 'assistant', content: '' }
     ]);
     setInputValue('');
     // 引用是一次性的：发送后清空，避免下一轮提问误带上一轮的表
@@ -1613,6 +1964,39 @@ const AiChat = (props: AiChatProps) => {
   };
 
   /**
+   * 「校验 SQL」：**直连规则引擎**，不经过大模型。
+   *
+   * <p>为什么要有这个按钮：审核类问题若交给模型转述会出现两种失真——① 模型压根没调校验工具
+   * （2026-11-03 实测 tool_call_count=0 却照样输出"命中/未命中"）；② 把 error 说成"建议"。
+   * 按钮拿的是规则引擎原文，判据稳定、可截图留证，且不消耗模型额度。
+   */
+  const handleValidateDraft = async () => {
+    const sql = (currentSql ?? '').trim();
+    if (!sql) {
+      message.warning(l('datastudio.aiChat.validateNoSql'));
+      return;
+    }
+    setValidating(true);
+    try {
+      const report = await validateFlinkDraft({
+        sql,
+        name: tabParams?.name,
+        parallelism: tabParams?.parallelism,
+        taskId: tabParams?.taskId,
+        envId: tabParams?.envId,
+        clusterId: tabParams?.clusterId ?? undefined,
+        customConfig: tabParams?.configJson?.customConfig
+      });
+      setRuleReport(report ?? null);
+      setRuleReportOpen(true);
+    } catch (e) {
+      message.error(l('datastudio.aiChat.validateFailed'));
+    } finally {
+      setValidating(false);
+    }
+  };
+
+  /**
    * 把写确认框里的正文**应用到编辑区**（不落盘）——批次 F，2026-10-29 用户口径。
    *
    * <p>为什么不再让后端直接写：用户要的是「AI 改完放进编辑器、由我自己核对后点保存」，
@@ -1716,10 +2100,13 @@ const AiChat = (props: AiChatProps) => {
    * <ol>
    *   <li>后端 {@code beforeContent}：写入前静默读到的文件当前内容（最准，含他人已保存的改动）；</li>
    *   <li>编辑区当前文本：后端读不到（资源存储异常 / 空文件）**且**确认框指向的正是当前打开的
-   *       那个文件时，用 {@code tabParams.statement} 兜底——否则左栏会整块空白，用户无法判断改了
+   *       那个文件时，用编辑器正文兜底——否则左栏会整块空白，用户无法判断改了
    *       什么（与 2026-10-21 语义文件 Craft diff「左侧为空」同一类缺陷）；</li>
    *   <li>空串：确实是新建文件，由 {@code newFileHint} 明确告知。</li>
    * </ol>
+   *
+   * <p>2026-11-06：兜底来源由 {@code tabParams.statement} 改为「优先 {@code getContent}，回落 statement」
+   * ——非受控编辑器里的未保存改动不会进 statement。
    */
   const skillConfirmBefore = useMemo(() => {
     if (writeConfirm?.kind !== 'skill_file') {
@@ -1733,8 +2120,11 @@ const AiChat = (props: AiChatProps) => {
       currentTab?.tabType === 'skillFile' &&
       tabParams?.relativePath === writeConfirm?.relativePath &&
       (!writeConfirm?.targetName || tabParams?.skillName === writeConfirm?.targetName);
-    return sameFile ? (tabParams?.statement ?? '') : '';
-  }, [writeConfirm, currentTab, tabParams]);
+    if (!sameFile) {
+      return '';
+    }
+    return editorRegistry?.getContent(editorKey) || (tabParams?.statement ?? '');
+  }, [writeConfirm, currentTab, tabParams, editorRegistry, editorKey]);
 
   /**
    * 阶段 2b：对编辑区选中片段发起 Fix（基于最近执行报错）/ Rewrite（综合优化）。
@@ -1885,6 +2275,21 @@ const AiChat = (props: AiChatProps) => {
   };
 
   /**
+   * M1-D：把四段式草稿写进当前任务（SQL 覆盖编辑器 + 自定义配置合并进 configJson）。
+   * 只落开发态，不提交、不发布——发布权归人。
+   */
+  const handleApplyFlinkDraft = (draft: FlinkJobDraft) => {
+    if (!draft?.sql) {
+      return;
+    }
+    updateAction({
+      actionType: DataStudioActionType.TASK_APPLY_DRAFT,
+      params: { sql: draft.sql, customConfig: draft.customConfig ?? [] }
+    });
+    message.success('已写入草稿（含自定义配置），请确认后保存');
+  };
+
+  /**
    * AI 产出 SQL 的「执行」——复刻编辑器点运行的链路。
    *
    * <p><b>此前这里是空壳</b>：只把 SQL 插入编辑器，并不真正执行——`TASK_RUN_SUBMIT` 仅被
@@ -1961,6 +2366,166 @@ const AiChat = (props: AiChatProps) => {
     } catch (e) {
       message.warning(l('datastudio.aiChat.copyFailed'));
     }
+  };
+
+  /**
+   * 「编辑」：把历史问题回填到输入框，光标置末尾。
+   *
+   * <p>手法与 `applyMentionText` 一致（textarea 实体在 `resizableTextArea.textArea`），
+   * 不新增输入框能力。
+   *
+   * <p><b>已知降级</b>：回填后原文里的 `@source/...` 只是普通文本——`mentions` 是独立 state，
+   * 由 `@` 候选面板选中才生成，不会因为出现 `@xxx` 字样自动恢复。模型仍看得懂这段字符串，
+   * 但不再享受"元数据注入 + 权限裁剪"的句柄待遇，因此命中 `@` 时给一行提示。
+   */
+  const editQuestion = (text: string) => {
+    setInputValue(text);
+    // 上一轮可能残留 chips，与回填文本对不上；一并清掉（用户需要时重新选）
+    setMentions([]);
+    if (text.includes('@')) {
+      message.info(l('datastudio.aiChat.msg.editHandleLost'));
+    }
+    requestAnimationFrame(() => {
+      const el = inputRef.current?.resizableTextArea?.textArea;
+      if (!el) {
+        return;
+      }
+      el.focus();
+      el.selectionStart = el.selectionEnd = text.length;
+    });
+  };
+
+  /**
+   * 「删除」：按轮次成对移除该问题与其回答。
+   *
+   * <p>只删前端 `messages`——后端不存对话正文（`history` 每轮由前端映射），因此无需任何同步。
+   * 删除会改变后续请求的上下文，所以走 `Modal.confirm` 而不是静默执行。
+   */
+  const deleteRound = (roundId: string) => {
+    setMessages((prev) => prev.filter((item) => item.roundId !== roundId));
+    // 展开态按消息 id 存，被删的键自然失效；条数很少，整体清空最省心
+    setExpandedReasoning({});
+  };
+
+  const confirmDeleteRound = (roundId: string) => {
+    Modal.confirm({
+      title: l('datastudio.aiChat.msg.deleteTitle'),
+      content: l('datastudio.aiChat.msg.deleteConfirm'),
+      okText: l('button.confirm'),
+      cancelText: l('button.cancel'),
+      okButtonProps: { danger: true },
+      onOk: () => deleteRound(roundId)
+    });
+  };
+
+  /**
+   * 组装某条消息的操作项。
+   *
+   * <p><b>正在生成的那条不提供操作</b>：复制会拿到半截内容，删除会打断流式累加器
+   * （`appendToLastAssistant` 写的是"最后一条"）。
+   *
+   * <p>返回空数组时 `MessageActions` 自身渲染 `null`，因此调用处不需要条件判断。
+   */
+  const buildMessageActions = (item: AiChatMessage) => {
+    const isGenerating = loading && !item.finish && messages[messages.length - 1]?.id === item.id;
+    if (isGenerating) {
+      return [];
+    }
+    if (item.role === 'user') {
+      return [
+        {
+          key: 'copy',
+          icon: <CopyOutlined />,
+          label: l('datastudio.aiChat.msg.copyQuestion'),
+          onClick: () => copyToClipboard(item.content)
+        },
+        {
+          key: 'edit',
+          icon: <EditOutlined />,
+          label: l('datastudio.aiChat.msg.edit'),
+          onClick: () => editQuestion(item.content)
+        }
+      ];
+    }
+    return [
+      {
+        key: 'copy',
+        icon: <CopyOutlined />,
+        label: l('datastudio.aiChat.msg.copyAnswer'),
+        // item.content 就是模型原始 markdown（渲染前的那份），复制即"markdown 格式"
+        onClick: () => copyToClipboard(item.content)
+      },
+      {
+        key: 'delete',
+        icon: <DeleteOutlined />,
+        label: l('datastudio.aiChat.msg.delete'),
+        danger: true,
+        onClick: () => confirmDeleteRound(item.roundId)
+      },
+      // 无 skill:add / resource:upload 的环境不出现「保存为知识文档」（后端仍会二次校验）
+      ...(canCreateSkill
+        ? [
+            {
+              key: 'save-doc',
+              icon: <SaveOutlined />,
+              label: l('datastudio.aiChat.msg.saveAsDoc'),
+              // 正文只作为隐藏载荷挂到 docTarget，弹窗里只填名称/说明/可见性
+              onClick: () => setDocTarget({ content: item.content })
+            }
+          ]
+        : []),
+      // 知识库未启用 / 无写权限的环境不该出现死按钮（与 @kb 的显示条件保持一致）
+      ...(config?.kbEnable && canWriteKb
+        ? [
+            {
+              key: 'push-kb',
+              icon: <CloudUploadOutlined />,
+              label: l('datastudio.aiChat.msg.pushToKb'),
+              onClick: () => handlePushToKb(item.content)
+            }
+          ]
+        : [])
+    ];
+  };
+
+  /**
+   * 「保存为知识文档」提交：弹窗只收名称/说明/可见性，正文随请求带上。
+   *
+   * <p>返回 `Boolean(ok)` 交给 `CreateAssetModal` 判成功——`handleOption` 业务失败同样
+   * resolve（返回 undefined），靠异常判失败会让弹窗被误关、输入丢失。
+   */
+  const handleSaveAsDoc = async (values: CreateAssetValues) => {
+    const ok = await createSkillWithContent({
+      ...values,
+      assetType: 'doc',
+      content: docTarget?.content ?? ''
+    });
+    if (ok) {
+      message.success(l('datastudio.aiChat.saveAsDoc.done', '', { name: values.name }));
+    }
+    return Boolean(ok);
+  };
+
+  /**
+   * 「推送到知识库」：直接复用 Toolbar/Kb 的公共弹窗（资源 / 语义项目 / 技能 / 注册中心
+   * 已在用的同一份），这里只负责组装载荷。
+   *
+   * <p>`externalId` 传会话号，让 `dinky_kb_push_record` 有业务键可回溯"这条知识是哪次对话推的"；
+   * 不传则该次推送不记台账。
+   */
+  const handlePushToKb = (content: string) => {
+    const now = new Date();
+    const pad = (n: number) => `${n}`.padStart(2, '0');
+    const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(
+      now.getHours()
+    )}${pad(now.getMinutes())}`;
+    setPushPayload({
+      // 文件名必须带后缀（后缀决定 kb 侧切分方式），弹窗内用户仍可改
+      filename: `ai-chat-${stamp}.md`,
+      content,
+      source: 'aichat',
+      externalId: `aichat:${sessionIdRef.current}`
+    });
   };
 
   /** 渲染 SQL 校验状态条（生成 → 执行校验 → 报错自动修复） */
@@ -2067,6 +2632,22 @@ const AiChat = (props: AiChatProps) => {
         );
       }
       const code = match[1];
+      if (match[0].startsWith(FLINK_JOB_FENCE)) {
+        const parsedDraft = parseFlinkJobDraft(code);
+        if (parsedDraft) {
+          nodes.push(
+            <div key={`flink-job-${match.index}`}>
+              <FlinkJobCard
+                draft={parsedDraft}
+                onApplyDraft={handleApplyFlinkDraft}
+                onRunSql={handleRunSql}
+              />
+            </div>
+          );
+          lastIndex = CODE_BLOCK_REGEX.lastIndex;
+          continue;
+        }
+      }
       nodes.push(
         <div
           key={`code-${match.index}`}
@@ -2189,7 +2770,9 @@ const AiChat = (props: AiChatProps) => {
         ) : (
           messages.map((item, index) => (
             <div
-              key={index}
+              key={item.id}
+              // ai-chat-msg 是操作条 hover 显现的锚点（见 index.less）
+              className={'ai-chat-msg'}
               style={{
                 textAlign: item.role === 'user' ? 'right' : 'left',
                 marginBottom: 12
@@ -2210,14 +2793,17 @@ const AiChat = (props: AiChatProps) => {
                     <Typography.Link
                       style={{ fontSize: 12 }}
                       onClick={() =>
-                        setExpandedReasoning((prev) => ({ ...prev, [index]: !prev[index] }))
+                        setExpandedReasoning((prev) => ({
+                          ...prev,
+                          [item.id]: !prev[item.id]
+                        }))
                       }
                     >
-                      {expandedReasoning[index]
+                      {expandedReasoning[item.id]
                         ? l('datastudio.aiChat.hideReasoning')
                         : l('datastudio.aiChat.showReasoning')}
                     </Typography.Link>
-                    {expandedReasoning[index] ? (
+                    {expandedReasoning[item.id] ? (
                       <div
                         style={{
                           whiteSpace: 'pre-wrap',
@@ -2252,6 +2838,8 @@ const AiChat = (props: AiChatProps) => {
                   </div>
                 ) : null}
               </div>
+              {/* 操作条渲染在气泡下方（不是气泡内右侧）：窄面板里不会挤压正文排版 */}
+              <MessageActions items={buildMessageActions(item)} />
             </div>
           ))
         )}
@@ -2355,7 +2943,15 @@ const AiChat = (props: AiChatProps) => {
                     background: index === mentionIndex ? 'rgba(22,119,255,0.10)' : 'transparent'
                   }}
                 >
-                  <span style={{ fontSize: 12 }}>
+                  <span
+                    style={{
+                      fontSize: 12,
+                      maxWidth: '46%',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
                     {item.type === 'column'
                       ? `${item.name}.${item.columnName}`
                       : // 中间层级在列表里就带 `/`：让「选中后会进下一级」这件事可见，
@@ -2364,10 +2960,24 @@ const AiChat = (props: AiChatProps) => {
                         ? `${item.name}/`
                         : item.name}
                   </span>
-                  <span style={{ fontSize: 11, color: 'rgba(0,0,0,0.45)', flexShrink: 0 }}>
-                    {recentMentions.includes(item.name)
-                      ? l('datastudio.aiChat.mention.recent')
-                      : item.group}
+                  {/*
+                    右侧 = 分组 + 名称/说明。知识库的 name 是库编码（写进 filter.collection 用），
+                    只显示编码时用户分不清是哪个库——这一行就是区分依据（2026-10-30 反馈）。
+                    title 属性保留完整文案：超长被省略号截断时，悬停仍可看全。
+                  */}
+                  <span
+                    title={mentionRightText(item, recentMentions.includes(item.name))}
+                    style={{
+                      fontSize: 11,
+                      color: 'rgba(0,0,0,0.45)',
+                      flexShrink: 0,
+                      maxWidth: '52%',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    {mentionRightText(item, recentMentions.includes(item.name))}
                   </span>
                 </div>
               ))
@@ -2481,6 +3091,16 @@ const AiChat = (props: AiChatProps) => {
             </Button>
           </Tooltip>
         )}
+        <Tooltip title={l('datastudio.aiChat.validateTip')}>
+          <Button
+            icon={<SafetyCertificateOutlined />}
+            loading={validating}
+            disabled={!isSqlJobTab || !currentSql?.trim()}
+            onClick={handleValidateDraft}
+          >
+            {l('datastudio.aiChat.validate')}
+          </Button>
+        </Tooltip>
         <Tooltip title={l('datastudio.aiChat.explainTip')}>
           <Button
             icon={<PlayCircleOutlined />}
@@ -2505,6 +3125,84 @@ const AiChat = (props: AiChatProps) => {
           </Button>
         )}
       </Space>
+      {/* 规则校验报告（直连规则引擎，不调模型）：error / warn / unknown 分区展示，条目可截图留证 */}
+      <Modal
+        open={ruleReportOpen}
+        title={l('datastudio.aiChat.validate')}
+        onCancel={() => setRuleReportOpen(false)}
+        footer={null}
+        width={760}
+      >
+        {ruleReport ? (
+          <Space direction={'vertical'} style={{ width: '100%' }} size={8}>
+            <Space wrap size={6}>
+              <Tag color={ruleReport.passed ? 'success' : 'error'}>
+                {ruleReport.passed
+                  ? l('datastudio.aiChat.validatePassed')
+                  : l('datastudio.aiChat.validateRejected')}
+              </Tag>
+              <Tag color={'error'}>{`error ${ruleReport.counts?.error ?? 0}`}</Tag>
+              <Tag color={'warning'}>{`warn ${ruleReport.counts?.warn ?? 0}`}</Tag>
+              <Tooltip title={l('datastudio.aiChat.validateUnknownTip')}>
+                <ThemeChip tone={'neutral'}>{`unknown ${ruleReport.counts?.unknown ?? 0}`}</ThemeChip>
+              </Tooltip>
+            </Space>
+            {ruleReport.message ? <Alert type={'warning'} showIcon message={ruleReport.message} /> : null}
+            {ruleReport.violations && ruleReport.violations.length > 0 ? (
+              <Space direction={'vertical'} style={{ width: '100%' }} size={6}>
+                {ruleReport.violations.map((item, index) => (
+                  <div
+                    key={`${item.id ?? 'rule'}-${index}`}
+                    style={{
+                      border: '1px solid rgba(128, 128, 128, 0.25)',
+                      borderRadius: 6,
+                      padding: '8px 10px'
+                    }}
+                  >
+                    <Space wrap size={6}>
+                      <Tag color={item.severity === 'error' ? 'error' : 'warning'}>
+                        {item.severity ?? 'warn'}
+                      </Tag>
+                      {/* phase=draft 是 SQL 本身的问题；phase=precheck 是作业状态 / 外部资源问题，
+                          两者混在一起看会误以为"SQL 有错"（如已发布作业必然命中 FLINK-ENV-002） */}
+                      {item.phase ? <ThemeChip tone={'neutral'}>{item.phase}</ThemeChip> : null}
+                      <Typography.Text strong>{item.id ?? '-'}</Typography.Text>
+                      <ThemeChip
+                        tone={
+                          item.status === 'fail'
+                            ? item.severity === 'error'
+                              ? 'danger'
+                              : 'warn'
+                            : 'neutral'
+                        }
+                      >
+                        {item.status ?? 'unknown'}
+                      </ThemeChip>
+                      {item.title ? <Typography.Text type={'secondary'}>{item.title}</Typography.Text> : null}
+                    </Space>
+                    <Typography.Paragraph style={{ margin: '6px 0 0', whiteSpace: 'pre-wrap' }}>
+                      {item.message ?? ''}
+                    </Typography.Paragraph>
+                    {item.fix ? (
+                      <Typography.Paragraph
+                        type={'secondary'}
+                        style={{ margin: '4px 0 0', whiteSpace: 'pre-wrap' }}
+                      >
+                        {item.fix}
+                      </Typography.Paragraph>
+                    ) : null}
+                  </div>
+                ))}
+              </Space>
+            ) : (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description={'没有 fail / unknown 条目（pass 不逐条展示）'}
+              />
+            )}
+          </Space>
+        ) : null}
+      </Modal>
       {/* 阶段 2（Craft）：改动预览——未点采纳时编辑器内容绝不变动 */}
       <CraftDiff
         open={!!craftDiff}
@@ -2723,6 +3421,18 @@ const AiChat = (props: AiChatProps) => {
           </>
         )}
       </Modal>
+
+      {/* 保存为知识文档：与注册中心「新建知识文档」是同一个组件（改一处两处生效） */}
+      <CreateAssetModal
+        open={!!docTarget}
+        assetType={'doc'}
+        extraHint={l('datastudio.aiChat.saveAsDoc.hint', '', { chars: docTarget?.content.length ?? 0 })}
+        onSubmit={handleSaveAsDoc}
+        onCancel={() => setDocTarget(null)}
+      />
+
+      {/* 推送到知识库：与资源 / 语义项目 / 技能右键菜单是同一个弹窗 */}
+      <PushModal open={!!pushPayload} payload={pushPayload} onClose={() => setPushPayload(null)} />
     </div>
   );
 };

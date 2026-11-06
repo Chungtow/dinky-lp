@@ -1,0 +1,90 @@
+/*
+ *
+ *  Licensed to the Apache Software Foundation (ASF) under one or more
+ *  contributor license agreements.  See the NOTICE file distributed with
+ *  this work for additional information regarding copyright ownership.
+ *  The ASF licenses this file to You under the Apache License, Version 2.0
+ *  (the "License"); you may not use this file except in compliance with
+ *  the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ *
+ */
+
+package org.dinky.ai.rule;
+
+import org.dinky.ai.context.FlinkCapabilities;
+import org.dinky.ai.context.FlinkCapabilitiesLoader;
+import org.dinky.ai.context.PlatformProfileLoader;
+
+import org.springframework.boot.ApplicationArguments;
+import org.springframework.boot.ApplicationRunner;
+import org.springframework.stereotype.Component;
+
+import cn.hutool.core.util.StrUtil;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+/**
+ * 启动时把规则加载结果打进日志（运维与 UAT 的唯一证据来源）。
+ *
+ * <p><b>为什么要主动预热</b>：{@link RuleLoader} 是懒加载的，规则文件配错时只有"第一次调用对话"
+ * 才会暴露问题——而那时用户已经在等答案了。启动即加载 + 一行日志，能让部署脚本和运维
+ * 在部署阶段就看出"覆盖文件没生效"。
+ *
+ * @since 2026/11/02
+ */
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class RuleBootstrapLogger implements ApplicationRunner {
+
+    private final RuleLoader ruleLoader;
+
+    /** 平台运行画像同样是懒加载：启动预热 + 打日志，部署阶段就能看出覆盖文件是否生效。 */
+    private final PlatformProfileLoader platformProfileLoader;
+
+    /** 集群能力画像（部署脚本探测生成）：启动预热，日志里就能看出探测结果是否上机。 */
+    private final FlinkCapabilitiesLoader flinkCapabilitiesLoader;
+
+    @Override
+    public void run(ApplicationArguments args) {
+        try {
+            RuleSet ruleSet = ruleLoader.ruleSet();
+            String external = StrUtil.blankToDefault(ruleLoader.externalPath(), "(未配置)");
+            log.info(
+                    "AI rule engine ready: {} rules, overlay={}, prompted={}",
+                    ruleSet.size(),
+                    external,
+                    ruleSet.promptedRules().size());
+        } catch (Exception e) {
+            log.warn("AI rule engine warm-up failed (聊天仍可用，规则校验降级为内置基线)", e);
+        }
+        try {
+            log.info(
+                    "AI platform profile ready: pipelines={} topics={} overlay={}",
+                    platformProfileLoader.profile().getPipelines().size(),
+                    platformProfileLoader.profile().getTopics().size(),
+                    StrUtil.blankToDefault(platformProfileLoader.externalPath(), "(未配置)"));
+        } catch (Exception e) {
+            log.warn("AI platform profile warm-up failed (上下文将缺少链路说明)", e);
+        }
+        try {
+            FlinkCapabilities capabilities = flinkCapabilitiesLoader.capabilities();
+            log.info(
+                    "AI capabilities ready: {} connectors (debug {}), flink {}, overlay={}",
+                    capabilities.allConnectors().size(),
+                    capabilities.getDebugConnectors().size(),
+                    capabilities.getFlinkVersion(),
+                    StrUtil.blankToDefault(flinkCapabilitiesLoader.externalPath(), "(未配置)"));
+        } catch (Exception e) {
+            log.warn("AI capabilities warm-up failed (上下文将缺少 connector 白名单)", e);
+        }
+    }
+}

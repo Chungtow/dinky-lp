@@ -20,6 +20,7 @@
 package org.dinky.controller;
 
 import org.dinky.DinkyVersion;
+import org.dinky.context.TenantContextHolder;
 import org.dinky.data.dto.LoginDTO;
 import org.dinky.data.dto.UserDTO;
 import org.dinky.data.enums.Status;
@@ -99,13 +100,35 @@ public class AdminController {
     @ApiOperation(value = "Current User Info", notes = "Current User Info")
     @SaCheckLogin
     public Result<UserDTO> getCurrentUserInfo(HttpServletRequest request) {
-        // 与 TenantInterceptor 使用同一解析链：请求头 → 分槽 Cookie → 旧名 Cookie（兼容）
-        Integer tenantId = TenantResolver.resolve(request);
+        Integer tenantId = resolveTenantId(request);
         if (tenantId == null) {
             throw NotLoginException.newInstance(
                     "LOCAL", NotLoginException.NOT_TOKEN, NotLoginException.NOT_TOKEN_MESSAGE, null);
         }
         return userService.queryCurrentUserInfo(tenantId);
+    }
+
+    /**
+     * 解析本次请求的租户 id，**必须与 {@code TenantInterceptor#preHandle} 同一条链**。
+     *
+     * <p>优先取拦截器已解析并写入 {@code TenantContextHolder} 的值（请求头 → 分槽 Cookie → 旧名 Cookie →
+     * 用户 currentTenant → 绑定唯一租户）；仅当拦截器未设置时才退回 {@code TenantResolver}（前三项）。
+     *
+     * <p>此前这里只调 {@code TenantResolver.resolve(request)}，与 2026-11-02 在拦截器新增的两级回退不一致，
+     * 会造成<b>自锁</b>：前端 {@code localStorage.tenantId} 缺失 → 本接口拿不到租户 → 抛
+     * {@code NotLoginException}（"未能读取到有效 Token"）→ 401 → 前端跳登录页 → 用户重新登录由选租户弹窗
+     * 写回 localStorage，前端的"自动回写"（app.tsx）永远没有机会执行。无头调用方（curl/脚本）不带租户头时
+     * 同样必然 401。
+     *
+     * @param request 当前请求
+     * @return tenant id；确实无任何租户上下文时返回 {@code null}
+     */
+    private Integer resolveTenantId(HttpServletRequest request) {
+        Object contextTenantId = TenantContextHolder.get();
+        if (contextTenantId instanceof Integer) {
+            return (Integer) contextTenantId;
+        }
+        return TenantResolver.resolve(request);
     }
 
     /**

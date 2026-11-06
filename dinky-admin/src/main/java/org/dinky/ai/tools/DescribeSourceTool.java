@@ -24,6 +24,7 @@ import org.dinky.ai.AiToolContext;
 import org.dinky.ai.AiToolResult;
 import org.dinky.ai.AiToolSpec;
 import org.dinky.ai.mention.SourceRefRenderer;
+import org.dinky.ai.mention.SourceRefResolver;
 import org.dinky.data.model.DataBase;
 import org.dinky.data.model.SystemConfiguration;
 
@@ -79,7 +80,11 @@ public class DescribeSourceTool implements AiTool {
     @Override
     public AiToolSpec spec() {
         JSONObject properties = new JSONObject();
-        properties.set("datasource", AiToolSpec.stringProperty("必填，数据源名（与数据源列表中的名称完全一致，区分大小写）"));
+        properties.set(
+                "datasource",
+                AiToolSpec.stringProperty("必填，数据源名（与数据源列表中的名称完全一致，区分大小写）。"
+                        + "只传数据源本身，如 meta-dolphin；@source/meta-dolphin/dolphinscheduler 里的"
+                        + " dolphinscheduler 属于 database 参数，不要写在这里"));
         properties.set("database", AiToolSpec.stringProperty("可选，库 / database 名；留空则只返回该数据源的库清单"));
         properties.set("table", AiToolSpec.stringProperty("可选，表名；留空则只返回该库的表清单"));
         properties.set("column", AiToolSpec.stringProperty("可选，字段名；填写后只返回该字段的明细"));
@@ -107,9 +112,18 @@ public class DescribeSourceTool implements AiTool {
         if (datasource == null) {
             return AiToolResult.failure("缺少必填参数 datasource（数据源名）", System.currentTimeMillis() - start);
         }
-        String database = rawArg(args, "database");
-        String table = rawArg(args, "table");
-        String column = rawArg(args, "column");
+        String[] segments =
+                normalize(datasource, rawArg(args, "database"), rawArg(args, "table"), rawArg(args, "column"));
+        if (segments == null) {
+            return AiToolResult.failure(
+                    "datasource 既不是数据源名、也不是合法的 `@source/<数据源>[/<库>[/<表>[.<字段>]]]` 路径：" + datasource
+                            + "（只允许字母 / 数字 / 下划线 / 连字符 / 点 / $）",
+                    System.currentTimeMillis() - start);
+        }
+        datasource = segments[0];
+        String database = segments[1];
+        String table = segments[2];
+        String column = segments[3];
         if (unsafe(datasource) || unsafe(database) || unsafe(table) || unsafe(column)) {
             return AiToolResult.failure("数据源名 / 库名 / 表名 / 字段名含非法字符，已拒绝执行", System.currentTimeMillis() - start);
         }
@@ -141,5 +155,39 @@ public class DescribeSourceTool implements AiTool {
     /** 参数白名单校验：非法（含引号 / 空格 / 斜杠等）返回 true。工具参数来自模型，必须当作不可信输入。 */
     private static boolean unsafe(String segment) {
         return segment != null && !SAFE_SEGMENT.matcher(segment).matches();
+    }
+
+    /**
+     * 把「可能被模型整条塞进来的 {@code @source/} 路径」落实成四个参数（2026-11-04 修复）。
+     *
+     * <p><b>为什么必须容错</b>：模型看到用户写的 {@code @source/meta-dolphin/dolphinscheduler}
+     * 时，经常把<strong>整串</strong>当成数据源名传进来，于是被"含非法字符"直接拒掉，
+     * 用户侧表现为「依据 / 结论」绕一圈后放弃——实际上这条信息<strong>完全可救</strong>：
+     * {@code /} 永远不可能出现在合法数据源名里（{@link #SAFE_SEGMENT} 已把它排除），
+     * 所以含 {@code /} 的值按路径拆开是<strong>无歧义</strong>的。
+     *
+     * <p><b>为什么不自己写 split</b>：拆分规则（段数上限、{@code 表.字段} 的切法、
+     * 各段白名单）与 {@code @source/} 完全一致，统一交给
+     * {@link SourceRefResolver#parse(String)}，避免两套规则各自演化。
+     *
+     * <p><b>显式参数优先</b>：{@code database / table / column} 已经填了就不被路径里的值覆盖。
+     *
+     * @return {@code [datasource, database, table, column]}；路径不合法（超段数 / 含非法字符）返回 {@code null}
+     */
+    static String[] normalize(String datasource, String database, String table, String column) {
+        if (datasource == null || datasource.indexOf('/') < 0) {
+            // 常规形态：单段数据源名，原样交给后续白名单校验
+            return new String[] {datasource, database, table, column};
+        }
+        SourceRefResolver.Ref ref = SourceRefResolver.parse(datasource);
+        if (ref == null) {
+            return null;
+        }
+        return new String[] {
+            ref.getDatasource(),
+            database != null ? database : ref.getDatabase(),
+            table != null ? table : ref.getTable(),
+            column != null ? column : ref.getColumn()
+        };
     }
 }

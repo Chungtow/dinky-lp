@@ -78,6 +78,35 @@ public class SystemConfiguration {
             .defaultValue(true)
             .note(Status.SYS_FLINK_SETTINGS_USERESTAPI_NOTE);
 
+    /**
+     * AI 生成 FlinkSQL 时的默认 sink 数据源（P0，2026-11-03）。
+     *
+     * <p>只存数据源 id，不存连接串 —— 连接信息仍以注册中心的数据源为准，避免两处维护。
+     * {@code 0} 表示未配置：此时 AI 上下文明示"需用户 `@source/` 指定 sink"。
+     */
+    private final Configuration<Integer> aiDefaultSinkDataBaseId =
+            key(Status.SYS_FLINK_SETTINGS_AIDEFAULTSINKDATABASEID)
+                    .intType()
+                    .defaultValue(0)
+                    .note(Status.SYS_FLINK_SETTINGS_AIDEFAULTSINKDATABASEID_NOTE);
+
+    /**
+     * AI 默认 sink 数据源的<b>名称</b>（主通道，2026-11-03 起；空 = 未配置）。
+     *
+     * <p><b>为什么是名称而不是 id</b>：本配置存在 {@code dinky_sys_config} 里，没有 tenant_id，
+     * 是<b>全局配置</b>；而 {@code dinky_database.id} 只在租户内唯一，且查询走租户过滤。
+     * 早先存 id 的结果是"总有一个租户解析不到默认 sink"（2026-11-03 UAT 实测：配置 34 属于
+     * tenant 2，tenant 1 的上下文只能降级成'当前租户不可用'）。
+     *
+     * <p>名称同样是租户内唯一（{@code UNIQUE(name, tenant_id)}），但它允许<b>各租户各自注册一份</b>：
+     * 解析时只在当前租户内按名称查，用本租户自己的连接凭证。于是一份全局配置对所有租户都成立。
+     */
+    private final Configuration<String> aiDefaultSinkDataBaseName =
+            key(Status.SYS_FLINK_SETTINGS_AIDEFAULTSINKDATABASENAME)
+                    .stringType()
+                    .defaultValue("")
+                    .note(Status.SYS_FLINK_SETTINGS_AIDEFAULTSINKDATABASENAME_NOTE);
+
     private final Configuration<Integer> jobIdWait = key(Status.SYS_FLINK_SETTINGS_JOBIDWAIT)
             .intType()
             .defaultValue(30)
@@ -480,6 +509,38 @@ public class SystemConfiguration {
             .note(Status.SYS_LLM_SETTINGS_TOOLEXECSQLENABLE_NOTE);
 
     /**
+     * FlinkSQL 规则引擎总开关（M1）。
+     *
+     * <p>默认<b>开启</b>：写入前校验是本批的核心价值；关掉只用于规则误报时的紧急回滚
+     * （关掉后提示词红线仍在，只是不再拦写入）。
+     */
+    private final Configuration<Boolean> llmRuleEngineEnable = key(Status.SYS_LLM_SETTINGS_RULEENGINEENABLE)
+            .booleanType()
+            .defaultValue(true)
+            .note(Status.SYS_LLM_SETTINGS_RULEENGINEENABLE_NOTE);
+
+    /**
+     * 写类工具 {@code create_task} 开关（M1）。
+     *
+     * <p>默认<b>关闭</b>，与 {@code toolExecSqlEnable} 同一保守口径：关闭时它<b>不会出现在下发给模型的
+     * tools 清单</b>里（而非下发后再拒绝）。
+     */
+    private final Configuration<Boolean> llmToolWriteTaskEnable = key(Status.SYS_LLM_SETTINGS_TOOLWRITETASKENABLE)
+            .booleanType()
+            .defaultValue(false)
+            .note(Status.SYS_LLM_SETTINGS_TOOLWRITETASKENABLE_NOTE);
+
+    /**
+     * 试跑前的最小空闲 slot（M1）。
+     *
+     * <p>标杆作业常驻占 9~11 / 24 slots；不设下限时 AI 试跑会把生产作业挤下线。
+     */
+    private final Configuration<Integer> llmTrialSlotsFloor = key(Status.SYS_LLM_SETTINGS_TRIALSLOTSFLOOR)
+            .intType()
+            .defaultValue(4)
+            .note(Status.SYS_LLM_SETTINGS_TRIALSLOTSFLOOR_NOTE);
+
+    /**
      * 自动纠错的最大尝试次数（阶段 2c-2）。
      *
      * <p>针对「执行失败 → 模型改稿 → 再执行」的自动循环：一次对话内累计失败达到该值时，
@@ -582,6 +643,18 @@ public class SystemConfiguration {
             .intType()
             .defaultValue(4000)
             .note(Status.SYS_LLM_SETTINGS_SKILLMAXCHARS_NOTE);
+
+    /**
+     * skill 正文 {@code @} 句柄的<b>装配块</b>预算（字符，2026-10-31 / S1 装配）。
+     *
+     * <p><b>独立预算项</b>：正文仍受 {@link #llmSkillMaxChars}（4000）约束，装配资源另走上限，
+     * 两者互不挤占——否则"正文写满"会把装配挤没，或"引用一张宽表"会把正文挤没
+     * （实施计划 H5 / 纲领 T3）。同样是防爆上限，不是省 token 的手段。
+     */
+    private final Configuration<Integer> skillAssetMaxChars = key(Status.SYS_LLM_SETTINGS_SKILLASSETMAXCHARS)
+            .intType()
+            .defaultValue(3000)
+            .note(Status.SYS_LLM_SETTINGS_SKILLASSETMAXCHARS_NOTE);
 
     /**
      * 知识库（{@code @kb}）检索开关（2026-10-27 引入；v1.9 起属 {@code sys.kb.settings} 独立分组）。
@@ -1090,6 +1163,13 @@ public class SystemConfiguration {
                 : llmSkillMaxChars.getValue();
     }
 
+    /** @return skill 句柄装配块预算（字符，2026-10-31）：与正文预算独立，防爆上限 */
+    public int getSkillAssetMaxChars() {
+        return Asserts.isNull(skillAssetMaxChars.getValue())
+                ? skillAssetMaxChars.getDefaultValue()
+                : skillAssetMaxChars.getValue();
+    }
+
     /** @return 是否开启知识库检索能力（2026-10-27）：关闭时 {@code kb_search} 不下发、{@code @kb} 不注入 */
     public boolean isKbEnable() {
         return Asserts.isNull(kbEnable.getValue()) ? kbEnable.getDefaultValue() : kbEnable.getValue();
@@ -1165,6 +1245,27 @@ public class SystemConfiguration {
                 : llmToolExecSqlEnable.getValue();
     }
 
+    /** @return FlinkSQL 规则引擎是否启用（M1，默认开启） */
+    public boolean isLlmRuleEngineEnable() {
+        return Asserts.isNull(llmRuleEngineEnable.getValue())
+                ? llmRuleEngineEnable.getDefaultValue()
+                : llmRuleEngineEnable.getValue();
+    }
+
+    /** @return 是否开放写类工具 create_task（M1，默认关闭） */
+    public boolean isLlmToolWriteTaskEnable() {
+        return Asserts.isNull(llmToolWriteTaskEnable.getValue())
+                ? llmToolWriteTaskEnable.getDefaultValue()
+                : llmToolWriteTaskEnable.getValue();
+    }
+
+    /** @return 试跑前的最小空闲 slot（M1，默认 4） */
+    public int getLlmTrialSlotsFloor() {
+        return Asserts.isNull(llmTrialSlotsFloor.getValue())
+                ? llmTrialSlotsFloor.getDefaultValue()
+                : llmTrialSlotsFloor.getValue();
+    }
+
     /** @return 自动纠错的最大尝试次数（阶段 2c-2，默认 3） */
     public int getLlmToolAutoRepairMaxAttempts() {
         return Asserts.isNull(llmToolAutoRepairMaxAttempts.getValue())
@@ -1233,6 +1334,27 @@ public class SystemConfiguration {
         return Asserts.isNull(llmSourceExpandMaxChars.getValue())
                 ? llmSourceExpandMaxChars.getDefaultValue()
                 : llmSourceExpandMaxChars.getValue();
+    }
+
+    /**
+     * @return AI 生成 FlinkSQL 的默认 sink 数据源 id（{@code 0} = 未配置）。
+     */
+    public int getAiDefaultSinkDataBaseId() {
+        Integer value = aiDefaultSinkDataBaseId.getValue();
+        Integer effective = Asserts.isNull(value) ? aiDefaultSinkDataBaseId.getDefaultValue() : value;
+        return effective == null ? 0 : effective;
+    }
+
+    /**
+     * @return AI 生成 FlinkSQL 的默认 sink 数据源<b>名称</b>（空串 = 未配置）。
+     *
+     * <p>与 {@link #getAiDefaultSinkDataBaseId()} 的关系：名称是主通道，
+     * 解析发生在<b>当前租户</b>内（各租户各自注册同名数据源）；id 仅在名称为空时兜底。
+     */
+    public String getAiDefaultSinkDataBaseName() {
+        return Asserts.isNullString(aiDefaultSinkDataBaseName.getValue())
+                ? aiDefaultSinkDataBaseName.getDefaultValue()
+                : aiDefaultSinkDataBaseName.getValue();
     }
 
     /**

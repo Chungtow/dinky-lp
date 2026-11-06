@@ -1,4 +1,9 @@
 /*******************配置组件自定义颜色(入口css)******************/
+// ⚠️ 本块只是**首帧兜底**：运行期由 `pages/DataStudio/themeToken.ts` 的 palette 生成同名变量并注入
+// （见 `index.tsx` 里的 DS_PALETTE_STYLE_ID）。改色请改 themeToken.ts，并同步这里的兜底值。
+// 注意 `--primary-color` 的语义是**背景色**，不是 antd 的 `colorPrimary` 主色蓝；
+// 变量名与作用域已冻结：`@` 句柄面板（mentionController.ts）与 AI Chat 的 `@` 浮层都硬编码
+// `var(--primary-color, #fff)`，改名或收敛作用域会让它们回落成白底。
 .light-theme {
   --primary-color: #ffffff;
   --second-color: #f9f9f9;
@@ -6,7 +11,7 @@
   --main-background-color: #ffffff;
   --footer-bg-color: #f4f4f4;
   --btn-color: #000000e0;
-  --btn-active-color: #1890ff;
+  --btn-active-color: #1677ff;
   --btn-background-color: #e6f7ff;
   --border-color: #dfe1e4;
   --text-color: #424242;
@@ -15,6 +20,10 @@
   --close-btn-img: url('./imgs/close-light.svg');
   --center-content-bg-color: #f2f2f2;
   --center-content-active-bg-color: var(--primary-color);
+  // 搜索结果高亮（**不能**复用 --primary-color：那是页面背景色，亮色下是 #ffffff，
+  // 当文字色用就成了"白字白底"看不见）
+  --ds-highlight-color: #1677ff;
+  --ds-highlight-bg: rgba(22, 119, 255, 0.14);
 }
 
 .dark-theme {
@@ -34,6 +43,9 @@
   --close-btn-img: url('./imgs/close-dark.svg');
   --centerContent-bg-color: #2b2d30;
   --center-content-active-bg-color: #434343;
+  // 暗色下 #1677ff 压在 #2b2d30 上偏暗，提亮一档（antd blue-5 / blue-3 底）
+  --ds-highlight-color: #4096ff;
+  --ds-highlight-bg: rgba(64, 150, 255, 0.22);
 }
 
 .page-container {
@@ -1075,4 +1087,361 @@ body.dock-dragging iframe {
 
 .dock-panel.dock-style-card .dock-extra-content {
   height: 35px;
+}
+
+//     =======  底部工具面板（服务 / 工具 / Flink SQL Client）空间压缩  =======
+// 这三块面板只有 1 个标签，40px 的标题栏纯属浪费；压到 26px 把高度还给内容区。
+// 注意：不能改 rc-dock 的 group 字符串（DockLayoutFunction.tsx 依赖 'leftBottom' 判位置），
+// 只能通过 group 自动生成的 dock-style-leftBottom 类做样式覆盖。
+.dock-panel.dock-style-leftBottom {
+  // 只改子元素高度是不够的（rc-tabs 的 nav / nav-more / extra-content 都会撑开），
+  // 这里把 bar 自身钉死并裁掉溢出，实测 40px → 26px 生效
+  .dock-bar {
+    height: 26px;
+    min-height: 26px;
+    padding: 0 0 0 6px;
+    overflow: hidden;
+  }
+
+  .dock-nav,
+  .dock-nav-wrap,
+  .dock-nav-list {
+    height: 26px;
+  }
+
+  .dock-tab {
+    height: 26px;
+    line-height: 24px;
+    // 与面板内的目录树、「输出」、「结果-N」标签一致；v1 为了压高度设成 12px，
+    // 视觉上比内容区小一号，被用户指为"喧宾夺主"
+    font-size: 14px;
+    font-weight: 500;
+  }
+
+  .dock-extra-content {
+    height: 26px;
+  }
+
+  .dock-nav-more {
+    height: 26px;
+    width: 26px;
+  }
+
+  .dock-panel-max-btn,
+  .dock-panel-min-btn {
+    height: 16px;
+    width: 16px;
+    margin: 2px 2px 2px 0;
+    padding: 2px;
+  }
+
+  .dock-panel-max-btn:before,
+  .dock-panel-min-btn:before {
+    width: 8px;
+    height: 8px;
+  }
+
+  // 面板内一级 Tabs 更紧凑
+  .ant-tabs-nav {
+    margin-bottom: 2px;
+  }
+
+  .ant-tabs-tab {
+    padding: 4px 8px;
+  }
+
+  .ant-tabs-tab + .ant-tabs-tab {
+    margin-left: 8px;
+  }
+}
+
+// 结果标签（结果-N）的关闭按钮：默认隐藏，悬停标签时显形，避免常驻占位
+.service-result-tab-close {
+  margin-left: 6px;
+  font-size: 10px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.ant-tabs-tab:hover .service-result-tab-close {
+  opacity: 0.6;
+}
+
+//     =======  深色主题下的表格可读性  =======
+// DataStudio 的 ConfigProvider 把 colorBgContainer 指向 CSS 变量后，antd 通过算法推导
+// 出的正文色与真实背景不匹配，深色主题下表格会出现"深底深字"。这里统一用主题变量兜住，
+// 浅色（--text-color:#424242）与深色（#fafafa）同时正确。
+.datastudio-theme {
+  .ant-table {
+    color: var(--text-color);
+    background-color: transparent;
+  }
+
+  .ant-table-thead > tr > th {
+    color: var(--text-color) !important;
+    background-color: var(--second-color) !important;
+    border-bottom-color: var(--border-color) !important;
+  }
+
+  .ant-table-tbody > tr > td {
+    color: var(--text-color);
+    border-bottom-color: var(--border-color);
+  }
+
+  .ant-table-tbody > tr.ant-table-row:hover > td,
+  .ant-table-tbody > tr > td.ant-table-cell-row-hover {
+    background-color: var(--second-color) !important;
+  }
+
+  .ant-table-cell-fix-left,
+  .ant-table-cell-fix-right {
+    background-color: var(--main-background-color) !important;
+  }
+
+  .ant-table-column-sorter,
+  .ant-table-filter-trigger,
+  .ant-table-column-sorters {
+    color: var(--text-color);
+  }
+
+  .ant-pagination,
+  .ant-pagination-item a,
+  .ant-empty-description {
+    color: var(--text-color);
+  }
+
+  // 行高对齐 pgconsole 的 ROW_HEIGHT=28：paddingBlock 8→4、line-height 22→20、字号 14→12
+  // 详见 docs/research/20261104-...调研与方案.md §11
+  .ant-table.ant-table-small {
+    .ant-table-thead > tr > th {
+      padding: 4px 8px;
+      font-size: 12px;
+      line-height: 20px;
+    }
+
+    .ant-table-tbody > tr > td {
+      padding: 4px 8px;
+      font-size: 12px;
+      line-height: 20px;
+    }
+  }
+
+  // 兜底：单元格内容再高也不超过 28px（对齐 pgconsole 的固定行高）
+  .ant-table-tbody > tr > td {
+    height: 28px;
+  }
+
+  // 分页条压到 ~24px（对应 pgconsole 的 h-6 状态条）
+  .ant-pagination.ant-pagination-small {
+    margin: 4px 0;
+  }
+
+  // 表头吸顶：antd sticky 的 holder 需要自带底色，否则滚动时下方行会透上来
+  .ant-table-sticky-holder {
+    z-index: 3;
+    background: var(--second-color);
+  }
+
+  // 列头搜索下拉：ConfigProvider 把 colorBgContainer 指成 CSS 变量后 colorBgElevated 失效，
+  // 面板底色变透明、背后表格文字会透出来干扰
+  .ant-table-filter-dropdown {
+    background: var(--main-background-color);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+  }
+
+  .ant-table-filter-dropdown .ant-dropdown-menu {
+    background: transparent;
+    box-shadow: none;
+  }
+
+  // 单元格单行省略：**只用 CSS**，DOM 里保留全文 → 「复制当前页」拿到的是完整原文
+  .ant-table-tbody > tr > td .ds-cell-text {
+    display: block;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  // 数字等宽：右对齐后小数点能纵向对齐
+  .ant-table-tbody > tr > td {
+    font-variant-numeric: tabular-nums;
+  }
+
+  // 空值弱化（null / (empty)）
+  .ds-cell-placeholder {
+    font-style: italic;
+    opacity: 0.45;
+  }
+
+  // 结构化值（ROW/STRUCT/JSON 列）：等宽字体 + 弱化，和普通文本区分开
+  .ds-cell-json {
+    font-family: var(--font-family-monospace, ui-monospace, SFMono-Regular, Menlo, monospace);
+    opacity: 0.75;
+  }
+
+  // 搜索命中高亮：亮色白底 / 暗色深底都要能看清，所以用专门的 --ds-highlight-*，
+  // 并给 hex 兜底（万一主题变量没继承下来，也不会退化成不可见的颜色）
+  .ds-cell-hl {
+    color: var(--ds-highlight-color, #1677ff);
+    background: var(--ds-highlight-bg, rgba(22, 119, 255, 0.14));
+    font-weight: 600;
+    border-radius: 2px;
+    padding: 0 1px;
+  }
+}
+
+// hover 全文面板（"方块"形态：自动换行、可选中、可复制）——
+// Popover 渲染在 body 的 portal 里，不在 .datastudio-theme 作用域内，故独立定义
+.ds-cell-fulltext {
+  max-width: 480px;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+  font-size: 12px;
+  line-height: 18px;
+  font-family: var(--font-family-monospace, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+.ds-cell-popover .ant-popover-inner {
+  padding: 8px 10px;
+}
+
+.service-result-tab-close:hover {
+  opacity: 1;
+}
+
+/* ---------- 结果面板滚动架构（第二批 D12）：单一滚动容器 ---------- */
+// 结果 pane 自己不再滚：纵向滚动只发生在表体 .ant-table-body，
+// 从而消除"右侧功能竖条右边那条滚动整个结果页"的第二条滚动条。
+// 注意：本块**不能**放进 .datastudio-theme 里——那个 class 加在 ProTable 上，
+// 而 .ds-result-pane 是它的祖先。
+.ds-result-pane {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+
+  // 高度链：把确定高度从 pane 传到卡片内容区，表体高度（scroll.y）才有可量基准
+  .ant-pro-table,
+  .ant-pro-card {
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .ant-pro-card-body {
+    flex: 1;
+    min-height: 0;
+    // 与 ResultTable 的 cardProps.bodyStyle 保持一致（测量时按此扣 padding）
+    padding: 6px 8px;
+  }
+
+  // mock-sink 多表时中间还有一层 Tabs，高度链要续上
+  .ant-tabs {
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .ant-tabs-nav {
+    flex: none;
+  }
+
+  .ant-tabs-content-holder {
+    flex: 1;
+    min-height: 0;
+  }
+
+  // 覆盖全局 `.ant-tabs-content{overflow-y:auto}`：结果 pane 内不允许出现第二处滚动
+  .ant-tabs-content {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .ant-tabs-tabpane-active {
+    height: 100%;
+  }
+
+  // 分页器常驻可视区底部（它的高度已在 scroll.y 计算时扣除，行数少时 antd 不渲染）
+  .ant-table-pagination {
+    flex: none;
+    margin: 6px 0 0 !important;
+  }
+
+  // 表体是唯一纵向滚动容器；水平滚动条贴在它的内底边 ⇒ 永远停在可视区底部
+  .ant-table-body {
+    overflow-x: auto !important;
+    overflow-y: scroll !important;
+  }
+
+  // 滚动条：细条 + 半透明滑块，宽表深色下不抢视线
+  .ant-table-body::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  .ant-table-body::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .ant-table-body::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.22);
+    border-radius: 6px;
+
+    &:hover {
+      background: rgba(0, 0, 0, 0.36);
+    }
+  }
+}
+
+// 深色主题：滑块提亮一档
+.dark-theme .ds-result-pane .ant-table-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.26);
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.42);
+  }
+}
+
+/**
+ * 分栏拖动期（2026-11-05）
+ *
+ * rc-dock 在每次 mousemove 时都会 `DockBox.forceUpdate()` 整棵子树，拖动时页面上同时存在
+ * Monaco / AI Chat / 结果表，这些组件的 hover、选区、光标都会随鼠标位置变化产生额外重绘。
+ * 拖动期间统一收敛交互与选中，只让布局本身跟随（位移合帧在 DataStudio/index.tsx 的
+ * document capture 监听里做）。
+ */
+body.dock-divider-dragging {
+  user-select: none;
+
+  /*
+   * 拖动期间统一光标方向：`.dock-hbox`（左右排布）用 `ew-resize`（纯左右双箭头），
+   * `.dock-vbox`（上下排布）用 `ns-resize`（纯上下双箭头）。
+   *
+   * 不能统一用 `col-resize`——它的图标是「双箭头夹一条竖线」：既与上下拖动不匹配，
+   * 那条竖线还会与真实的拖拽边界产生视觉错位。
+   *
+   * 加 `*` 是因为拖动中指针会离开 4px 宽的分隔条落到相邻面板上，需要沿用同一方向光标。
+   */
+  &[data-dock-drag-axis='x'],
+  &[data-dock-drag-axis='x'] * {
+    cursor: ew-resize !important;
+  }
+
+  &[data-dock-drag-axis='y'],
+  &[data-dock-drag-axis='y'] * {
+    cursor: ns-resize !important;
+  }
+
+  /* 拖动期间编辑器不响应指针事件：避免 hover 高亮、选区扩张引发的额外重绘 */
+  .content-container .monaco-editor {
+    pointer-events: none;
+  }
 }

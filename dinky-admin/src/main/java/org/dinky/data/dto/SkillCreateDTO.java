@@ -64,4 +64,12 @@ public class SkillCreateDTO implements Serializable {
             notes = "2026-10-14 三档可见性：private（默认，仅自己）/ tenant（同租户共享）/ public（全体公开）。"
                     + "空值按 private；非法值抛业务异常。创建后可由属主通过 /api/skill/visibility 修改。")
     private String visibility;
+
+    @ApiModelProperty(
+            value = "Content",
+            dataType = "String",
+            notes = "2026-11-04：仅 /api/skill/createWithContent 使用——主文件正文（不含 frontmatter，"
+                    + "由服务端拼装 name/description 头）。为空时该端点退化为 /create 的模板正文行为；"
+                    + "/create 忽略本字段。")
+    private String content;
 }

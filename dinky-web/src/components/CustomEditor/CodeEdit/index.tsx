@@ -27,7 +27,7 @@ import { convertCodeEditTheme } from '@/utils/function';
 import { Editor, loader, Monaco, OnChange } from '@monaco-editor/react';
 import { connect } from '@umijs/max';
 import useMemoCallback from 'rc-menu/es/hooks/useMemoCallback';
-import { memo, useCallback, useContext, useRef } from 'react';
+import { memo, useCallback, useContext, useMemo, useRef } from 'react';
 import { DataStudioState } from '@/pages/DataStudio/model';
 import ITextModel = editor.ITextModel;
 import CompletionItem = languages.CompletionItem;
@@ -50,7 +50,21 @@ export type CodeEditFormProps = {
   language: string;
   options?: any;
   onChange?: OnChange;
-  code: string;
+  /**
+   * 受控内容。与 {@link defaultValue} **互斥**，二者都不传时为空编辑器。
+   *
+   * <p>高频输入场景（数据开发 SQL 编辑器）**不要**用 `code`：受控模式下每次 onChange 若回写
+   * state，会形成「按键 → setState → 重渲染 → 回写 monaco value」环路，表现为字符显示滞后于键盘。
+   * 改用 {@link defaultValue} + `editorRegistry.getContent()` 取值（见 `SqlTask`）。
+   */
+  code?: string;
+  /**
+   * 非受控初始内容（仅在首次挂载建 model 时生效，后续变化**不会**回写编辑器）。
+   *
+   * <p>需要运行时替换内容时，调用方应直接操作编辑器实例：
+   * `editorInstance.current?.setValue(next)` 或 `trigger('...','type',{text})`。
+   */
+  defaultValue?: string;
   readOnly?: boolean;
   lineNumbers?: string;
   autoWrap?: string;
@@ -58,6 +72,15 @@ export type CodeEditFormProps = {
   enableSuggestions?: boolean;
   enableSuggestionPreview?: boolean;
   monacoRef?: any;
+  /**
+   * 是否注册「按文档分词」的编辑器自带补全（默认 true，保持既有行为）。
+   *
+   * <p>skill 正文里这个 provider 有两个副作用（UAT 2026-10-30 实测）：
+   * ① 它返回的是 Promise，在 {@code suggestionsData} 缺席时链式 Promise 不 settle，
+   * 补全浮层一直卡在 "Loading..."；② 它按"当前词"匹配，敲 {@code @sema} 会把文档里的
+   * 无关词条混进 `@` 候选。因此 skill 编辑器显式关掉它，只留句柄候选。
+   */
+  wordSuggestionsEnabled?: boolean;
 };
 
 const CodeEdit = (props: CodeEditFormProps) => {
@@ -80,11 +103,13 @@ const CodeEdit = (props: CodeEditFormProps) => {
     language, // edit language
     options,
     onChange, // edit change callback
-    code, // content
+    code, // content（受控，与 defaultValue 互斥）
+    defaultValue, // content（非受控初始值）
     readOnly = false, // is readOnly
     lineNumbers, // show lineNumbers
     enableSuggestions = false, // enable suggestions
     enableSuggestionPreview = false, // enable suggestion preview
+    wordSuggestionsEnabled = true, // 是否注册"按文档分词"的自带补全
     // @ts-ignore
     suggestionsData, // suggestions data
     autoWrap = 'on', // auto wrap
@@ -102,7 +127,8 @@ const CodeEdit = (props: CodeEditFormProps) => {
    * build all suggestions
    */
   const buildAllSuggestions = (model: ITextModel, position: monaco.Position) => {
-    return buildAllSuggestionsToEditor(model, position, suggestionsData);
+    // suggestionsData 由 dva 注入，首帧可能还没有；此前直接透传 undefined 会在 provider 内抛错
+    return buildAllSuggestionsToEditor(model, position, suggestionsData ?? []);
   };
 
   const buildAllSuggestionsCallback = useCallback(
@@ -180,6 +206,10 @@ const CodeEdit = (props: CodeEditFormProps) => {
 
     let timeoutId: NodeJS.Timeout | null = null;
     editor.onDidChangeModelContent((e) => {
+      if (!wordSuggestionsEnabled) {
+        // 关掉自带分词补全的编辑器（如 skill 正文）不再注册 provider，避免覆盖 `@` 候选
+        return;
+      }
       if (timeoutId !== null) {
         return;
       }
@@ -204,7 +234,7 @@ const CodeEdit = (props: CodeEditFormProps) => {
       }
     });
 
-    if (enableSuggestions) {
+    if (enableSuggestions && wordSuggestionsEnabled) {
       reloadCompilation(monacoInstance.current, []);
     }
     editor.layout();
@@ -213,89 +243,110 @@ const CodeEdit = (props: CodeEditFormProps) => {
 
   // todo: 标记错误信息
 
-  const finalEditorOptions = {
-    ...MonacoEditorOptions, // set default options
-    tabCompletion: 'on', // tab 补全
-    cursorSmoothCaretAnimation: false, // 光标动画
-    screenReaderAnnounceInlineSuggestion: true, // 屏幕阅读器提示
-    formatOnPaste: true, // 粘贴时格式化
-    mouseWheelZoom: true, // 鼠标滚轮缩放
-    autoClosingBrackets: 'always', // 自动闭合括号
-    autoClosingOvertype: 'always', // 用于在右引号或括号上键入的选项
-    autoClosingQuotes: 'always', // 自动闭合引号
-    showUnused: true, // 显示未使用的代码
-    unfoldOnClickAfterEndOfLine: true, // 控制在折叠线之后单击空内容是否会展开该线
-    showFoldingControls: 'always', // 代码折叠控件 'always' | 'mouseover' | 'never'
-    automaticLayout: true, // 自动布局
-    readOnly, // 是否只读
-    glyphMargin: true, // 字形边缘
-    formatOnType: true, // 代码格式化
-    // columnSelection: true, // 列选择
-    wrappingIndent:
-      language === 'yaml' || language === 'yml' || language === 'json' ? 'indent' : 'none',
-    inlineSuggest: {
-      enabled: true,
-      showToolbar: 'always',
-      keepOnBlur: false,
-      allowQuickSuggestions: true,
-      showOnAllSymbols: true
-    },
-    // inlineSuggestionVisible: true,
-    quickSuggestions: enableSuggestions,
-    guides: {
-      bracketPairs: true
-    },
-    bracketPairColorization: {
-      enabled: true,
-      independentColorPoolPerBracketType: true
-    },
-    foldingRanges: true,
-    inlineCompletionsAccessibilityVerbose: true,
-    smartSelect: {
-      selectLeadingAndTrailingWhitespace: true,
-      selectSubwords: true
-    },
-    suggest: {
+  /**
+   * 计划（2026-11-06）§3.5 R3：`options` 原本**每次渲染都新建**（~80 项）。
+   *
+   * <p>`@monaco-editor/react` 以 `options` 引用驱动 `editor.updateOptions(...)`，于是受控编辑器
+   * 每按一次键都要把这份大对象全量下发一遍。改为 `useMemo` 后只在真实依赖变化时重建。
+   *
+   * <p>依赖数组必须显式覆盖所有参与计算的外部值：`language`（wrappingIndent）、`readOnly`、
+   * `lineNumbers`、`autoWrap`、`enableSuggestions`（quickSuggestions）、`enableSuggestionPreview`
+   * （suggest.preview）、`options`（调用方覆盖，优先级最高）。漏项会导致切换只读 / 语言不生效。
+   */
+  const finalEditorOptions = useMemo(
+    () => ({
+      ...MonacoEditorOptions, // set default options
+      tabCompletion: 'on', // tab 补全
+      cursorSmoothCaretAnimation: false, // 光标动画
+      screenReaderAnnounceInlineSuggestion: true, // 屏幕阅读器提示
+      formatOnPaste: true, // 粘贴时格式化
+      mouseWheelZoom: true, // 鼠标滚轮缩放
+      autoClosingBrackets: 'always', // 自动闭合括号
+      autoClosingOvertype: 'always', // 用于在右引号或括号上键入的选项
+      autoClosingQuotes: 'always', // 自动闭合引号
+      showUnused: true, // 显示未使用的代码
+      unfoldOnClickAfterEndOfLine: true, // 控制在折叠线之后单击空内容是否会展开该线
+      showFoldingControls: 'always', // 代码折叠控件 'always' | 'mouseover' | 'never'
+      automaticLayout: true, // 自动布局
+      readOnly, // 是否只读
+      glyphMargin: true, // 字形边缘
+      formatOnType: true, // 代码格式化
+      // columnSelection: true, // 列选择
+      wrappingIndent:
+        language === 'yaml' || language === 'yml' || language === 'json' ? 'indent' : 'none',
+      inlineSuggest: {
+        enabled: true,
+        showToolbar: 'always',
+        keepOnBlur: false,
+        allowQuickSuggestions: true,
+        showOnAllSymbols: true
+      },
+      // inlineSuggestionVisible: true,
       quickSuggestions: enableSuggestions,
-      showStatusBar: true,
-      preview: enableSuggestionPreview,
-      previewMode: 'subword',
-      showInlineDetails: true,
-      showMethods: true,
-      showFunctions: true,
-      showConstructors: true,
-      showFields: true,
-      showEvents: true,
-      showOperators: true,
-      showClasses: true,
-      showModules: true,
-      showStructs: true,
-      showInterfaces: true,
-      showProperties: true,
-      showUnits: true,
-      showValues: true,
-      showConstants: true,
-      showEnums: true,
-      showEnumMembers: true,
-      showKeywords: true,
-      showWords: true,
-      showFolders: true,
-      showReferences: true,
-      showSnippets: true
-    },
-    scrollbar: {
-      useShadows: false,
-      vertical: 'visible',
-      horizontal: 'visible',
-      verticalScrollbarSize: 8,
-      horizontalScrollbarSize: 8,
-      arrowSize: 30
-    },
-    wordWrap: autoWrap,
-    autoDetectHighContrast: true,
-    lineNumbers,
-    ...options
-  };
+      guides: {
+        bracketPairs: true
+      },
+      bracketPairColorization: {
+        enabled: true,
+        independentColorPoolPerBracketType: true
+      },
+      foldingRanges: true,
+      inlineCompletionsAccessibilityVerbose: true,
+      smartSelect: {
+        selectLeadingAndTrailingWhitespace: true,
+        selectSubwords: true
+      },
+      suggest: {
+        quickSuggestions: enableSuggestions,
+        showStatusBar: true,
+        preview: enableSuggestionPreview,
+        previewMode: 'subword',
+        showInlineDetails: true,
+        showMethods: true,
+        showFunctions: true,
+        showConstructors: true,
+        showFields: true,
+        showEvents: true,
+        showOperators: true,
+        showClasses: true,
+        showModules: true,
+        showStructs: true,
+        showInterfaces: true,
+        showProperties: true,
+        showUnits: true,
+        showValues: true,
+        showConstants: true,
+        showEnums: true,
+        showEnumMembers: true,
+        showKeywords: true,
+        showWords: true,
+        showFolders: true,
+        showReferences: true,
+        showSnippets: true
+      },
+      scrollbar: {
+        useShadows: false,
+        vertical: 'visible',
+        horizontal: 'visible',
+        verticalScrollbarSize: 8,
+        horizontalScrollbarSize: 8,
+        arrowSize: 30
+      },
+      wordWrap: autoWrap,
+      autoDetectHighContrast: true,
+      lineNumbers,
+      ...options
+    }),
+    [
+      language,
+      readOnly,
+      lineNumbers,
+      autoWrap,
+      enableSuggestions,
+      enableSuggestionPreview,
+      options
+    ]
+  );
   return (
     <>
       <div className={'monaco-float'}>
@@ -303,7 +354,8 @@ const CodeEdit = (props: CodeEditFormProps) => {
           beforeMount={(monaco) => handleInitEditorAndLanguageOnBeforeMount(monaco, true)}
           width={width}
           height={height}
-          value={code}
+          // 受控（code 已传）与非受控（defaultValue）互斥，避免 @monaco-editor/react 行为不确定
+          {...(code !== undefined ? { value: code } : { defaultValue: defaultValue ?? '' })}
           language={language}
           options={finalEditorOptions}
           className={'editor-develop'}

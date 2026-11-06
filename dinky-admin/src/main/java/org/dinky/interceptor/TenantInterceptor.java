@@ -70,12 +70,17 @@ public class TenantInterceptor implements AsyncHandlerInterceptor {
 
         Integer tenantId = TenantResolver.resolve(request);
         if (tenantId == null) {
-            // 未携带租户标识：单租户用户自动落入其唯一租户，多租户用户保持无租户上下文（需显式选择）
+            // 回退 1：采用用户在服务端会话中已选择的当前租户（chooseTenant 写入 UserInfoContextHolder）
+            tenantId = resolveUserCurrentTenant();
+        }
+        if (tenantId == null) {
+            // 回退 2：未携带租户标识且未选择过租户时，单租户用户自动落入其唯一租户，
+            //         多租户用户保持无租户上下文（保持 2026-11-02 之前的既有行为）
             tenantId = resolveSingleTenantId();
-            if (tenantId == null) {
-                log.warn("No tenantId carried by header or cookie, uri: {}", request.getRequestURI());
-                return AsyncHandlerInterceptor.super.preHandle(request, response, handler);
-            }
+        }
+        if (tenantId == null) {
+            log.warn("No tenantId carried by header or cookie, uri: {}", request.getRequestURI());
+            return AsyncHandlerInterceptor.super.preHandle(request, response, handler);
         }
 
         UserDTO userInfo = UserInfoContextHolder.get(StpUtil.getLoginIdAsInt());
@@ -114,6 +119,30 @@ public class TenantInterceptor implements AsyncHandlerInterceptor {
             TenantContextHolder.clear();
             request.removeAttribute(TENANT_CONTEXT_SET_ATTR);
         }
+    }
+
+    /**
+     * 回退：采用用户在服务端会话中已选择的当前租户。
+     *
+     * <p>覆盖两类场景：
+     *
+     * <ul>
+     *   <li>前端 {@code localStorage.tenantId} 缺失（换端口首次访问 / 清缓存 / 未走选租户流程），
+     *       导致 {@code buildTenantHeader()} 返回空、请求不携带租户头；
+     *   <li>绕开前端请求层直连 API 的调用方（脚本、curl）。
+     * </ul>
+     *
+     * <p><b>不写 Cookie</b>：租户传递自 2026-10-13 起统一走请求头，回写 Cookie 会重新引入双槽
+     * （8888/8889）交叉污染。返回值仍会经 {@code preHandle} 中"绑定租户列表"校验，不构成越权旁路。
+     *
+     * @return tenant id；用户尚未选择过租户时返回 {@code null}
+     */
+    private Integer resolveUserCurrentTenant() {
+        UserDTO userInfo = UserInfoContextHolder.get(StpUtil.getLoginIdAsInt());
+        if (Asserts.isNull(userInfo) || Asserts.isNull(userInfo.getCurrentTenant())) {
+            return null;
+        }
+        return userInfo.getCurrentTenant().getId();
     }
 
     /**

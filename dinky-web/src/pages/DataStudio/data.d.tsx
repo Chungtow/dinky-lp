@@ -62,5 +62,11 @@ export enum DataStudioActionType {
   TASK_RUN_LOCATION = 'task-run-location',
   TASK_TAB_CHANGE = 'task-tab-change',
   /** AI Chat：把生成的 SQL 插入到当前编辑器光标处，params: { sql: string } */
-  TASK_INSERT_SQL = 'task-insert-sql'
+  TASK_INSERT_SQL = 'task-insert-sql',
+  /**
+   * AI Chat：把四段式作业草稿写入当前任务（M1-D）。
+   * params: { sql: string, customConfig?: { key: string; value: string }[] }
+   * 与 TASK_INSERT_SQL 的区别：**覆盖**编辑器内容，并把自定义配置合并进 configJson。
+   */
+  TASK_APPLY_DRAFT = 'task-apply-draft'
 }

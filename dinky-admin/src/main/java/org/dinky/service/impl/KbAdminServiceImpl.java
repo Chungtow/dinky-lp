@@ -19,6 +19,7 @@
 
 package org.dinky.service.impl;
 
+import org.dinky.ai.asset.MentionCandidateService;
 import org.dinky.context.TenantContextHolder;
 import org.dinky.data.dto.KbCollectionSaveDTO;
 import org.dinky.data.dto.KbGrantSaveDTO;
@@ -41,6 +42,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -76,6 +78,30 @@ public class KbAdminServiceImpl implements KbAdminService {
     private final UserService userService;
 
     private final KbClient kbClient;
+
+    /**
+     * {@code @} 候选快照失效器。
+     *
+     * <p><b>为什么用 {@code ObjectProvider} 而不是直接注入</b>：存在构造器循环依赖
+     * {@code KbAdminServiceImpl → MentionCandidateService → KbAssetProvider → KbCollectionService}
+     * （Spring Boot 2.6+ 默认禁止循环引用，直接注入会在启动期抛
+     * {@code BeanCurrentlyInCreationException}）。{@code ObjectProvider} 延迟到<b>调用时</b>解析，
+     * 打破构造期闭环；失效只是"锦上添花"的旁路，取不到就不做（60s TTL 仍会兜底）。
+     */
+    private final ObjectProvider<MentionCandidateService> mentionCandidateService;
+
+    /**
+     * 资产写操作后失效 {@code @} 候选快照，让库名 / 描述 / 可见性的变更<b>立即</b>反映到候选。
+     *
+     * <p>未接此钩子时只能等后端 60s TTL，叠加浏览器缓存会表现为"改名后永远看不到新名"
+     * （见 `docs/plan/20261031-Dinky @候选快照ETag缓存陈旧修复计划.md`）。
+     */
+    private void invalidateMentionIndex() {
+        MentionCandidateService service = mentionCandidateService.getIfAvailable();
+        if (service != null) {
+            service.invalidate(Convert.toInt(TenantContextHolder.get(), null));
+        }
+    }
 
     @Override
     public List<KbCollection> listManageable() {
@@ -122,6 +148,8 @@ public class KbAdminServiceImpl implements KbAdminService {
             collection.setEnabled(dto.getEnabled() == null || Boolean.TRUE.equals(dto.getEnabled()));
             kbCollectionMapper.insert(collection);
             log.info("KB collection created: code={}, name={}, owner={}", collection.getCode(), name, actorId);
+            // 新增库 → 候选多一条，必须立即失效（否则要等 60s，叠加浏览器缓存会被误判为"没保存"）
+            invalidateMentionIndex();
             return collection;
         }
 
@@ -139,6 +167,8 @@ public class KbAdminServiceImpl implements KbAdminService {
         }
         existing.setUpdateTime(LocalDateTime.now());
         kbCollectionMapper.updateById(existing);
+        // 改名 / 改描述 / 启停 / 改公开性都会改变候选的展示内容或可见集合
+        invalidateMentionIndex();
         return existing;
     }
 
@@ -216,6 +246,8 @@ public class KbAdminServiceImpl implements KbAdminService {
         collection.setEnabled(true);
         kbCollectionMapper.insert(collection);
         log.info("KB collection adopted: code={}, by={}, public={}", trimmed, actorId, collection.getIsPublic());
+        // 纳管即新增一条可见候选
+        invalidateMentionIndex();
         return collection;
     }
 
@@ -273,8 +305,10 @@ public class KbAdminServiceImpl implements KbAdminService {
                     .build());
             added++;
         }
-        // 授权无缓存：下次检索/候选立刻按新授权算（D-K15 的"即时生效"）
+        // 授权本身不缓存，但 @ 候选快照缓存了"谁能看到哪些库"——新增授权后必须失效，
+        // 否则被授权者最长 60s 内在 @ 候选里看不到该库（D-K15 的"即时生效"对检索成立，对候选需显式失效）
         log.info("KB grants added: collection={}, type={}, count={}, by={}", collectionId, subjectType, added, actorId);
+        invalidateMentionIndex();
         return added;
     }
 
@@ -289,6 +323,8 @@ public class KbAdminServiceImpl implements KbAdminService {
         }
         requireManageable(grant.getCollectionId());
         kbCollectionGrantMapper.deleteById(grantId);
+        // 撤权同样改变候选可见集合
+        invalidateMentionIndex();
     }
 
     // ------------------------------------------------------------------ 内部

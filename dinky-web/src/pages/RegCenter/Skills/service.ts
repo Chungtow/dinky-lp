@@ -18,14 +18,17 @@
  */
 
 import { handleOption, handleRemoveById, queryDataByParams } from '@/services/BusinessCrud';
+import { postAll } from '@/services/api';
 import { API_CONSTANTS } from '@/services/endpoints';
 import {
   SkillCreateParams,
+  SkillCreateWithContentParams,
   SkillDetail,
   SkillFileNode,
   SkillFileRenameParams,
   SkillFileTargetParams,
   SkillFileWriteParams,
+  SkillHandleValidation,
   SkillInfo,
   SkillSaveParams,
   SkillVisibilityParams
@@ -50,6 +53,19 @@ export const createSkill = async (params: SkillCreateParams, cb?: () => void) =>
   handleOption(API_CONSTANTS.SKILL_CREATE, l('pages.skill.create'), params, cb);
 
 /**
+ * 建资产并直接写入正文（2026-11-04「消息操作」批次）。
+ *
+ * <p>用于 AI Chat「保存为知识文档」：一次事务内完成建目录 + 写 frontmatter+正文 + 落元数据，
+ * 新资产版本停在 1。对比 `create` + `save` 两步：非原子（第二步失败会留下模板空文档）、
+ * 且 save 会把版本推到 2。
+ *
+ * <p>**frontmatter 由服务端拼装**——调用方只传正文，不要在 JS 里自己拼，否则会与
+ * `SkillDocParser` 的格式约定漂移。
+ */
+export const createSkillWithContent = async (params: SkillCreateWithContentParams, cb?: () => void) =>
+  handleOption(API_CONSTANTS.SKILL_CREATE_WITH_CONTENT, l('pages.skill.create'), params, cb);
+
+/**
  * 修改可见性（2026-10-14 三档：private / tenant / public）。
  * 仅属主可调；设为「全体公开」还需 `registration:skill:share` 权限（后端二次校验）。
  */
@@ -59,6 +75,28 @@ export const updateSkillVisibility = async (params: SkillVisibilityParams, cb?: 
 /** 保存 SKILL.md 正文（仅属主；后端会重新解析 frontmatter 并回写元数据） */
 export const saveSkill = async (params: SkillSaveParams, cb?: () => void) =>
   handleOption(API_CONSTANTS.SKILL_SAVE, l('pages.skill.save'), params, cb);
+
+/**
+ * 校验正文里的 `@` 句柄（保存后校验 / E4）。
+ *
+ * <p><b>只读、不阻断</b>：后端把"业务失败"表达为 `handles[].status`，接口本身恒成功；
+ * 前端拿到结果后只做提示（Monaco marker / 通知），**绝不影响保存结果**。
+ *
+ * @param content     SKILL.md 全文
+ * @param contentHash 正文指纹（原样回显，用于丢弃"用户已继续编辑"的过期结果）
+ */
+export const validateSkillContent = async (
+  content: string,
+  contentHash?: string
+): Promise<SkillHandleValidation | undefined> => {
+  try {
+    const res: any = await postAll(API_CONSTANTS.SKILL_VALIDATE, { content, contentHash });
+    return res?.code === 0 ? (res.data as SkillHandleValidation) : undefined;
+  } catch (e) {
+    // 校验是"加分项"：失败不打扰用户（保存已经成功）
+    return undefined;
+  }
+};
 
 /** 删除 skill（同时删除其资源目录与文件；前端需二次确认） */
 export const removeSkill = async (id: number, cb?: () => void) =>

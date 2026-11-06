@@ -23,6 +23,7 @@ import org.dinky.data.dto.AiChatConfirmRequest;
 import org.dinky.data.dto.AiChatRequest;
 import org.dinky.data.dto.AiChatWriteAuditRequest;
 import org.dinky.data.vo.AiChatConfig;
+import org.dinky.data.vo.AiChatContextPreview;
 
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -49,6 +50,15 @@ public interface AiChatService {
      * @return {@link AiChatConfig}
      */
     AiChatConfig getConfig();
+
+    /**
+     * 预览会注入给模型的 FlinkSQL 上下文（<b>只读、不调模型</b>）。
+     *
+     * @param taskId  作业 id（可为 null：新建 / 未保存的 tab，此时只应有框架事实）
+     * @param dialect 请求方言；非 FlinkSql 返回空上下文
+     * @return 上下文原文 + 段落清单 + 7 段自检
+     */
+    AiChatContextPreview previewFlinkContext(Integer taskId, String dialect);
 
     /**
      * 记录 Craft 写入审计（阶段 2）：谁、哪个作业、改动前后 hash 与字符数变化。

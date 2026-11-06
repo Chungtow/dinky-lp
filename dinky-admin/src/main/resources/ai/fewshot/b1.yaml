@@ -1,0 +1,47 @@
+# B1 few-shot 静态语料（M1-C，随 jar 打包；与线上作业解耦）
+# 由 jobs/traccar_realtime/benchmarks/B1_fewshot.md 提炼，字段顺序固定：id/title/topics/tables/keywords/sql/customConfig/ddl/precheck
+- id: bench_01_devices_ods
+  title: 单流纯裁剪写入 CH（设备 ODS）
+  topics: [traccar-cdc]
+  tables: [traccar.ods_tc_devices]
+  keywords: [设备, ods, 裁剪, 单流, jdbc sink, upsert]
+  sql: |
+    SET 'pipeline.name' = 'bench_01_devices_ods';
+    SET 'parallelism.default' = '2';
+    SET 'table.local-time-zone' = 'Asia/Shanghai';
+    SET 'execution.checkpointing.interval' = '60s';
+    SET 'table.exec.state.ttl' = '48h';
+    SET 'table.exec.mini-batch.size' = '5000';
+    SET 'table.exec.source.idle-timeout' = '30s';
+
+    CREATE TABLE src_canal_devices (payload STRING) WITH (
+        'connector' = 'kafka', 'topic' = 'traccar-cdc',
+        'properties.group.id' = 'bench_01_devices_ods_v1',
+        'scan.startup.mode' = 'latest-offset', 'format' = 'raw');
+
+    CREATE TABLE ch_ods_tc_devices (...) WITH (
+        'connector' = 'jdbc', 'url' = 'jdbc:clickhouse://doris05:38123/traccar',
+        'table-name' = 'ods_tc_devices', 'sink.parallelism' = '1', ...);
+
+    INSERT INTO ch_ods_tc_devices
+    SELECT CAST(JSON_VALUE(payload,'$.data[0].id') AS BIGINT), ...,
+           CAST(JSON_VALUE(payload,'$.ts') AS BIGINT) AS ver
+    FROM src_canal_devices
+    WHERE JSON_VALUE(payload,'$.table') = 'tc_devices';
+  customConfig: |
+    {"customConfig":[{"key":"execution.checkpointing.min-pause","value":"10s"}],"taskParams":[]}
+  ddl: |
+    CREATE TABLE traccar.ods_tc_devices (
+        id Int64, name String, unique_id String, status String, phone String, model String,
+        last_update DateTime64(3,'Asia/Shanghai'), attributes String,
+        ver UInt64, _ingest_time DateTime64(3,'Asia/Shanghai') DEFAULT now64(3)
+    ) ENGINE = ReplacingMergeTree(ver)
+    PARTITION BY toYYYYMM(last_update) ORDER BY id;
+  precheck: |
+    | 检查 | 命令 | 判据 |
+    |---|---|---|
+    | env 存在 | `GET /api/task/listFlinkSQLEnv` | 有 `LP-BaseEnv-team_a`（envId=122） |
+    | 目录存在 | `POST /api/catalogue/getCatalogueTreeData` | 含 `159 Traccar实时数仓` |
+    | CH 表存在 | `EXISTS TABLE traccar.ods_tc_devices` | 1 |
+    | 集群可提交 | `GET /api/cluster/listEnabledAll` | **tenant 2 的 id 是 4**（不是 1） |
+    | 作业真在跑 | `GET http://flink01:28081/jobs/overview` | 名字对得上、state=RUNNING |

@@ -60,6 +60,18 @@ export type SkillCreateParams = {
   visibility?: SkillVisibility;
 };
 
+/**
+ * 带正文新建资产入参（2026-11-04「消息操作」批次）。
+ *
+ * 与 `SkillCreateParams` 的唯一区别是多一个 `content`：后端在同一事务里建目录、
+ * 拼 frontmatter（`name` / `description` 由服务端生成）、写正文、落元数据，新资产版本停在 1。
+ * `content` 传空则退化为普通新建（模板正文）。
+ */
+export type SkillCreateWithContentParams = SkillCreateParams & {
+  /** 主文件正文，**不含 frontmatter**（服务端拼装） */
+  content?: string;
+};
+
 /** 修改可见性入参（2026-10-14 三档） */
 export type SkillVisibilityParams = {
   id: number;
@@ -118,3 +130,41 @@ export type SkillFileRenameParams = {
 
 /** 资产类型（阶段 4b：skill = 流程知识；doc = 业务背景知识） */
 export type SkillAssetType = 'skill' | 'doc';
+
+/**
+ * `@` 句柄校验（与后端 `SkillHandleValidationVO` 一一对应）。
+ *
+ * <p>`syntax` 决定渲染强度：`explicit`（反引号包裹）按状态告警；
+ * `bare`（历史裸写）**只汇总成一条 info**，不逐个画波浪线——否则存量 skill 一打开满屏黄线。
+ */
+export type SkillHandleStatus = 'ok' | 'not_found' | 'denied' | 'unknown_type';
+
+export type SkillHandleValidationHandle = {
+  /** 原文片段（explicit 含反引号） */
+  raw: string;
+  syntax: 'explicit' | 'bare';
+  type: string;
+  code: string;
+  /** 1-based，指向 `@` 字符 */
+  line: number;
+  /** 1-based，指向 `@` 字符（不含反引号） */
+  column: number;
+  status: SkillHandleStatus;
+  title?: string | null;
+  message?: string | null;
+};
+
+export type SkillHandleValidation = {
+  summary: {
+    total: number;
+    ok: number;
+    notFound: number;
+    denied: number;
+    unknownType: number;
+    /** 裸写（未用反引号包裹）的条数——只给 info 提示 */
+    bareOnly: number;
+  };
+  handles: SkillHandleValidationHandle[];
+  /** 入参 contentHash 的原样回显：与当前正文指纹不一致时说明结果已过期 */
+  contentHash?: string | null;
+};

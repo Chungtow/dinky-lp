@@ -19,6 +19,7 @@
 
 package org.dinky.controller;
 
+import org.dinky.ai.skill.SkillHandleValidator;
 import org.dinky.data.annotations.Log;
 import org.dinky.data.constant.PermissionConstants;
 import org.dinky.data.dto.SkillCreateDTO;
@@ -26,6 +27,7 @@ import org.dinky.data.dto.SkillFileRemoveDTO;
 import org.dinky.data.dto.SkillFileRenameDTO;
 import org.dinky.data.dto.SkillFileWriteDTO;
 import org.dinky.data.dto.SkillSaveDTO;
+import org.dinky.data.dto.SkillValidateDTO;
 import org.dinky.data.dto.SkillVisibilityDTO;
 import org.dinky.data.enums.BusinessType;
 import org.dinky.data.exception.BusException;
@@ -33,6 +35,7 @@ import org.dinky.data.model.Skill;
 import org.dinky.data.result.Result;
 import org.dinky.data.vo.SkillDetailVO;
 import org.dinky.data.vo.SkillFileNode;
+import org.dinky.data.vo.SkillHandleValidationVO;
 import org.dinky.service.SkillService;
 import org.dinky.service.impl.SkillServiceImpl;
 
@@ -85,6 +88,8 @@ public class SkillController {
 
     private final SkillService skillService;
 
+    private final SkillHandleValidator skillHandleValidator;
+
     @GetMapping("/list")
     @ApiOperation("List Visible Skills")
     @SaCheckPermission(
@@ -115,6 +120,8 @@ public class SkillController {
             value = {PermissionConstants.REGISTRATION_SKILL_ADD, PermissionConstants.REGISTRATION_RESOURCE_UPLOAD},
             mode = SaMode.OR)
     public Result<Skill> create(@RequestBody SkillCreateDTO skillCreateDTO) {
+        // K8（2026-11-04）：上面的 OR 只是准入门槛，public 还必须额外持有 share
+        assertShareForPublic(skillCreateDTO.getVisibility());
         return Result.succeed(skillService.create(
                 skillCreateDTO.getName(),
                 skillCreateDTO.getDescription(),
@@ -123,6 +130,33 @@ public class SkillController {
                 StpUtil.getLoginIdAsInt(),
                 // 2026-10-14 三档可见性：private（默认）/ tenant / public，为空按 private
                 skillCreateDTO.getVisibility()));
+    }
+
+    /**
+     * 新建资产并<b>直接写入正文</b>（2026-11-04「消息操作」批次）。
+     *
+     * <p><b>为什么不复用 {@code /create} + {@code /save}</b>：两步非原子——第二步失败会留下一个
+     * 模板空文档；而且 {@code save} 会把新资产版本推高到 2。本端点在<b>一个事务</b>内完成
+     * 建目录 + 写 frontmatter+正文 + 落元数据，版本停在 1。
+     *
+     * <p><b>frontmatter 由服务端拼</b>：调用方只传正文，{@code name} / {@code description} 头由
+     * {@code SkillDocParser} 的同一套规则生成——避免前端在 JS 里复制一份 Java 解析器。
+     */
+    @PostMapping("/createWithContent")
+    @ApiOperation("Create Skill or Doc with content")
+    @Log(title = "Create Skill With Content", businessType = BusinessType.INSERT)
+    @SaCheckPermission(
+            value = {PermissionConstants.REGISTRATION_SKILL_ADD, PermissionConstants.REGISTRATION_RESOURCE_UPLOAD},
+            mode = SaMode.OR)
+    public Result<Skill> createWithContent(@RequestBody SkillCreateDTO skillCreateDTO) {
+        assertShareForPublic(skillCreateDTO.getVisibility());
+        return Result.succeed(skillService.createWithContent(
+                skillCreateDTO.getName(),
+                skillCreateDTO.getDescription(),
+                skillCreateDTO.getAssetType(),
+                StpUtil.getLoginIdAsInt(),
+                skillCreateDTO.getVisibility(),
+                skillCreateDTO.getContent()));
     }
 
     @PostMapping("/save")
@@ -137,6 +171,34 @@ public class SkillController {
                 skillService.save(skillSaveDTO.getId(), skillSaveDTO.getContent(), skillSaveDTO.getBaseVersion()));
     }
 
+    /**
+     * 校验正文里的 {@code @} 句柄（保存后校验 / E4）。
+     *
+     * <p><b>为什么不复用 {@code /save}</b>：save 的返回是 {@code Result<Skill>}，塞 warnings 属改契约；
+     * 且 RegCenter 三处保存入口与 DataStudio 编辑器都要用同一份结果。
+     *
+     * <p><b>权限</b>：与写入口同口径（save / file / 资源上传任一），因为它读的是"用户能编辑的正文"，
+     * 不需要额外授权；端点<b>只读</b>，不落库。
+     *
+     * <p><b>永不阻断保存</b>：业务失败（不存在 / 无权限 / 未知类型）一律表达为
+     * {@code handles[].status}，端点本身仍返回成功。
+     */
+    @PostMapping("/validate")
+    @ApiOperation("Validate @ handles inside skill content")
+    @SaCheckPermission(
+            value = {
+                PermissionConstants.REGISTRATION_SKILL_SAVE,
+                PermissionConstants.REGISTRATION_SKILL_FILE,
+                PermissionConstants.REGISTRATION_RESOURCE_UPLOAD
+            },
+            mode = SaMode.OR)
+    public Result<SkillHandleValidationVO> validate(@RequestBody SkillValidateDTO skillValidateDTO) {
+        SkillHandleValidationVO vo = skillHandleValidator.validate(skillValidateDTO.getContent());
+        // 原样回显指纹：前端据此丢弃"用户已继续编辑"的过期结果（行列会错位）
+        vo.setContentHash(skillValidateDTO.getContentHash());
+        return Result.succeed(vo);
+    }
+
     @PostMapping("/visibility")
     @ApiOperation("Update Skill Visibility")
     @Log(title = "Update Skill Visibility", businessType = BusinessType.UPDATE)
@@ -145,11 +207,7 @@ public class SkillController {
             mode = SaMode.OR)
     public Result<Skill> updateVisibility(@RequestBody SkillVisibilityDTO skillVisibilityDTO) {
         String visibility = SkillServiceImpl.normalizeVisibility(skillVisibilityDTO.getVisibility());
-        // 「面向全体公开」是组织级动作：上面的 OR 只是准入门槛，public 必须额外持有 share 权限
-        if (SkillServiceImpl.VISIBILITY_PUBLIC.equals(visibility)
-                && !StpUtil.hasPermission(PermissionConstants.REGISTRATION_SKILL_SHARE)) {
-            throw new BusException("无权将资产设置为「全体公开」，请联系管理员分配 registration:skill:share 权限");
-        }
+        assertShareForPublic(visibility);
         return Result.succeed(
                 skillService.updateVisibility(skillVisibilityDTO.getId(), visibility, StpUtil.getLoginIdAsInt()));
     }
@@ -239,5 +297,20 @@ public class SkillController {
         skillService.removeFile(
                 skillFileRemoveDTO.getSkillId(), skillFileRemoveDTO.getRelativePath(), StpUtil.getLoginIdAsInt());
         return Result.succeed();
+    }
+
+    /**
+     * 「面向全体公开」是<b>组织级</b>动作：与写入口的准入权限（add / upload / save）无关，
+     * 必须额外持有 {@code registration:skill:share}。
+     *
+     * <p>K8（2026-11-04）：本校验此前只挂在 {@code /visibility} 上，创建入口可以把
+     * {@code visibility='public'} 直接透传下去绕过它。现在三处（create / createWithContent /
+     * visibility）统一走本方法，口径不会再分叉。
+     */
+    private void assertShareForPublic(String visibility) {
+        if (SkillServiceImpl.VISIBILITY_PUBLIC.equals(SkillServiceImpl.normalizeVisibility(visibility))
+                && !StpUtil.hasPermission(PermissionConstants.REGISTRATION_SKILL_SHARE)) {
+            throw new BusException("无权将资产设置为「全体公开」，请联系管理员分配 registration:skill:share 权限");
+        }
     }
 }

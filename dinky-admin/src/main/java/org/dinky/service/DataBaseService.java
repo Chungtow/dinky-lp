@@ -84,6 +84,17 @@ public interface DataBaseService extends ISuperService<DataBase> {
     List<DataBase> listEnabledAll();
 
     /**
+     * 按名称取<b>当前租户</b>内启用中的数据源。
+     *
+     * <p>用途：AI 默认 sink 配置存的是<b>全局</b>名称，解析时必须落到当前租户内那一条
+     * （各租户可用自己的凭证注册同名数据源）。
+     *
+     * @param name 数据源名称（空 → 返回 null）
+     * @return 命中的数据源；不存在或已停用返回 null
+     */
+    DataBase getEnabledByName(String name);
+
+    /**
      * delete database by id (physical deletion)
      *
      * @param id {@link Integer} database id

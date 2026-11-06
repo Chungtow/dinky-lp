@@ -19,7 +19,7 @@
 
 import { CenterTab, DataStudioState } from '@/pages/DataStudio/model';
 import { mapDispatchToProps } from '@/pages/DataStudio/DvaFunction';
-import { Flex, Space, Tabs, TabsProps, TreeDataNode } from 'antd';
+import { Flex, Space, TabsProps, TreeDataNode } from 'antd';
 import { Panel, PanelGroup } from 'react-resizable-panels';
 import DirectoryTree from 'antd/es/tree/DirectoryTree';
 import React, { Key, useEffect, useMemo, useState } from 'react';
@@ -27,23 +27,20 @@ import {
   ApartmentOutlined,
   ArrowsAltOutlined,
   AuditOutlined,
-  CodeOutlined,
   FireTwoTone,
   HistoryOutlined,
-  MonitorOutlined,
   PartitionOutlined,
   ShrinkOutlined,
   TableOutlined
 } from '@ant-design/icons';
 import RunToolBarButton from '@/pages/DataStudio/components/RunToolBarButton';
 import CusPanelResizeHandle from '@/pages/DataStudio/components/CusPanelResizeHandle';
-import Output from '@/pages/DataStudio/Toolbar/Service/Output';
 import ExecutionHistory from '@/pages/DataStudio/Toolbar/Service/ExecutionHistory';
 import { KeepAlive } from 'react-activation';
 import { DataStudioActionType } from '@/pages/DataStudio/data.d';
 import Explain from '@/pages/DataStudio/Toolbar/Service/Explain';
 import FlinkGraph from '@/pages/DataStudio/Toolbar/Service/FlinkGraph';
-import Result from '@/pages/DataStudio/Toolbar/Service/Result';
+import TaskServiceTabs from '@/pages/DataStudio/Toolbar/Service/TaskServiceTabs';
 import { getTabIcon } from '@/pages/DataStudio/function';
 import { DIALECT } from '@/services/constants';
 import { TableData } from '@/pages/DataStudio/Toolbar/Service/TableData';
@@ -244,22 +241,10 @@ const Service = (props: { showDesc: boolean; tabs: CenterTab[]; action: any }) =
           return newState;
         });
       }
-      const items: TabsProps['items'] = [
-        {
-          key: DataStudioActionType.TASK_RUN_SUBMIT,
-          label: l('button.output'),
-          icon: <CodeOutlined />,
-          children: <Output taskId={taskId} />
-        },
-        {
-          key: DataStudioActionType.TASK_PREVIEW_RESULT,
-          label: l('menu.datastudio.result'),
-          icon: <MonitorOutlined />,
-          children: <Result taskId={taskId} action={props.action} dialect={taskParams?.dialect} />
-        }
-      ];
+      // 历史 / 表数据 / 任务图（检查、DAG、血缘）等标签由外部构建，结果标签在 TaskServiceTabs 内部按需生成
+      const extraItems: TabsProps['items'] = [];
       if (assert(taskParams?.dialect, [DIALECT.FLINK_SQL, DIALECT.FLINKJAR], true, 'includes')) {
-        items.push({
+        extraItems.push({
           key: 'history',
           label: l('menu.datastudio.history'),
           icon: <HistoryOutlined />,
@@ -267,32 +252,32 @@ const Service = (props: { showDesc: boolean; tabs: CenterTab[]; action: any }) =
         });
       }
       if (assert(taskParams?.dialect, [DIALECT.FLINK_SQL], true, 'includes')) {
-        items.push({
+        extraItems.push({
           key: 'tableData',
           label: l('menu.datastudio.table-data'),
           icon: <TableOutlined />,
           children: <TableData statement={taskParams?.statement} />
         });
       }
+      extraItems.push(...(taskItems[taskId] ?? []));
 
-      const taskItem = taskItems[taskId] ?? [];
       return (
-        <Tabs
+        <TaskServiceTabs
+          taskId={taskId}
+          dialect={taskParams?.dialect}
+          action={props.action}
           activeKey={tabActiveKey[taskId]}
-          items={[...items, ...taskItem]}
-          size={'small'}
-          onChange={(activeKey) => {
+          onActiveKeyChange={(activeKey) => {
             setTabActiveKey((prevState) => ({
               ...prevState,
               [taskId]: activeKey
             }));
           }}
-          style={{ height: '100%' }}
-          tabBarStyle={{ marginBottom: '5px' }}
+          extraItems={extraItems}
         />
       );
     }
-  }, [tabs, selectedKey, props.action, tabActiveKey]);
+  }, [tabs, selectedKey, props.action, tabActiveKey, taskItems]);
   return (
     <PanelGroup direction={'horizontal'} className={'datastudio-theme'}>
       <Panel defaultSize={15} style={{ display: 'flex', flexDirection: 'column', padding: 10 }}>
