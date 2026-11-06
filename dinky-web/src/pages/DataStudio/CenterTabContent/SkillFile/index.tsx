@@ -25,7 +25,7 @@ import {
   setMentionMarkers
 } from '@/components/CustomEditor/mentionCompletion';
 import { attachMentionController } from '@/components/CustomEditor/mentionController';
-import { CenterTab, DataStudioState } from '@/pages/DataStudio/model';
+import { CenterTab } from '@/pages/DataStudio/model';
 import { mapDispatchToProps } from '@/pages/DataStudio/DvaFunction';
 import { DataStudioContext } from '@/pages/DataStudio/DataStudioContext';
 import { skillEditorKey } from '@/pages/DataStudio/editorKey';
@@ -55,6 +55,35 @@ const languageOf = (path?: string): string => {
 };
 
 /**
+ * skill 正文编辑器的 options 覆盖（计划 §11.2 `S5'`）。
+ *
+ * <p><b>`@` 依赖项一个都不能少</b>（§11.5 护栏）：`quickSuggestions` / `suggestOnTriggerCharacters` /
+ * `wordBasedSuggestions: 'off'` / `suggest.quickSuggestions` / `fixedOverflowWidgets` 是这条链路
+ * 在 UAT 2026-10-30 反复调出来的，改动它们会直接表现为「`@` 敲下去没反应」或「面板被容器裁掉」。
+ *
+ * <p>本步只裁零收益项：`inlineSuggest`（每个符号都求一次内联建议）、`formatOnType`（每次回车跑格式化）、
+ * `bracketPairColorization`（维护配色池）——三者对 markdown 正文没有可感知价值。
+ *
+ * <p>提为模块常量：`CodeEdit` 内部按 options 引用做 `useMemo`，每次渲染新建对象会让 memo 失效。
+ */
+const SKILL_EDITOR_OPTIONS = {
+  wordWrap: 'on' as const,
+  minimap: { enabled: false },
+  // CodeEdit 默认把 quickSuggestions 关掉（enableSuggestions=false），而这会连带关掉
+  // 「输入触发字符自动弹候选」——`@` 敲下去毫无反应就是这个原因（UAT 2026-10-30）
+  quickSuggestions: { other: true, comments: false, strings: false },
+  suggestOnTriggerCharacters: true,
+  wordBasedSuggestions: 'off' as const,
+  suggest: { quickSuggestions: { other: true, comments: false, strings: false } },
+  // 补全 widget 默认被编辑器容器裁剪；技能 tab 的父容器有 overflow，需固定定位才不被截断
+  fixedOverflowWidgets: true,
+  // S5' 裁剪：对 markdown 零收益，且不影响 `@` 候选
+  inlineSuggest: { enabled: false },
+  formatOnType: false,
+  bracketPairColorization: { enabled: false }
+};
+
+/**
  * skill 文件编辑 tab（批次 F）。
  *
  * <p><b>与语义文件 tab 的同构点</b>：正文都放在 {@code tabParams.statement}，因此 AI Chat
@@ -72,8 +101,24 @@ const SkillFile = (props: { tabData: CenterTab; updateCenterTab: (payload: any) 
   const { tabData, updateCenterTab } = props;
   const { skillId, skillName, relativePath, mainFile, statement, version, readOnly } =
     tabData.params ?? {};
-  const [code, setCode] = useState<string>(statement ?? '');
+  /**
+   * 交互性能（2026-11-06，第二批）：编辑器改**非受控**，内容以编辑器实例为唯一真相源。
+   *
+   * <p>改造前与 `SemanticFile` 同病：`code` 受控 + 每键 `setCode` + `updateCenterTab` 整篇写 model，
+   * 形成「按键 → setState → 重渲染 → props 落后 model → 整篇 `executeEdits`」环路，打断中文 IME
+   * 组合（用户反馈「拼音停留好一会儿才转中文」）。
+   *
+   * <p>改造后：内容只进 {@link latestCodeRef}（每键更新，仅用于「校验结果是否过期」判定）；
+   * 保存 / 校验 / AI Chat 取文一律 `editorRegistry.getContent(editorKey)` 现取；
+   * `dirty` 只在「干净 ↔ 脏」两个翻转点 setState。
+   *
+   * <p><b>`@` 句柄不受影响</b>：mention 控制器读的是编辑器 model（`editor.getValue()`），与受控与否无关；
+   * `editorRegistry.register` 与 `attachMentionController` 的挂载时机一行未改。
+   */
   const [dirty, setDirty] = useState<boolean>(false);
+  const dirtyRef = useRef<boolean>(false);
+  /** 程序化换内容（KeepAlive 复用 tab / 采纳回写）期间置位，避免被误判成用户编辑而翻转 dirty */
+  const suppressChangeRef = useRef<boolean>(false);
   const [saving, setSaving] = useState<boolean>(false);
   /** 编辑起点的 skill 版本（主文件保存成功后刷新） */
   const [baseVersion, setBaseVersion] = useState<number | undefined>(version);
@@ -126,11 +171,18 @@ const SkillFile = (props: { tabData: CenterTab; updateCenterTab: (payload: any) 
     if (incoming !== incomingRef.current) {
       incomingRef.current = incoming;
       latestCodeRef.current = incoming;
-      setCode(incoming);
+      // 非受控模式下 props 不会自动回写编辑器：KeepAlive 复用 tab 打开另一份内容时必须显式换内容
+      // （走 applyFullContent → executeEdits，保留 undo 栈，不用 setValue）
+      if (editorKey && editorRegistry?.getContent(editorKey) !== incoming) {
+        suppressChangeRef.current = true;
+        editorRegistry?.applyFullContent(editorKey, incoming);
+        suppressChangeRef.current = false;
+      }
+      dirtyRef.current = false;
       setDirty(false);
     }
     setBaseVersion(version);
-  }, [statement, version]);
+  }, [statement, version, editorKey, editorRegistry]);
 
   useEffect(() => {
     return () => {
@@ -202,15 +254,24 @@ const SkillFile = (props: { tabData: CenterTab; updateCenterTab: (payload: any) 
     }
   };
 
+  /** 现取编辑器内容——非受控模式下的唯一取值出口（编辑器未挂载时回落到 ref） */
+  const getContent = (): string =>
+    editorRegistry?.getContent(editorKey) ?? latestCodeRef.current ?? '';
+
   const onChange = (value?: string) => {
     const next = value ?? '';
-    setCode(next);
     latestCodeRef.current = next;
     // 自己敲的键也要记进 ref，否则同步 effect 会把这次改动当成"外部换内容"而清掉 dirty
     incomingRef.current = next;
-    setDirty(next !== (statement ?? ''));
-    // 与语义文件同款：正文实时写回 tab params，AI Chat 读到的就是"用户正在编辑的内容"
-    updateCenterTab({ ...tabData, isUpdate: true, params: { ...tabData.params, statement: next } });
+    if (!suppressChangeRef.current) {
+      // 未保存标记只在翻转点 setState + 写一次 model（关闭提示依赖 tab 的 isUpdate）
+      const nextDirty = next !== (statement ?? '');
+      if (nextDirty !== dirtyRef.current) {
+        dirtyRef.current = nextDirty;
+        setDirty(nextDirty);
+        updateCenterTab({ ...tabData, isUpdate: nextDirty });
+      }
+    }
     // 停手 800ms 后静默校验一次（与保存后那次共用指纹去重，不会打两次接口）
     if (isMarkdown && !readOnly) {
       if (validateTimerRef.current) {
@@ -218,7 +279,8 @@ const SkillFile = (props: { tabData: CenterTab; updateCenterTab: (payload: any) 
       }
       validateTimerRef.current = setTimeout(() => {
         validateTimerRef.current = null;
-        runValidate(next);
+        // 非受控：到点现取编辑器内容，不用按键那一刻的快照
+        runValidate(getContent());
       }, 800);
     }
   };
@@ -235,16 +297,19 @@ const SkillFile = (props: { tabData: CenterTab; updateCenterTab: (payload: any) 
     }
     setSaving(true);
     try {
+      // 非受控：保存正文现取（不读 state，避免拿到旧值）
+      const content = getContent();
       // handleOption 内部已提示成功/失败（冲突时后端返回的是"该 skill 已被更新…请刷新后重试"）
       const res = await writeSkillFile({
         skillId,
         relativePath,
-        content: code,
+        content,
         baseVersion: mainFile ? baseVersion : undefined
       });
       if (!res) {
         return;
       }
+      dirtyRef.current = false;
       setDirty(false);
       // 版本号以后端为准：主文件保存后 version+1，继续用旧值编辑会让下一次保存被误判为冲突
       const detail = await detailSkill(skillId);
@@ -253,13 +318,13 @@ const SkillFile = (props: { tabData: CenterTab; updateCenterTab: (payload: any) 
       updateCenterTab({
         ...tabData,
         isUpdate: false,
-        params: { ...tabData.params, statement: code, version: nextVersion }
+        params: { ...tabData.params, statement: content, version: nextVersion }
       });
       await SuccessMessage(l('datastudio.skill.saved'));
       // 保存已成功 → 再跑一次校验打 marker（警告不阻断，失败也不打扰用户）
       if (isMarkdown) {
         validatedHashRef.current = '';
-        await runValidate(code);
+        await runValidate(content);
       }
     } catch (e: any) {
       await WarningMessage(e?.message ?? l('datastudio.skill.saveFailed'));
@@ -298,7 +363,7 @@ const SkillFile = (props: { tabData: CenterTab; updateCenterTab: (payload: any) 
       </Space>
       <div style={{ flex: 1, minHeight: 0 }}>
         <CodeEdit
-          code={code}
+          defaultValue={statement ?? ''}
           language={languageOf(relativePath || 'SKILL.md')}
           readOnly={Boolean(readOnly)}
           onChange={onChange}
@@ -306,29 +371,17 @@ const SkillFile = (props: { tabData: CenterTab; updateCenterTab: (payload: any) 
           // 关掉编辑器自带的"按文档分词"补全：它会和 `@` 句柄候选混在一起，
           // 且在 skill 场景下会一直卡在 Loading（详见 CodeEdit 的 wordSuggestionsEnabled 注释）
           wordSuggestionsEnabled={false}
-          options={{
-            wordWrap: 'on',
-            minimap: { enabled: false },
-            // CodeEdit 默认把 quickSuggestions 关掉（enableSuggestions=false），而这会连带
-            // 关掉「输入触发字符自动弹候选」——`@` 敲下去毫无反应就是这个原因（UAT 2026-10-30）。
-            // 这里只给 skill 正文打开自动候选，且关掉词补全，避免文档里的词混进 @ 候选列表。
-            quickSuggestions: { other: true, comments: false, strings: false },
-            suggestOnTriggerCharacters: true,
-            wordBasedSuggestions: 'off',
-            suggest: { quickSuggestions: { other: true, comments: false, strings: false } },
-            // 补全 widget 默认被编辑器容器裁剪；技能 tab 的父容器有 overflow，需固定定位才不被截断
-            fixedOverflowWidgets: true
-          }}
+          options={SKILL_EDITOR_OPTIONS}
         />
       </div>
     </div>
   );
 };
 
-// 与 SemanticFile 同款：父组件传 tabData，OwnProps 推断不成立，这里显式放宽类型
+// 与 SemanticFile 同款：父组件传 tabData，OwnProps 推断不成立，这里显式放宽类型。
+// 2026-11-06（R2）：不再订阅 `centerContent`——本组件从未使用该字段，订阅它会让每次 tab 变动都
+// 重渲染一次编辑器（改造前是「每键一次」），是无谓开销。
 export default connect(
-  ({ DataStudio }: { DataStudio: DataStudioState }) => ({
-    centerContent: DataStudio.centerContent
-  }),
+  null,
   mapDispatchToProps
 )(SkillFile as any) as React.ComponentType<any>;

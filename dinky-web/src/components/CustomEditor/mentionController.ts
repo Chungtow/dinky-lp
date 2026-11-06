@@ -296,12 +296,17 @@ export function attachMentionController(
       hide();
       return;
     }
-    if (insideFencedCode(model, position)) {
+    // 2026-11-06（R5 ①）：**先判当前行有没有 `@`，再判围栏**。
+    // 原顺序每次按键都要扫围栏（改造前是全文 `getValue()` + 正则），而绝大多数按键根本没有 `@`；
+    // 交换后无 `@` 的按键只读光标所在行即返回。
+    // 语义完全等价：原来「无 token 且不在围栏内」→ hide，「无 token 且在围栏内」→ hide，
+    // 两种顺序都落到 hide()；只有「有 token 且在围栏内」的差异路径，新顺序同样在下面判围栏并 hide。
+    const token = currentToken(model, position);
+    if (!token) {
       hide();
       return;
     }
-    const token = currentToken(model, position);
-    if (!token) {
+    if (insideFencedCode(model, position)) {
       hide();
       return;
     }

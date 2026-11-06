@@ -275,14 +275,47 @@ function bareTypeScope(query: string): MentionScope | null {
   return { scope: name as MentionScopeName, keyword: '', trailing: false, parts: [] };
 }
 
+/** 统计一行里 ``` 的出现次数（用 indexOf 循环，避免每行起一次正则） */
+function countFenceMarks(text: string): number {
+  let count = 0;
+  let from = text.indexOf('```');
+  while (from >= 0) {
+    count += 1;
+    from = text.indexOf('```', from + 3);
+  }
+  return count;
+}
+
 /**
  * 光标是否在**未闭合**的围栏代码块里（里面的 `@` 是示例，不该弹候选）。
+ *
+ * <p>2026-11-06（R5 ②）：改为**行级扫描**。改造前是 `model.getValue().slice(0, offset)`
+ * ——每敲一个键就把整篇正文复制成一个字符串，再跑一次全文正则；长文档下这是输入延迟的一部分。
+ *
+ * <p>现在只取「第 1 行 ~ 光标所在行」，逐行数 ``` 的个数，并只把光标那行截到光标列为止。
+ * 判据不变：**光标之前**的 ``` 个数为奇数即视为在未闭合围栏内。
+ *
+ * <p>为什么不「遇配对即停」：要判断的是前缀奇数性，任意一行上方的围栏数都会翻转结果，
+ * 因此在扫到第 1 行之前无法安全提前退出；可行且无风险的优化只到「不复制光标之后的正文」这一层。
  */
 export function insideFencedCode(model: Monaco.editor.ITextModel, position: Monaco.Position): boolean {
-  const offset = model.getOffsetAt(position);
-  const before = model.getValue().slice(0, offset);
-  const fences = before.match(/```/g);
-  return (fences?.length ?? 0) % 2 === 1;
+  const lineNumber = position.lineNumber;
+  if (lineNumber < 1) {
+    return false;
+  }
+  let fences = 0;
+  // 逐行取，只扫到光标所在行为止：不再把光标之后的正文也复制一遍
+  for (let line = 1; line < lineNumber; line += 1) {
+    const text = model.getLineContent(line);
+    // 绝大多数行不含 ```，先做一次廉价 indexOf 判断，命中才算数
+    if (text.indexOf('```') >= 0) {
+      fences += countFenceMarks(text);
+    }
+  }
+  const currentLine = model.getLineContent(lineNumber) ?? '';
+  const caret = Math.max(0, Math.min(position.column - 1, currentLine.length));
+  fences += countFenceMarks(currentLine.slice(0, caret));
+  return fences % 2 === 1;
 }
 
 /** 正文指纹（保存后校验用它丢弃过期结果，计划风险 8） */
