@@ -4,7 +4,14 @@
   "documentTitle": "Dinky",
   "name": "Dinky 实时计算平台",
   "nameEn": "Dinky Real-time Platform",
+  "shortName": "Dinky",
+  "shortNameEn": "Dinky",
   "copyright": "Produced by Dinky Community",
+  "copyrightEn": "Produced by Dinky Community",
+  "attribution": {
+    "zh": "",
+    "en": ""
+  },
   "logo": "brand-logo.svg",
   "theme": {
     "colorPrimary": "#1890ff"
@@ -19,5 +26,8 @@
   "assets": {
     "required": ["brand-logo.svg", "favicon.ico"],
     "recommended": ["imgs/login_background.jpg", "icons/footer-bg.svg"]
+  },
+  "features": {
+    "showVersion": false
   }
 }

@@ -18,7 +18,7 @@
  */
 
 import { chooseTenantSubmit, outLogin } from '@/services/BusinessCrud';
-import { ENABLE_MODEL_TIP, TOKEN_KEY } from '@/services/constants';
+import { ENABLE_MODEL_TIP, SERVER_VERSION, TOKEN_KEY } from '@/services/constants';
 import {
   getValueFromLocalStorage,
   removeKeyFromLocalStorage,
@@ -31,6 +31,7 @@ import {
   BugOutlined,
   ClearOutlined,
   CloseCircleOutlined,
+  InfoCircleOutlined,
   LogoutOutlined,
   TeamOutlined,
   UserOutlined,
@@ -257,6 +258,18 @@ const AvatarDropdown = () => {
         ? l('menu.account.closeGlobalMessage')
         : l('menu.account.openGlobalMessage'),
       onClick: () => handleClickEnableModelTip()
+    },
+    {
+      type: 'divider' as const
+    },
+    {
+      // 版本号只读展示：头部默认不再显示（brand features.showVersion），报障时从这里取
+      key: 'version',
+      icon: <InfoCircleOutlined />,
+      label: l('menu.version', '', {
+        version: getValueFromLocalStorage(SERVER_VERSION) || '-'
+      }),
+      disabled: true
     },
     {
       type: 'divider' as const

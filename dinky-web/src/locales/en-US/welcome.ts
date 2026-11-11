@@ -17,13 +17,15 @@
  *
  */
 
+import { BRAND } from '../../branding';
+
 export default {
-  'welcome.welcome': 'welcome to Dinky！',
+  'welcome.welcome': `welcome to ${BRAND.nameEn}！`,
   'welcome.welcome.content':
     'A next-generation real-time computing platform that is deeply customized for Apache Flink, providing agile Flink SQL and Flink Jar job development',
-  'welcome.welcome.content.tip1': "This looks like it's your first time logging into Dinky",
+  'welcome.welcome.content.tip1': `This looks like it's your first time logging into ${BRAND.nameEn}`,
   'welcome.welcome.content.tip2':
-    "Don't worry, we only need a few simple guides to enjoy the Dinky tour!",
+    `Don't worry, we only need a few simple guides to enjoy the ${BRAND.nameEn} tour!`,
   'welcome.welcome.setPwd.tip': 'Set the admin password',
   'welcome.welcome.setPwd': 'Set the password',
   'welcome.welcome.skip': 'Skip this step',
@@ -32,11 +34,11 @@ export default {
   'welcome.prev': 'Previous',
   'welcome.submit': 'Submit',
   'welcome.finish.title': 'Init Finished！',
-  'welcome.finish': 'Start your Dinky journey today！',
+  'welcome.finish': `Start your ${BRAND.nameEn} journey today！`,
 
   'welcome.goLogin': 'Go Login！',
   'welcome.base.config.title': 'Base Config',
-  'welcome.base.config.dinky.url.title': 'Dinky address：',
+  'welcome.base.config.dinky.url.title': `${BRAND.shortNameEn || BRAND.nameEn} address：`,
   'welcome.base.config.dinky.url':
     'Make sure that the external service address of dinky can be accessed in the k8s or yarn cluster, otherwise the status of the application task may not be monitored',
   'welcome.tips':

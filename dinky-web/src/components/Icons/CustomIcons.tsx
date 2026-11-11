@@ -18,6 +18,8 @@
  */
 
 import Icon, { DeleteTwoTone } from '@ant-design/icons';
+import { BRAND } from '@/branding';
+import { brandShortName } from '@/utils/intl';
 
 const IconStyle = {
   height: '16px',
@@ -261,64 +263,16 @@ const defaultSvgSize = '100%';
 export const DinkyIcon = (props: any) => {
   const size = props.size || defaultSvgSize;
 
+  // 品牌图标：直接引用品牌包内的 logo 文件（public/brand/<id>/brand-logo.svg），
+  // 不再内联 base64，换品牌只需替换素材文件
   return (
-    <>
-      <Icon
-        {...props}
-        component={() => (
-          <svg
-            version='1.1'
-            className='icon'
-            xmlns='http://www.w3.org/2000/svg'
-            width={size}
-            height={size}
-            viewBox='0 0 32 32'
-            enableBackground='new 0 0 32 32'
-          >
-            <image
-              href='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAABGdBTUEAALGPC/xhBQAAACBjSFJN
-                            AAB6JgAAgIQAAPoAAACA6AAAdTAAAOpgAAA6mAAAF3CculE8AAAABmJLR0QA/wD/AP+gvaeTAAAH
-                            QklEQVRYw82XeWwcZxnGn5md3dljdnZndtf22l7Hrr12rjoJjlGiJKROoTStVBWlIIiANogz4ihS
-                            FfgjQgipKKgSEkKiBURRJCpUtVIDolRKCbEanATXOZyNr/jatb229z5md2bn/Pgjpkrq0DghRrz/
-                            faMZPb95v+f53hng/7EoivqfadluW9A0TQjBga4eyJqKIOdDSamsKwB968K0LL7OK3ytKEsHU1Le
-                            IXr4mzetY0duAyCn4kXNNKqCX3j56Z19r0hKNXr0U58DTdPwc/z6Azg+G0VRlvolS4s1RSJHerq6
-                            Tw1OXT9kmCbNMg60hBofOMBtHrAsC50t7dJ0Mj7Ccd5ND3du7vW5vI8LHq8ZS9y41BFpNZ7a9xgu
-                            jV9bHwAAyJUK0A09X5BKoa3Rjb0b6pt9bpp9pL2pNTSxNDMkBiLV0anrcLIuGKYBAGAYB4hlgaJo
-                            AOQjUkTdHQAAKIqylJpS4T3cwW2dW4JuO2tr8AV6O1o6e4YTk5Pzi/H5106+jj29j2Ji+jqefeYE
-                            roycpgBiJ4RYk8MMZCWPro4ebGzfi2ef+Rn6L/yB8bj9jK7XrFsBbQDgcrlgmia6OrrQGemA6PYj
-                            VUhnbTZb1cf7eyL1zbzg8cPrDra5vY1P/PY3r3om47EJjmuvxOevIeBvOvBk39Hjj+z+4ldPvTGw
-                            N5WZsVS9AoB0V2Vp/+jUwMG6wIbHdEPbXJULCYqiKwC5CRAMBOF0OFGVq1S4obHBYbNvgIVwwCe6
-                            JhdmeDEQ2tkSeSjs4wV4uQBoZ9Ab9Df01QXaet6PXTjX2/3pjx3Ye+Q1YcvOfTXRHXV7hN46f/1n
-                            aKLsUmqSV9eNBd3Qrqia8o9qtTCo1KQCRcH6dwcY0zCRK+f8Xzh0+IWNbV2HtIIcqKaLtKWbyu6m
-                            benh6TE+FpogfE+IcnqdCPJ+cEYjuPCmvuWy4xfRSDQgRzc0DPIFuC4PwTe7iJKU+WciPvTt4dGL
-                            Ywf2fJnk8klI1RwUVQIAEPIhDxiGsYXzcD/YFu3eUuer87hop9tuMbzLcoS9xC3OZxYp1i8SB8tT
-                            lrMeFXsjiC0AaLZOLtwYudJCQbJbCFVNJM6dq1y6+u7zLpa/kC0sYDE1gWRqEiUpA91QV5twxcmp
-                            fC4fV6pKBw1bvcPhsMmqCtW04HZ4AB1IljJUqLEVQqARMHmwpIJaZRmUEMasaMGkCeQrMcQvvPuX
-                            5fzYz3OFRQMgMFeScrcYkr7evskzg2cGSpVS3AKpk1U1ZOgWrWgqYALpUgpiSwRNkQiglTA1PQ7O
-                            24GgrxkLThkVoiLff7acHRk45vM33zAsHYap4m71QQynF6bhdDizy7nl90dnxy4upBakXCkjFop5
-                            UdI1WrOzkIkCD+dFOmPA598BUWgBYwE0RWOutoTswN9+n5ob+pVcy1uGUbv3g8i0TAAgDsaxXFEr
-                            7+UquTN5pZBUaPg84WhQh4cJ+rrRHOmD2yWArJiZN+xIJ2KxS5ff+K7YEM1p+RwsS18TwO3DaMWe
-                            mqEBgAZg9NDjXz9hEPmF9ubW3FOffA7dWw+Aok1kS4uoaQpAM8hn5kqV8/0/+tbTv5xJXx+Abshr
-                            EgfudDauVGO4GX5fEKPjV73Hj/36lU1d+w6D8mImuYBLE0OYyy8iJDYj7BSQXxp/8c9v/+Q4AFAU
-                            DUKsNQMwd7ro9wmQ5SoWlxZszx89fkzwi5+PxYYxVUjiRjaPmqGDGFWAbYJaxyC7VNoe7tjbxvKB
-                            2dTUeSjlzP0D0BSNYqkAQgi+ceTol0Ds3796PUHnMilk/Aw8YhugpCF07kbhxhXwu/bA29D0pKWp
-                            0yOnX/4e6/atWXyVBwDAIhZ+/MOf4rnDX3mUYYQXZ5YNT7pURCo1A9bLg6FtRCsv66Gt3XD5A4id
-                            PJHTNeU8K4SCFEWxNrvzngBWTcON0U24fG1ws9fb/LuKFWw3KQcsvQZKL2plVU4qSm05M33hJaHj
-                            4c2WpkzNvffW+I3TJ79pZ7m3lWyyTIhFTH1tEbzjFoxPjrGh4EPHqghudRg0/GIQTtGJ2dJ0cv7q
-                            37+j02xNSo2dmT375oBlqMXi8kQWQFGV8gZAgaxZ+g4ADOOEYdRC4bbtYV3X5zkvFwkEWVTyBRQL
-                            6cF8ZuadUMcnLCk1BpfYcJFm7B88uzRy9h6l77AFFEWDpinWULWEwG/cF24L1gtuB2ZmJszM3PhL
-                            na07hpOJIWi6inTsHFLD/fcl+h87QFEUuqKHMrqm1HMBVz3PKPNVwkekdHKqWFzqL0hpVOTyfy16
-                            a92WAsPQMDL2Oquauf1aZfatSOsmdn56DKRW/lOqnJnPFFMPVHwVwMoHJZeID7y5++N7luZTizbR
-                            qU/SDvLHXTv2g6Zt96fyEbUqBYSQPIDTqWzqiXKl+E6935McGDp7zePlYN0cVg+0Vr0STdNwOt2u
-                            RHycVuViTZJKf92yeftiLptGtbq+/4kfBnMD2AOAXU+hfwGQaGun1sRttgAAACV0RVh0ZGF0ZTpj
-                            cmVhdGUAMjAyMy0wNi0zMFQwOTowMjoxNCswMDowMEAnZX0AAAAldEVYdGRhdGU6bW9kaWZ5ADIw
-                            MjMtMDYtMzBUMDk6MDI6MTQrMDA6MDAxet3BAAAAKHRFWHRkYXRlOnRpbWVzdGFtcAAyMDIzLTA2
-                            LTMwVDA5OjAyOjE0KzAwOjAwZm/8HgAAAABJRU5ErkJggg=='
-            />
-          </svg>
-        )}
-      />
-    </>
+    <img
+      src={BRAND.logo || './brand-logo.svg'}
+      width={size}
+      height={size}
+      alt={brandShortName() || 'logo'}
+      style={{ display: 'inline-block', verticalAlign: 'middle' }}
+    />
   );
 };
 

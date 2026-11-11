@@ -25,13 +25,21 @@ import request from './en-US/request';
 import response from './en-US/response';
 import shortcutKey from './en-US/shortcutKey';
 import welcome from '@/locales/en-US/welcome';
+import { BRAND } from '@/branding';
 
 export default {
   'navBar.lang': 'Languages',
   'layout.user.link.help': 'Help',
   'layout.user.link.privacy': 'Privacy',
   'layout.user.link.terms': 'Terms',
-  'app.copyright.produced': 'Produced by Dinky Community',
+  // 英文界面版权：优先 copyrightEn，缺省回退 copyright（品牌包未配英文版权时不至于空白）
+  'app.copyright.produced': BRAND.copyrightEn || BRAND.copyright || 'Produced by Dinky Community',
+  // 数据开发底部状态条的欢迎语（英文界面用英文短名）
+  'app.footer.welcome': `Welcome to ${BRAND.shortNameEn || BRAND.nameEn || BRAND.name} !`,
+  // 归属声明默认文案：这里只提供"品牌未配置"时的兜底，
+  // 品牌包显式配置（含空串=不展示）由 utils/intl.tsx 的 brandAttribution() 在渲染层决策。
+  // 注意：不能在本文件用空串表达"不展示"——formatMessage 对空消息会回退成 key 本身并透出到界面。
+  'app.copyright.attribution': 'Built on Dinky',
   ...globalHeader,
   ...menu,
   ...pwa,

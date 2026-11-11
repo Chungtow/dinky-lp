@@ -17,6 +17,8 @@
  *
  */
 
+import { BRAND } from '../../branding';
+
 export default {
   /**
    *
@@ -366,7 +368,7 @@ export default {
    *
    * */
 
-  'layouts.userLayout.title': 'Dinky Real-time Platform ',
+  'layouts.userLayout.title': BRAND.nameEn,
   /**
    *
    * login
@@ -1566,7 +1568,7 @@ export default {
   'sys.process.type': 'Type',
   'sys.process.viewErrorLog': 'View Error Level Log',
   'sys.process.viewInfoLog': 'View Info Level Log',
-  'sys.setting.dinky': 'Dinky Env Configuration',
+  'sys.setting.dinky': `${BRAND.shortNameEn || BRAND.nameEn} Env Configuration`,
   'sys.setting.dinky.tooltip':
     'Mainly modify system variables to ensure stable operation of basic functions',
   'sys.setting.ds': 'DolphinScheduler Configuration',

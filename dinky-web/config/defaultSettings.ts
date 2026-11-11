@@ -18,6 +18,14 @@
 import { ProLayoutProps } from '@ant-design/pro-components';
 
 /**
+ * 品牌 logo 路径：品牌元数据（`brand/<id>.json` 的 `logo` 字段）优先，
+ * 缺省回退公共层的 `brand-logo.svg`。`__BRAND__` 由 `config/config.ts` 的 define 在构建期注入；
+ * 该文件也会被 config 层（Node）加载，那时 `__BRAND__` 不存在，走回退分支。
+ */
+const brandLogo: string =
+  (typeof __BRAND__ !== 'undefined' && (__BRAND__ as { logo?: string })?.logo) || './brand-logo.svg';
+
+/**
  * @name
  */
 const Settings: ProLayoutProps & {
@@ -37,7 +45,9 @@ const Settings: ProLayoutProps & {
   // 这里不能删除,需要先设置,否则会导致页面白屏, 然后在 layout 进行重新赋值
   title: 'Dinky Real-time Platform ',
   pwa: true,
-  logo: './brand-logo.svg',
+  // 品牌 logo 由品牌元数据的 `logo` 字段决定（构建期以 __BRAND__ 注入），
+  // 允许 .svg / .png；config 层（Node）无 __BRAND__ 时回退默认文件名。
+  logo: brandLogo,
   iconfontUrl: '',
   splitMenus: true,
   menu: {

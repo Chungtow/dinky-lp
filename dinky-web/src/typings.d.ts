@@ -40,3 +40,12 @@ declare const REACT_APP_ENV: 'test' | 'dev' | 'pre' | false;
 
 /** 构建期注入的品牌元数据（来自 dinky-web/brand/<id>.json，见 config/config.ts 的 define） */
 declare const __BRAND__: any;
+
+/**
+ * 登录页 Lottie 动画（由 config/config.ts 的 alias 解析为品牌包或公共层的 login_animation.json）。
+ * 类型放宽为 any：Lottie 数据结构庞大，且运行时由 react-lottie 直接消费。
+ */
+declare module '@brand-login-animation' {
+  const animationData: any;
+  export default animationData;
+}

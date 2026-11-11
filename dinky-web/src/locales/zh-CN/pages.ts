@@ -17,6 +17,8 @@
  *
  */
 
+import { BRAND } from '../../branding';
+
 export default {
   /**
    *
@@ -317,7 +319,7 @@ export default {
    *
    * */
 
-  'layouts.userLayout.title': 'Dinky 实时计算平台',
+  'layouts.userLayout.title': BRAND.name,
   /**
    *
    * login
@@ -1471,7 +1473,7 @@ export default {
   'sys.process.type': '类型',
   'sys.process.viewErrorLog': '查看 Error 级别日志',
   'sys.process.viewInfoLog': '查看 Info 级别日志',
-  'sys.setting.dinky': 'Dinky 环境配置',
+  'sys.setting.dinky': `${BRAND.shortName || BRAND.name} 环境配置`,
   'sys.setting.dinky.tooltip': '主要以修改系统变量为主，保证基础功能稳定运行',
   'sys.setting.ds': 'DolphinScheduler 配置',
   'sys.setting.ds.tooltip': '海豚调度插件设置，可以让您把dinky任务丝滑推到海豚调度器工作流上',

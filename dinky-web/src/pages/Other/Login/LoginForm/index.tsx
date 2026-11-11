@@ -18,7 +18,7 @@
  */
 
 import { API_CONSTANTS } from '@/services/endpoints';
-import { l } from '@/utils/intl';
+import { brandAttribution, brandShortName, l } from '@/utils/intl';
 import { GithubOutlined, LockOutlined, UserOutlined } from '@ant-design/icons';
 import { DefaultFooter, ProForm, ProFormCheckbox, ProFormText } from '@ant-design/pro-components';
 import { SubmitterProps } from '@ant-design/pro-form/es/components';
@@ -26,10 +26,12 @@ import { Col, Flex, Row } from 'antd';
 import React, { useState } from 'react';
 import style from '../../../../global.less';
 import Lottie from 'react-lottie';
-import DataPlatform from '../../../../../public/login_animation.json';
+// 登录页动画：构建期由 config/config.ts 的 alias 解析为"品牌包优先、否则公共层"
+import DataPlatform from '@brand-login-animation';
 import { useRequest } from '@@/exports';
 import { history } from '@umijs/max';
 import { GLOBAL_SETTING_KEYS } from '@/types/SettingCenter/data.d';
+import { BRAND, brandLink } from '@/branding';
 
 type LoginFormProps = {
   onSubmit: (values: any) => Promise<void>;
@@ -39,6 +41,9 @@ const LoginForm: React.FC<LoginFormProps> = (props) => {
   const { onSubmit } = props;
 
   const [form] = ProForm.useForm();
+
+  // 归属声明：品牌包显式配置优先（空串=不展示），未配置则回退 i18n 默认文案
+  const attribution = brandAttribution() ?? l('app.copyright.attribution');
 
   const [submitting, setSubmitting] = useState(false);
   const [ldapEnabled, setLdapEnabled] = useState(false);
@@ -160,7 +165,8 @@ const LoginForm: React.FC<LoginFormProps> = (props) => {
                   style={{ color: '#00b0ff', marginBottom: 60, justifyContent: 'center' }}
                   align={'middle'}
                 >
-                  <img src={'./brand-logo.svg'} width={150} alt={''} />
+                  {/* logo 走品牌元数据（支持 .svg/.png），避免与页头不一致 */}
+                  <img src={BRAND.logo || './brand-logo.svg'} width={150} alt={''} />
                   <h1 style={{ margin: '0' }}>{l('layouts.userLayout.title')}</h1>
                 </Row>
               </Col>
@@ -178,22 +184,28 @@ const LoginForm: React.FC<LoginFormProps> = (props) => {
               </Col>
             </Row>
             <DefaultFooter
-              copyright={`${new Date().getFullYear()} ` + l('app.copyright.produced')}
+              copyright={
+                `${new Date().getFullYear()} ` +
+                l('app.copyright.produced') +
+                (attribution ? ` · ${attribution}` : '')
+              }
               style={{ backgroundColor: '#fff' }}
-              links={[
-                {
-                  key: 'Dinky',
-                  title: 'Dinky',
-                  href: 'https://github.com/DataLinkDC/dinky',
-                  blankTarget: true
-                },
-                {
-                  key: 'github',
-                  title: <GithubOutlined />,
-                  href: 'https://github.com/DataLinkDC/dinky',
-                  blankTarget: true
-                }
-              ]}
+              links={
+                [
+                  brandLink('website') && {
+                    key: 'website',
+                    title: brandShortName(),
+                    href: brandLink('website'),
+                    blankTarget: true
+                  },
+                  brandLink('github') && {
+                    key: 'github',
+                    title: <GithubOutlined />,
+                    href: brandLink('github'),
+                    blankTarget: true
+                  }
+                ].filter(Boolean) as any
+              }
             />
           </Col>
           <Col
