@@ -357,13 +357,17 @@ export default [
       }
     ]
   },
-  // {
-  //   path: '/about',
-  //   name: 'about',
-  //   icon: 'SmileOutlined',
-  //   footerRender: false,
-  //   component: './Other/About'
-  // },
+  {
+    // 产品信息页（白标）：不占顶层菜单——入口在登录页页脚与头像下拉，故 hideInMenu。
+    // layout:false = 免登录可达（不套 ProLayout，否则未登录时头部拿不到 currentUser），
+    // 页面自带顶栏与返回；同时在 app.tsx 的免登录白名单里。
+    path: '/about',
+    name: 'about',
+    layout: false,
+    hideInMenu: true,
+    footerRender: false,
+    component: './Other/About'
+  },
   {
     path: '/account/center',
     footerRender: false,

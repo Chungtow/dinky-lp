@@ -25,7 +25,7 @@ import routes from './routes';
 const { REACT_APP_ENV = 'dev' } = process.env;
 const MonacoWebpackPlugin = require('monaco-editor-webpack-plugin');
 const fs = require('fs');
-const StripBrandDirPlugin = require('./plugins/strip-brand-dir');
+const BrandAssetGuardPlugin = require('./plugins/brand-asset-guard');
 
 /**
  * @name 品牌（白标）解析
@@ -44,6 +44,23 @@ if (!fs.existsSync(BRAND_META_FILE)) {
 }
 const brandMeta = JSON.parse(fs.readFileSync(BRAND_META_FILE, 'utf-8'));
 
+/**
+ * @name 品牌主题色
+ * @description 色板只认品牌包 `theme` 里声明的值，缺省一律回退 defaultSettings：
+ *              ```
+ *              "theme": {
+ *                "colorPrimary":    "#186C6C",  // 主色：按钮/链接/选中文字/焦点环
+ *                "colorAccent":     "#249B87",  // 强调：指示条/Tab 下划线/图表（禁止做按钮底）
+ *                "colorBgTint":     "#E4F0E4",  // 浅底：菜单选中底/表头
+ *                "colorInk":        "#0F3F3D",  // 深字：大标题
+ *                "colorHeaderBg":   "#0E3B39"   // 顶部导航底色
+ *              }
+ *              ```
+ * @@doc docs/plan/20261106-Dinky-LP Web端商业化白标多品牌切换实施计划.md
+ */
+const BRAND_THEME_CFG = brandMeta?.theme || {};
+const BRAND_PRIMARY: string = BRAND_THEME_CFG.colorPrimary || defaultSettings.colorPrimary;
+
 const REQUIRED_ASSETS: string[] = brandMeta?.assets?.required || ['brand-logo.svg', 'favicon.ico'];
 const missingAssets = REQUIRED_ASSETS.filter(
   (name: string) => !fs.existsSync(join(BRAND_ASSET_DIR, name))
@@ -59,10 +76,52 @@ const missingRecommended = RECOMMENDED_ASSETS.filter(
 );
 if (missingRecommended.length > 0) {
   console.warn(
-    `[brand:${BRAND_ID}] 未提供推荐素材，将使用 public/ 的中性版本：${missingRecommended.join(', ')}`
+    `[brand:${BRAND_ID}] 推荐素材不在品牌包内，将由 public/ 公共视觉层提供：${missingRecommended.join(
+      ', '
+    )}`
   );
 }
 console.log(`[brand] 构建品牌 = ${BRAND_ID}（${brandMeta.documentTitle || brandMeta.name || ''}）`);
+
+/**
+ * @name 登录页 Lottie 动画的品牌化（品牌自备优先，否则回退公共层）
+ * @description 动画是构建期静态 import（内联进登录页 chunk），文件被放到 dist 里也不会被请求，
+ *              因此"同名覆盖"必须在构建期解析：品牌包内存在 `login_animation.json` 就指向它，
+ *              否则指向公共层 `public/login_animation.json`。代码侧统一 import '@brand-login-animation'。
+ * @@doc docs/user-guide/ops/Dinky-LP 品牌定制与部署操作手册.md（§3.6）
+ */
+const BRAND_ANIMATION = join(BRAND_ASSET_DIR, 'login_animation.json');
+const PUBLIC_ANIMATION = join(__dirname, '..', 'public', 'login_animation.json');
+const LOGIN_ANIMATION = fs.existsSync(BRAND_ANIMATION) ? BRAND_ANIMATION : PUBLIC_ANIMATION;
+if (!fs.existsSync(LOGIN_ANIMATION)) {
+  throw new Error(
+    `[brand:${BRAND_ID}] 找不到登录页动画：${LOGIN_ANIMATION}（公共层兜底文件也缺失）`
+  );
+}
+console.log(
+  `[brand:${BRAND_ID}] 登录页动画 = ${
+    LOGIN_ANIMATION === BRAND_ANIMATION ? '品牌包' : '公共层（品牌包未提供，已回退）'
+  } → ${LOGIN_ANIMATION}`
+);
+
+/**
+ * @name 技术支持二维码清单（构建期扫描品牌包 community/ 目录）
+ * @description 「关于」页的技术支持区按这份清单渲染，未提供的渠道直接不渲染，
+ *              避免出现 404 空图（例如 liangpu 只有企业微信与钉钉、没有 QQ）。
+ *              前端经 `brandCommunity()` 读取（`__BRAND_COMMUNITY__`）。
+ */
+const COMMUNITY_DIR = join(BRAND_ASSET_DIR, 'community');
+const BRAND_COMMUNITY: string[] = fs.existsSync(COMMUNITY_DIR)
+  ? fs
+      .readdirSync(COMMUNITY_DIR)
+      .filter((f) => /\.(png|jpe?g|svg)$/i.test(f))
+      .sort()
+  : [];
+console.log(
+  `[brand:${BRAND_ID}] 技术支持二维码 = ${
+    BRAND_COMMUNITY.length ? BRAND_COMMUNITY.join(', ') : '（品牌包未提供）'
+  }`
+);
 
 // @ts-ignore
 export default defineConfig({
@@ -160,15 +219,46 @@ export default defineConfig({
    */
   copy: [{ from: `public/brand/${BRAND_ID}`, to: 'dist' }],
   /**
+   * @name 登录页动画的品牌解析
+   * @description 指向"品牌包内 login_animation.json（存在时）"或"公共层同名文件"，
+   *              代码里统一 `import DataPlatform from '@brand-login-animation'`。
+   */
+  alias: {
+    '@brand-login-animation$': LOGIN_ANIMATION
+  },
+  /**
    * @name 注入浏览器端品牌常量
    * @description `src/branding/index.ts` 从这里取值，组件与 i18n 文案统一引用 BRAND。
    */
   define: {
-    __BRAND__: brandMeta
+    __BRAND__: brandMeta,
+    __BRAND_COMMUNITY__: BRAND_COMMUNITY
   },
   layout: {
     locale: true,
-    ...defaultSettings
+    ...defaultSettings,
+    // 品牌化：title 用于登录页标签页（HelmetTitle 读 Settings.title）；colorPrimary 为品牌主色
+    title: brandMeta.nameEn || defaultSettings.title,
+    colorPrimary: BRAND_PRIMARY,
+    /**
+     * 品牌化 token：只在品牌包显式提供了对应色值时才覆盖，
+     * 未提供的品牌（如 dinky）完全沿用 defaultSettings，观感零变化。
+     * - colorBgTint  → 侧边菜单选中底（原硬编码 #3399FF 亮蓝，与任何绿/木系品牌都冲突）
+     * - colorHeaderBg → 顶部导航底色
+     */
+    token: {
+      ...defaultSettings.token,
+      header: {
+        ...defaultSettings.token?.header,
+        ...(BRAND_THEME_CFG.colorHeaderBg ? { colorBgHeader: BRAND_THEME_CFG.colorHeaderBg } : {})
+      },
+      sider: {
+        ...defaultSettings.token?.sider,
+        ...(BRAND_THEME_CFG.colorBgTint
+          ? { colorBgMenuItemSelected: BRAND_THEME_CFG.colorBgTint }
+          : {})
+      }
+    }
   },
   /**
    * @name moment2dayjs 插件
@@ -202,7 +292,22 @@ export default defineConfig({
    * @description 内置了 babel import 插件
    * @doc https://umijs.org/docs/max/antd#antd
    */
-  antd: {},
+  /**
+   * @name antd 主题（根治项）
+   * @description 品牌主色此前只进了 ProLayout 的 `layout.colorPrimary`，antd 组件（按钮/链接/复选框/
+   *              分页等）仍在用 antd 默认蓝 `#1677ff`，导致"菜单一个色、按钮另一个色"。
+   *              这里把品牌主色注入 antd ConfigProvider，链接色一并跟随，避免出现"按钮绿、链接蓝"。
+   *              DataStudio 自带独立 ConfigProvider（`pages/DataStudio/themeToken.ts`），不受影响。
+   */
+  antd: {
+    theme: {
+      token: {
+        colorPrimary: BRAND_PRIMARY,
+        colorLink: BRAND_PRIMARY,
+        colorInfo: BRAND_PRIMARY
+      }
+    }
+  },
   /**
    * @name 网络请求配置
    * @description 它基于 axios 和 ahooks 的 useRequest 提供了一套统一的网络请求和错误处理方案。
@@ -258,10 +363,11 @@ export default defineConfig({
       { languages: ['shell', 'json', 'java', 'sql', 'python', 'scala', 'yaml'] }
     ]);
 
-    // 品牌素材只保留选中品牌：构建后剥离 dist/brand/，并断言 logo 已落到 dist 根
-    memo.plugin('strip-brand-dir').use(StripBrandDirPlugin, [
-      { assetProbe: brandMeta.logo || 'brand-logo.svg' }
-    ]);
+    // 品牌素材覆盖注入的 fail-fast 校验（logo 必须已落到 dist 根）；
+    // 品牌源目录 dist/brand/ 由 dinky-admin 的 copy-static exclude + build.sh 清理，不进发布包
+    memo
+      .plugin('brand-asset-guard')
+      .use(BrandAssetGuardPlugin, [{ assetProbe: brandMeta.logo || 'brand-logo.svg' }]);
 
     return memo;
   }

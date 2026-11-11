@@ -16,38 +16,34 @@
  */
 
 /**
- * 构建后剥离产物里的 `dist/brand/` 目录。
+ * 构建后校验「品牌素材覆盖注入」是否生效。
  *
- * 背景：umi 会把整个 `public/` 拷进 dist（copyPlugin.js 里 `from: join(cwd,'public')` 硬编码，无 ignore 能力），
- * 因此 `public/brand/<id>/` 里的**所有**品牌素材都会被打进产物。而其中只有选中品牌的素材
- * 需要覆盖到 dist 根，`brand/` 目录本身属于"源"，不应出现在发布包里。
+ * 背景：umi 会把整个 `public/` 拷进 dist（`copyPlugin.js` 里 `from: join(cwd,'public')` 硬编码，
+ * 无 ignore 能力），因此 `public/brand/<id>/` 会以 `dist/brand/<id>/` 的形式出现在中间产物里；
+ * 而选中品牌的素材是通过 `config.ts` 的 `copy` 覆盖注入到 **dist 根**的。
  *
- * 同时做产物断言：选中品牌的 logo 必须已落到 dist 根，否则说明 copy 注入没生效。
+ * 卫生由打包层负责：`dinky-admin/pom.xml` 的 `copy-static` 用 `<exclude>brand/**</exclude>`
+ * 排除品牌源目录，所以发布包不会携带它；`build.sh` 在构建结束后清理 `dist/brand`。
+ *
+ * 本插件只做 fail-fast 校验：logo 必须已落到 dist 根，否则说明 copy 注入没生效
+ * （例如品牌目录路径写错、`to` 少了 `dist`），此时产物会缺少品牌素材。
  */
-class StripBrandDirPlugin {
+class BrandAssetGuardPlugin {
   constructor(options = {}) {
-    this.brandDir = options.brandDir || 'brand';
     this.assetProbe = options.assetProbe || 'brand-logo.svg';
   }
 
   apply(compiler) {
-    compiler.hooks.afterEmit.tap('StripBrandDirPlugin', () => {
+    compiler.hooks.afterEmit.tap('BrandAssetGuardPlugin', () => {
       const fs = require('fs');
       const path = require('path');
-      const outputPath = compiler.options.output.path;
-
-      const brandDir = path.join(outputPath, this.brandDir);
-      if (fs.existsSync(brandDir)) {
-        fs.rmSync(brandDir, { recursive: true, force: true });
-        console.log(`[brand] 已从产物剥离 ${this.brandDir}/（避免携带未选中品牌的素材）`);
-      }
-
-      const probe = path.join(outputPath, this.assetProbe);
+      const probe = path.join(compiler.options.output.path, this.assetProbe);
       if (!fs.existsSync(probe)) {
         throw new Error(`[brand] 产物缺少品牌素材 ${this.assetProbe}，请检查 copy 注入是否生效`);
       }
+      console.log(`[brand] 品牌素材已注入产物根：${this.assetProbe}`);
     });
   }
 }
 
-module.exports = StripBrandDirPlugin;
+module.exports = BrandAssetGuardPlugin;

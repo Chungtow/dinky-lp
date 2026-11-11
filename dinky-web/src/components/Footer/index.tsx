@@ -17,12 +17,31 @@
  *
  */
 
-import { l } from '@/utils/intl';
+import { brandAttribution, brandShortName, l } from '@/utils/intl';
+import { brandLink } from '@/branding';
 import { GithubOutlined } from '@ant-design/icons';
 import { DefaultFooter } from '@ant-design/pro-components';
 import React from 'react';
 const Footer: React.FC = () => {
   const currentYear = new Date().getFullYear();
+  // 归属声明：品牌包显式配置优先（空串=不展示），未配置则回退 i18n 默认文案
+  const attribution = brandAttribution() ?? l('app.copyright.attribution');
+  // 外链按品牌配置动态渲染：brand/<id>.json 的 links 留空即不展示，避免死链
+  const links = [
+    brandLink('website') && {
+      key: 'website',
+      title: brandShortName(),
+      href: brandLink('website'),
+      blankTarget: true
+    },
+    brandLink('github') && {
+      key: 'github',
+      title: <GithubOutlined />,
+      href: brandLink('github'),
+      blankTarget: true
+    }
+  ].filter(Boolean) as any;
+
   return (
     <DefaultFooter
       style={{
@@ -30,21 +49,10 @@ const Footer: React.FC = () => {
         backgroundSize: 'cover',
         bottom: 0
       }}
-      copyright={`${currentYear} ` + l('app.copyright.produced')}
-      links={[
-        {
-          key: 'Dinky',
-          title: 'Dinky',
-          href: 'https://github.com/DataLinkDC/dinky',
-          blankTarget: true
-        },
-        {
-          key: 'github',
-          title: <GithubOutlined />,
-          href: 'https://github.com/DataLinkDC/dinky',
-          blankTarget: true
-        }
-      ]}
+      copyright={
+        `${currentYear} ` + l('app.copyright.produced') + (attribution ? ` · ${attribution}` : '')
+      }
+      links={links}
     />
   );
 };

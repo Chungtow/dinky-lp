@@ -17,6 +17,8 @@
  *
  */
 
+import { BRAND } from '../../branding';
+
 export default {
   /**
    *
@@ -42,6 +44,21 @@ export default {
   'about.usingHelp': 'Using Help',
   'about.wechatApply': 'WeChat user community group',
   'about.wechatCode': 'Wechat Official Account',
+
+  // Product page (white-label): everything comes from the brand package
+  'about.product': 'Product',
+  'about.version': 'Version',
+  'about.license': 'License',
+  'about.copyright': 'Copyright',
+  'about.links': 'Links',
+  'about.link.website': 'Website',
+  'about.link.docs': 'Documentation',
+  'about.techSupport': 'Technical Support',
+  'about.techSupport.empty': 'Contact the platform team for technical support.',
+  'about.techSupport.wechat': 'WeCom',
+  'about.techSupport.dingtalk': 'DingTalk',
+  'about.techSupport.qq': 'QQ',
+  'about.back': 'Back',
   /**
    *
    * button
@@ -366,7 +383,7 @@ export default {
    *
    * */
 
-  'layouts.userLayout.title': 'Dinky Real-time Platform ',
+  'layouts.userLayout.title': BRAND.nameEn,
   /**
    *
    * login
@@ -595,7 +612,8 @@ export default {
   'pages.datastudio.label.result.tab': 'Result',
   'pages.datastudio.label.result.clear.all': 'Clear all results',
   'pages.datastudio.label.result.clear.all.confirm': 'Clear all results? This cannot be undone.',
-  'pages.datastudio.label.result.empty': 'Results will appear here as separate tabs after execution',
+  'pages.datastudio.label.result.empty':
+    'Results will appear here as separate tabs after execution',
   'pages.datastudio.label.result.copy': 'Copy current page',
   'pages.datastudio.label.result.copy.success': 'Copied {rowCount} rows on current page',
   'pages.datastudio.label.result.copy.cell.success': 'Copied',
@@ -685,8 +703,10 @@ export default {
   'datastudio.aiChat.confirm.skillFileTip':
     'The rewritten content will only be placed into the editor — it is NOT saved automatically. Review it and click Save yourself.',
   'datastudio.aiChat.confirm.applyToEditor': 'Apply to editor',
-  'datastudio.aiChat.confirm.appliedToEditor': 'Applied to the editor (unsaved), review and save it yourself',
-  'datastudio.aiChat.confirm.applyOpenFailed': 'Failed to place the content into the editor, open the file and retry',
+  'datastudio.aiChat.confirm.appliedToEditor':
+    'Applied to the editor (unsaved), review and save it yourself',
+  'datastudio.aiChat.confirm.applyOpenFailed':
+    'Failed to place the content into the editor, open the file and retry',
   'datastudio.aiChat.confirm.skillDeleteTip':
     'This will DELETE the whole skill and all its files, irreversibly. Type the skill name to continue.',
   'datastudio.aiChat.confirm.skillTarget': 'Target skill: ',
@@ -808,7 +828,8 @@ export default {
   'datastudio.skill.ctx.createFile': 'New file',
   'datastudio.skill.ctx.createDir': 'New directory',
   'datastudio.skill.ctx.delete': 'Delete',
-  'datastudio.skill.ctx.deleteConfirm': 'Delete {path}? This cannot be undone (directories are deleted recursively)',
+  'datastudio.skill.ctx.deleteConfirm':
+    'Delete {path}? This cannot be undone (directories are deleted recursively)',
   'datastudio.skill.ctx.rename': 'Rename',
   'datastudio.skill.ctx.push': 'Push to knowledge base',
   'datastudio.skill.renamePlaceholder': 'New file name (with extension)',
@@ -1566,7 +1587,7 @@ export default {
   'sys.process.type': 'Type',
   'sys.process.viewErrorLog': 'View Error Level Log',
   'sys.process.viewInfoLog': 'View Info Level Log',
-  'sys.setting.dinky': 'Dinky Env Configuration',
+  'sys.setting.dinky': `${BRAND.shortNameEn || BRAND.nameEn} Env Configuration`,
   'sys.setting.dinky.tooltip':
     'Mainly modify system variables to ensure stable operation of basic functions',
   'sys.setting.ds': 'DolphinScheduler Configuration',
@@ -1590,7 +1611,8 @@ export default {
   'sys.setting.semantic': 'Semantic Configuration',
   'sys.setting.tag.semantic': 'Semantic',
   'sys.setting.kb': 'Knowledge Base',
-  'sys.setting.kb.tooltip': 'RAG (kb-service) connection: service URL, API key, retrieval switch and injection budget',
+  'sys.setting.kb.tooltip':
+    'RAG (kb-service) connection: service URL, API key, retrieval switch and injection budget',
   'sys.setting.tag.kb': 'Knowledge Base',
   'sys.setting.tag.core': 'Core Configuration',
   'sys.setting.tag.extend': 'Extended Configuration',

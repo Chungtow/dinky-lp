@@ -17,6 +17,7 @@
  *
  */
 
+import { brandFeature } from '@/branding';
 import { ThemeCloud, ThemeStar } from '@/components/ThemeSvg/ThemeSvg';
 import { LANGUAGE_KEY, LANGUAGE_ZH, SERVER_VERSION, STORY_LANGUAGE } from '@/services/constants';
 import { THEME } from '@/types/Public/data';
@@ -115,7 +116,9 @@ const GlobalHeaderRight: React.FC = () => {
     style: fullScreenClassName
   };
 
+  // 版本号默认不在头部显示（白标默认收敛 UI）；需要显示的品牌在 brand/<id>.json 置 features.showVersion=true
   const menuVersion = l('menu.version', '', { version: getValueFromLocalStorage(SERVER_VERSION) });
+  const showVersion = brandFeature('showVersion');
   return (
     <>
       <Tooltip
@@ -128,9 +131,11 @@ const GlobalHeaderRight: React.FC = () => {
           <FullscreenExitOutlined {...(fullScreenProps as any)} onClick={screenFull} />
         )}
       </Tooltip>
-      <Tooltip placement='bottom' title={<span>{menuVersion}</span>}>
-        <Space style={actionClassName}>{menuVersion}</Space>
-      </Tooltip>
+      {showVersion && (
+        <Tooltip placement='bottom' title={<span>{menuVersion}</span>}>
+          <Space style={actionClassName}>{menuVersion}</Space>
+        </Tooltip>
+      )}
       <SelectLang icon={<GlobalOutlined />} style={actionClassName} />
       <Switch
         key={'themeSwitch'}

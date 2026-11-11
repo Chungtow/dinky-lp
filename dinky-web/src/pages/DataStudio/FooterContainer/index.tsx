@@ -17,7 +17,8 @@
  *
  */
 
-import { l } from '@/utils/intl';
+import { brandAttribution, l } from '@/utils/intl';
+import { BRAND } from '@/branding';
 import { useModel } from '@@/exports';
 import { Button, GlobalToken, Space } from 'antd';
 import React, { useEffect, useState } from 'react';
@@ -33,6 +34,8 @@ type ButtonRoute = {
 
 export default (props: { token: GlobalToken; centerContent: DataStudioState['centerContent'] }) => {
   const { token, centerContent } = props;
+  // 归属声明：品牌包显式配置优先（空串=不展示），未配置则回退 i18n 默认文案
+  const attribution = brandAttribution() ?? l('app.copyright.attribution');
   const [memDetailInfo, setMemDetailInfo] = useState('0/0M');
   const { subscribeTopic } = useModel('UseWebSocketModel', (model: any) => ({
     subscribeTopic: model.subscribeTopic
@@ -119,10 +122,17 @@ export default (props: { token: GlobalToken; centerContent: DataStudioState['cen
           justifyContent: 'space-between'
         }}
       >
-        <Space style={{ direction: 'ltr', width: '30%%' }}>
-          <Button size={'small'} type={'text'} block style={{ paddingInline: 4 }}>
-            Welcome to Dinky !
+        <Space style={{ direction: 'ltr', width: '30%%' }} size={2}>
+          <Button size={'small'} type={'text'} style={{ paddingInline: 4 }}>
+            {l('app.footer.welcome', `Welcome to ${BRAND.shortName || BRAND.name} !`)}
           </Button>
+          {attribution && (
+            <span
+              style={{ fontSize: 12, color: token.colorTextDescription, whiteSpace: 'nowrap' }}
+            >
+              · {attribution}
+            </span>
+          )}
         </Space>
         <Space style={{ direction: 'rtl', width: '70%' }} size={4} direction={'horizontal'}>
           {renderFooterRightInfo(route)}

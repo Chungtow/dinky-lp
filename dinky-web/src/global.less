@@ -23,9 +23,9 @@ body,
   padding: 0;
   overflow-x: auto;
   overflow-y: auto;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
-    'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol',
-    'Noto Color Emoji';
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans',
+    sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
 }
 
 // .login-form style --- start ----
@@ -101,7 +101,8 @@ body,
 }
 
 ::-webkit-scrollbar-thumb {
-  background-color: #8db7fd;
+  // 滚动条是"整站可见的品牌色触点"，跟着主色走，避免绿系品牌里出现一道亮蓝
+  background-color: var(--brand-primary, #8db7fd);
   border-radius: 10px;
   box-shadow: inset 0 0 5px rgba(0, 0, 0, 0.2);
 }
@@ -134,6 +135,90 @@ body,
 
 .ant-pro-sider.ant-layout-sider.ant-pro-sider-fixed {
   left: unset;
+}
+
+/**
+ * 登录页页脚（三行版权块）。
+ *
+ * 排版思路：页脚是"背景信息"，不该和登录表单抢注意力，所以按信息权重递减排版——
+ *   ① 版权声明 13px / 62% 黑  ② 归属声明 12px / 38% 黑  ③ 关于 + GitHub（品牌绿 / 45% 灰，hover 变绿）
+ * 灰度写死 rgba 而非 token：登录页表单区固定白底（深色主题下也是白卡片），不会出现对比度问题。
+ *
+ * 另外 DefaultFooter 会在 copyright 前**强制**插入 CopyrightOutlined，与文案自带的 © 重复，
+ * 且图标与下面的 flex 列不同行 → 会单独占一行，故隐藏。
+ */
+.login-footer {
+  .ant-pro-global-footer-copyright > .anticon {
+    display: none;
+  }
+
+  .login-footer-copyright {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    line-height: 1.6;
+  }
+
+  .login-footer-line {
+    font-size: 13px;
+    color: rgba(0, 0, 0, 0.62);
+  }
+
+  .login-footer-attribution {
+    font-size: 12px;
+    color: rgba(0, 0, 0, 0.38);
+  }
+
+  .login-footer-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 14px;
+    margin-top: 6px;
+    font-size: 13px;
+
+    a {
+      color: var(--brand-primary, #1677ff);
+      transition: color 0.2s;
+
+      &:hover {
+        color: var(--brand-primary, #1677ff);
+        text-decoration: underline;
+      }
+    }
+
+    // GitHub 图标比「关于」更次要：常态灰、hover 才上色，避免页脚出现两个同等重量的入口
+    .login-footer-github {
+      color: rgba(0, 0, 0, 0.45);
+      line-height: 1;
+
+      &:hover {
+        color: var(--brand-primary, #1677ff);
+        text-decoration: none;
+      }
+    }
+  }
+}
+
+/**
+ * 侧边菜单选中态的品牌强调条。
+ * 底色与文字色由 ProLayout / antd token 控制（见 config/config.ts），这里只补一条 3px 指示条，
+ * 让选中项在"浅湖底"上多一层焦点。颜色取运行时的 --brand-accent，
+ * 品牌包没配 colorAccent 时该变量回退主色，不会出现无主色的空条。
+ */
+.ant-pro-sider .ant-menu-item-selected {
+  position: relative;
+
+  &::before {
+    content: '';
+    position: absolute;
+    inset-inline-start: 0;
+    top: 25%;
+    height: 50%;
+    width: 3px;
+    border-radius: 0 2px 2px 0;
+    background: var(--brand-accent, transparent);
+  }
 }
 
 canvas {

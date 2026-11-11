@@ -64,6 +64,40 @@ while [ $# -gt 0 ]; do
 done
 export BRAND
 
+# 0.1 品牌素材解析（私有品牌素材不进仓库）
+#     本仓库公开，只内置官方 dinky 品牌。其他品牌（如 liangpu）的元数据与素材
+#     属于商业资产，存放在私有素材库，构建前按需同步到仓库内的约定位置；
+#     该位置已被 .gitignore 忽略，不会污染 git status。解析优先级：
+#       1) 仓库内已存在  → 直接使用（官方 dinky，或开发者手工放入）
+#       2) $DINKY_BRAND_ASSETS/<id>/（默认 <仓库>/../brand-assets/<id>）
+BRAND_META="dinky-web/brand/${BRAND}.json"
+BRAND_ASSET_DIR="dinky-web/public/brand/${BRAND}"
+if [ ! -f "$BRAND_META" ] || [ ! -d "$BRAND_ASSET_DIR" ]; then
+    ASSETS_ROOT="${DINKY_BRAND_ASSETS:-$(cd .. && pwd)/brand-assets}"
+    ASSET_SRC="${ASSETS_ROOT}/${BRAND}"
+    if [ ! -f "${ASSET_SRC}/brand.json" ]; then
+        echo ""
+        echo "✗ 品牌 ${BRAND} 的元数据不存在：${BRAND_META}"
+        echo "  本仓库只内置官方 dinky 品牌，其他品牌需从私有素材库同步。"
+        echo "  期望路径：${ASSET_SRC}/brand.json"
+        echo "  可用环境变量指定素材库根目录："
+        echo "    DINKY_BRAND_ASSETS=/path/to/brand-assets bash build.sh --brand ${BRAND}"
+        exit 1
+    fi
+    echo "品牌素材来源：私有素材库 ${ASSET_SRC}"
+    mkdir -p "$BRAND_ASSET_DIR"
+    cp -f "${ASSET_SRC}/brand.json" "$BRAND_META"
+    for item in "${ASSET_SRC}"/*; do
+        [ -e "$item" ] || continue
+        base=$(basename "$item")
+        case "$base" in
+            brand.json|README.md) continue ;;
+        esac
+        cp -Rf "$item" "$BRAND_ASSET_DIR/"
+    done
+    echo "  ✓ 已同步至 ${BRAND_ASSET_DIR}（该路径被 .gitignore 忽略）"
+fi
+
 echo "=== Dinky-LP 构建（固化 Profile） ==="
 echo "Maven: ./mvnw（Wrapper 3.8.4，禁用系统 mvn）"
 echo "JDK: $(java -version 2>&1 | head -1)"
@@ -105,11 +139,46 @@ fi
 echo "清理 .umi-production 缓存与 dist 旧产物..."
 rm -rf dinky-web/.umi-production dinky-web/src/.umi-production dinky-web/dist 2>/dev/null || true
 
+# 2.5 清理上一轮构建遗留的前端静态资源
+#     dinky-admin 的 copy-static 是"增量覆盖、不清空目标目录"，切换品牌若不清理，
+#     上一个品牌独有的素材（如 community/ 二维码）会残留在本轮发布包里。
+echo "清理上一轮前端静态资源（避免跨品牌残留）..."
+rm -rf dinky-admin/src/main/resources/static 2>/dev/null || true
+
 # 3. 构建（./mvnw 而非系统 mvn）
 echo "执行: ./mvnw clean package -Dmaven.test.skip=true -Dbrand=${BRAND} -P prod,web,aliyun,flink-single-version,flink-1.17,fast"
 ./mvnw clean package -Dmaven.test.skip=true \
     -Dbrand="${BRAND}" \
     -P prod,web,aliyun,flink-single-version,flink-1.17,fast
+MVN_EXIT=$?
+if [ ${MVN_EXIT} -ne 0 ]; then
+    echo ""
+    echo "✗ 构建失败（mvn 退出码 ${MVN_EXIT}）"
+    exit ${MVN_EXIT}
+fi
+
+# 4. 品牌产物自检与中间产物清理
+#    - 断言：品牌素材已注入 dist 根（证明 config.ts 的 copy 覆盖注入生效）
+#      logo 文件名取自 brand/<id>.json 的 logo 字段（支持 .svg / .png），不要写死
+#    - 清理：dist/brand 是品牌素材"源"目录（umi 整体拷贝 public/ 所致），
+#            dinky-admin 的 copy-static 已 exclude brand/**，不进发布包；这里清掉中间产物
+BRAND_LOGO=$(python3 -c "import json;print(json.load(open('dinky-web/brand/${BRAND}.json',encoding='utf-8')).get('logo') or 'brand-logo.svg')" 2>/dev/null || echo "brand-logo.svg")
+if [ -f "dinky-web/dist/${BRAND_LOGO}" ]; then
+    echo "✓ 品牌素材已注入 dist 根：${BRAND_LOGO}（品牌: ${BRAND}）"
+else
+    echo "✗ dist 根缺少 ${BRAND_LOGO}，品牌 copy 注入可能未生效（品牌: ${BRAND}）"
+    exit 1
+fi
+for i in 1 2 3; do
+    [ -d "dinky-web/dist/brand" ] || break
+    rm -rf "dinky-web/dist/brand" 2>/dev/null || true
+    sleep 1
+done
+if [ -d "dinky-web/dist/brand" ]; then
+    echo "⚠ 未能清理 dist/brand（不影响发布包：copy-static 已 exclude brand/**）"
+else
+    echo "✓ 已清理 dist/brand 中间产物"
+fi
 
 echo ""
 echo "=== 构建完成 ==="

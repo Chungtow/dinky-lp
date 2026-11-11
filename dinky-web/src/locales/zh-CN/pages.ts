@@ -17,6 +17,8 @@
  *
  */
 
+import { BRAND } from '../../branding';
+
 export default {
   /**
    *
@@ -39,6 +41,21 @@ export default {
   'about.wechatApply':
     '微信用户社区群：推荐，添加微信号 wenmo_ai 邀请进群 （申请备注 Dinky + 企业名 + 职位，不写不批）',
   'about.wechatCode': '微信公众号',
+
+  // 产品信息页（白标）：内容全部取自品牌包，不含上游社区导流
+  'about.product': '产品信息',
+  'about.version': '版本',
+  'about.license': '开源许可',
+  'about.copyright': '版权',
+  'about.links': '相关链接',
+  'about.link.website': '官方网站',
+  'about.link.docs': '文档',
+  'about.techSupport': '技术支持',
+  'about.techSupport.empty': '请联系平台团队获取技术支持',
+  'about.techSupport.wechat': '企业微信',
+  'about.techSupport.dingtalk': '钉钉',
+  'about.techSupport.qq': 'QQ',
+  'about.back': '返回',
   /**
    *
    * button
@@ -317,7 +334,7 @@ export default {
    *
    * */
 
-  'layouts.userLayout.title': 'Dinky 实时计算平台',
+  'layouts.userLayout.title': BRAND.name,
   /**
    *
    * login
@@ -564,7 +581,8 @@ export default {
   'datastudio.aiChat.validateFailed': '规则校验请求失败，请稍后重试',
   'datastudio.aiChat.validatePassed': '通过（无 error 级违规）',
   'datastudio.aiChat.validateRejected': '未通过（存在 error 级违规）',
-  'datastudio.aiChat.validateUnknownTip': 'unknown 表示该项未能判定（缺输入或接口不可达），需要人工确认',
+  'datastudio.aiChat.validateUnknownTip':
+    'unknown 表示该项未能判定（缺输入或接口不可达），需要人工确认',
   'datastudio.aiChat.explain': '解释当前 SQL',
   'datastudio.aiChat.explainTip': '用 AI 解释 SQL：编辑区有选中片段时解释选中片段，否则解释全文',
   'datastudio.aiChat.craft.diffTitle': 'AI 建议的改动',
@@ -657,8 +675,7 @@ export default {
   'datastudio.aiChat.msg.deleteTitle': '删除这一轮问答？',
   'datastudio.aiChat.msg.deleteConfirm':
     '该轮的问题与回答会一起移除，之后的问题不会再引用它们（仅影响本页面，不涉及服务端记录）。',
-  'datastudio.aiChat.msg.editHandleLost':
-    '原问题里的 @ 引用已变成普通文本，如需引用请重新选择',
+  'datastudio.aiChat.msg.editHandleLost': '原问题里的 @ 引用已变成普通文本，如需引用请重新选择',
   'datastudio.aiChat.msg.saveAsDoc': '保存为知识文档',
   'datastudio.aiChat.msg.pushToKb': '推送到知识库',
   'datastudio.aiChat.saveAsDoc.hint': '本轮 AI 回答将作为正文保存（共 {chars} 字）',
@@ -726,7 +743,8 @@ export default {
   'datastudio.skill.saved': '保存成功',
   'datastudio.skill.saveFailed': '保存失败',
   'datastudio.skill.pathMissing': '缺少文件路径，请从左侧技能树重新打开该文件',
-  'datastudio.skill.validate.bareHint': '有 {count} 处句柄未用反引号包裹，建议规范为 `@type/code`（不影响使用）',
+  'datastudio.skill.validate.bareHint':
+    '有 {count} 处句柄未用反引号包裹，建议规范为 `@type/code`（不影响使用）',
   'datastudio.skill.openFailed': '打开文件失败',
   'datastudio.skill.nameRequired': '请输入名称',
   'datastudio.skill.dirCreated': '已创建目录 {path}',
@@ -790,7 +808,8 @@ export default {
   'pages.skill.create': '新建 Skill',
   'pages.skill.save': '保存 Skill',
   'pages.skill.validate.title': '引用校验',
-  'pages.skill.validate.bareHint': '有 {count} 处句柄未用反引号包裹，建议规范为 `@type/code`（不影响使用）',
+  'pages.skill.validate.bareHint':
+    '有 {count} 处句柄未用反引号包裹，建议规范为 `@type/code`（不影响使用）',
   'pages.skill.validate.line': '第 {line} 行',
   'pages.skill.createTitle': '新建 Skill',
   // 阶段 4b 补（UAT R2）：知识文档（doc）——与 skill 共用一张表与权限模型，
@@ -1471,7 +1490,7 @@ export default {
   'sys.process.type': '类型',
   'sys.process.viewErrorLog': '查看 Error 级别日志',
   'sys.process.viewInfoLog': '查看 Info 级别日志',
-  'sys.setting.dinky': 'Dinky 环境配置',
+  'sys.setting.dinky': `${BRAND.shortName || BRAND.name} 环境配置`,
   'sys.setting.dinky.tooltip': '主要以修改系统变量为主，保证基础功能稳定运行',
   'sys.setting.ds': 'DolphinScheduler 配置',
   'sys.setting.ds.tooltip': '海豚调度插件设置，可以让您把dinky任务丝滑推到海豚调度器工作流上',

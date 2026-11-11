@@ -30,6 +30,7 @@ export default {
   'menu.login': '登录',
   'menu.center': '个人中心',
   'menu.account.center': '个人中心',
+  'menu.account.about': '关于',
   'menu.account.tenant': '租户: {tenantCode}',
   'menu.account.settings': '个人设置',
   'menu.account.logout': '退出登录',

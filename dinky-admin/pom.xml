@@ -464,6 +464,12 @@
                             <resources>
                                 <resource>
                                     <directory>../dinky-web/dist</directory>
+                                    <excludes>
+                                        <!-- 品牌素材"源"目录：public/brand/<id>/ 会被 umi 整体拷进 dist/brand/，
+                                             其中选中品牌的素材已由 config.ts 的 copy 覆盖注入到 dist 根，
+                                             这里排除整目录，保证发布包里不携带任何品牌源目录 -->
+                                        <exclude>brand/**</exclude>
+                                    </excludes>
                                 </resource>
                             </resources>
                         </configuration>
