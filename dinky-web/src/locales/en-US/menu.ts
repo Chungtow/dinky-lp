@@ -32,6 +32,7 @@ export default {
   'menu.account.settings': 'Account Settings',
   'menu.account.tenant': 'Tenant: {tenantCode}',
   'menu.account.center': 'Account Center',
+  'menu.account.about': 'About',
   'menu.account.logout': 'Logout',
   'menu.account.clearPageCache': 'Clear Page Cache',
   'menu.account.changePassword': 'Change Password',

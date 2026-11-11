@@ -18,7 +18,7 @@
  */
 
 import { API_CONSTANTS } from '@/services/endpoints';
-import { brandAttribution, brandShortName, l } from '@/utils/intl';
+import { brandAttribution, l } from '@/utils/intl';
 import { GithubOutlined, LockOutlined, UserOutlined } from '@ant-design/icons';
 import { DefaultFooter, ProForm, ProFormCheckbox, ProFormText } from '@ant-design/pro-components';
 import { SubmitterProps } from '@ant-design/pro-form/es/components';
@@ -31,7 +31,7 @@ import DataPlatform from '@brand-login-animation';
 import { useRequest } from '@@/exports';
 import { history } from '@umijs/max';
 import { GLOBAL_SETTING_KEYS } from '@/types/SettingCenter/data.d';
-import { BRAND, brandLink } from '@/branding';
+import { BRAND, brandLink, brandTheme, withAlpha } from '@/branding';
 
 type LoginFormProps = {
   onSubmit: (values: any) => Promise<void>;
@@ -141,7 +141,8 @@ const LoginForm: React.FC<LoginFormProps> = (props) => {
             height: '80%',
             borderRadius: 15,
             overflow: 'hidden',
-            boxShadow: '0px 0px 100px  #78909c'
+            // 阴影带品牌色相：原 #78909c 是灰蓝，配绿系主色会发现"白卡片在发蓝光的灰雾里"，很掉质感
+            boxShadow: `0px 0px 100px ${withAlpha(brandTheme.ink, 0.3)}`
           }}
         >
           <Col
@@ -162,7 +163,9 @@ const LoginForm: React.FC<LoginFormProps> = (props) => {
             <Row>
               <Col xl={12} xxl={24}>
                 <Row
-                  style={{ color: '#00b0ff', marginBottom: 60, justifyContent: 'center' }}
+                  // 标题走品牌深字色（品牌包 colorInk → colorPrimary → 原天蓝兜底），
+                  // 原硬编码 #00b0ff 是纯电子蓝，与绿系 logo 并置会有"PPT 配色"感。
+                  style={{ color: brandTheme.ink, marginBottom: 60, justifyContent: 'center' }}
                   align={'middle'}
                 >
                   {/* logo 走品牌元数据（支持 .svg/.png），避免与页头不一致 */}
@@ -184,28 +187,39 @@ const LoginForm: React.FC<LoginFormProps> = (props) => {
               </Col>
             </Row>
             <DefaultFooter
+              // 类名用于隐藏 DefaultFooter 强制插入的 © 图标（见 global.less 的 .login-footer）
+              className='login-footer'
               copyright={
-                `${new Date().getFullYear()} ` +
-                l('app.copyright.produced') +
-                (attribution ? ` · ${attribution}` : '')
+                /**
+                 * 页脚三行，按信息权重递减排版（字号 13/12/13，灰度 62%/38%/品牌绿）：
+                 *   ① 版权声明  ② 归属声明（品牌包未配置则整行不渲染）  ③ 关于 + GitHub
+                 * 不再渲染 DefaultFooter 的 links 行（原先的「主页」入口）——「关于」页里已有官网链接，
+                 * 页脚重复一次只会让信息层级变浑。
+                 * 文案全部来自品牌包（`app.copyright.produced` → `copyright/copyrightEn`），
+                 * 因此中英文与各品牌通用，无需按品牌改代码。
+                 */
+                <div className='login-footer-copyright'>
+                  <span className='login-footer-line'>
+                    {`© ${new Date().getFullYear()} ${l('app.copyright.produced')}`}
+                  </span>
+                  {attribution && <span className='login-footer-attribution'>{attribution}</span>}
+                  <span className='login-footer-actions'>
+                    <a onClick={() => history.push('/about')}>{l('menu.account.about')}</a>
+                    {brandLink('github') && (
+                      <a
+                        className='login-footer-github'
+                        href={brandLink('github')}
+                        target='_blank'
+                        rel='noreferrer'
+                        aria-label='GitHub'
+                      >
+                        <GithubOutlined />
+                      </a>
+                    )}
+                  </span>
+                </div>
               }
               style={{ backgroundColor: '#fff' }}
-              links={
-                [
-                  brandLink('website') && {
-                    key: 'website',
-                    title: brandShortName(),
-                    href: brandLink('website'),
-                    blankTarget: true
-                  },
-                  brandLink('github') && {
-                    key: 'github',
-                    title: <GithubOutlined />,
-                    href: brandLink('github'),
-                    blankTarget: true
-                  }
-                ].filter(Boolean) as any
-              }
             />
           </Col>
           <Col
@@ -216,7 +230,9 @@ const LoginForm: React.FC<LoginFormProps> = (props) => {
             xl={10}
             xxl={16}
             style={{
-              backgroundImage: 'linear-gradient(135deg,#1fa2ff,#12d8fa,#a6ffcb)',
+              // 品牌包未配 loginGradient 时保留官方模板的蓝青渐变，官方品牌观感零变化
+              backgroundImage:
+                brandTheme.loginGradient || 'linear-gradient(135deg,#1fa2ff,#12d8fa,#a6ffcb)',
               width: '100%',
               height: '100%'
             }}

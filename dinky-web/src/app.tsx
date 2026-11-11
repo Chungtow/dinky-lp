@@ -17,19 +17,25 @@
  *
  */
 
+import { brandCssVars } from '@/branding';
 import ErrorBoundary from '@/components/ErrorBoundary';
 import Footer from '@/components/Footer';
 import RightContent from '@/components/RightContent';
 import { AccessContextProvider } from '@/hooks/useAccess';
 import { UnAccessible } from '@/pages/Other/403';
 import { API_CONSTANTS } from '@/services/endpoints';
+import { TOKEN_KEY } from '@/services/constants';
 import { SysMenu } from '@/types/AuthCenter/data';
-import { getTenantByLocalStorage, setCurrentTenant } from '@/utils/function';
+import {
+  getTenantByLocalStorage,
+  getValueFromLocalStorage,
+  setCurrentTenant
+} from '@/utils/function';
 import { l } from '@/utils/intl';
 import { PageLoading, Settings as LayoutSettings } from '@ant-design/pro-components';
 import type { RunTimeLayoutConfig } from '@umijs/max';
 import { history } from '@umijs/max';
-import { JSX } from 'react';
+import { JSX, ReactNode } from 'react';
 import { Reducer, StoreEnhancer } from 'redux';
 import { persistReducer, persistStore } from 'redux-persist';
 import { Navigate } from 'umi';
@@ -43,10 +49,31 @@ import localforage from 'localforage';
 // const isDev = process.env.NODE_ENV === "development";
 const loginPath = API_CONSTANTS.LOGIN_PATH;
 
-const whiteList = ['/user', loginPath];
+/**
+ * 匿名可达页面：无需登录即可访问，且**不做用户信息拉取**——
+ * 未登录时拉取 currentUser 会 401 并被踢回登录页，等于进不去。
+ * `/about`（产品信息页）的主入口在登录页页脚，必须匿名可达。
+ */
+const PUBLIC_PATHS = ['/about'];
+
+/** 不做 access: 'canAuth' 包装的路由（登录区 + 匿名可达页） */
+const whiteList = ['/user', loginPath, ...PUBLIC_PATHS];
 
 let extraRoutes: SysMenu[] = [];
 let rendered = false;
+
+/**
+ * 应用根容器：把品牌色板写成 CSS 变量。
+ * less 文件读不到构建期注入的 `__BRAND__`，样式层（如侧边菜单的品牌强调条）统一取这些变量，
+ * 避免同一套色值在 less / tsx 里各写一遍、改一处漏一处。
+ */
+export function rootContainer(container: ReactNode) {
+  if (typeof document !== 'undefined') {
+    const root = document.documentElement;
+    Object.entries(brandCssVars()).forEach(([name, value]) => root.style.setProperty(name, value));
+  }
+  return container;
+}
 
 /**
  * 初始化路由鉴权
@@ -99,7 +126,7 @@ export async function getInitialState(): Promise<{
 
   // 如果不是登录页面，执行
   const { location } = history;
-  if (location.pathname !== loginPath) {
+  if (location.pathname !== loginPath && !PUBLIC_PATHS.includes(location.pathname)) {
     const currentUser = await fetchUserInfo();
     if (currentUser?.menuList) {
       extraRoutes = currentUser?.menuList;
@@ -119,8 +146,20 @@ export async function getInitialState(): Promise<{
       settings: defaultSettings as Partial<LayoutSettings>
     };
   }
+
+  // 匿名可达页（如 `/about`）：本地有 token 说明已登录，顺手带上用户信息，
+  // 免得从该页返回应用内页面时因 currentUser 缺失被 onPageChange 踢回登录页；
+  // 没有 token 就**不发请求**（未登录调用会 401），页面降级为纯展示。
+  let publicPathUser: API.CurrentUser | undefined;
+  if (getValueFromLocalStorage(TOKEN_KEY)) {
+    publicPathUser = await queryUserInfo().catch(() => undefined);
+    if (publicPathUser?.menuList) {
+      extraRoutes = publicPathUser.menuList;
+    }
+  }
   return {
     fetchUserInfo,
+    currentUser: publicPathUser,
     settings: defaultSettings as Partial<LayoutSettings>
   };
 }
@@ -133,8 +172,12 @@ export const layout: RunTimeLayoutConfig = ({ initialState }) => {
   const defaultSettings = {
     onPageChange: () => {
       const { location } = history;
-      // 如果没有登录，重定向到 login
-      if (!initialState?.currentUser && location.pathname !== loginPath) {
+      // 如果没有登录，重定向到 login（匿名可达页如 `/about` 除外，登录页页脚会直接跳过去）
+      if (
+        !initialState?.currentUser &&
+        location.pathname !== loginPath &&
+        !PUBLIC_PATHS.includes(location.pathname)
+      ) {
         history.push(loginPath);
       }
     },
@@ -265,7 +308,7 @@ export function onRouteChange({
   routes: any;
   action: any;
 }) {
-  if (location.pathname !== loginPath && !rendered) {
+  if (location.pathname !== loginPath && !PUBLIC_PATHS.includes(location.pathname) && !rendered) {
     const filterMenus = (menus: SysMenu[]) => {
       return menus?.filter((menu) => menu.type !== 'F');
     };

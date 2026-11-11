@@ -23,7 +23,8 @@ import { ProLayoutProps } from '@ant-design/pro-components';
  * 该文件也会被 config 层（Node）加载，那时 `__BRAND__` 不存在，走回退分支。
  */
 const brandLogo: string =
-  (typeof __BRAND__ !== 'undefined' && (__BRAND__ as { logo?: string })?.logo) || './brand-logo.svg';
+  (typeof __BRAND__ !== 'undefined' && (__BRAND__ as { logo?: string })?.logo) ||
+  './brand-logo.svg';
 
 /**
  * @name
@@ -64,7 +65,9 @@ const Settings: ProLayoutProps & {
       colorTextMenu: '#dfdfdf',
       colorTextMenuSecondary: '#dfdfdf',
       colorTextMenuSelected: '#fff',
-      colorBgMenuItemSelected: '#1e252a',
+      // 用半透明白而非固定炭灰：品牌页头换深绿/深蓝后，"比底色亮一档"的选中态依然成立；
+      // 配原来的 #292f33 时观感与旧值 #1e252a 几乎一致。
+      colorBgMenuItemSelected: 'rgba(255,255,255,0.10)',
       colorTextMenuActive: 'rgba(255,255,255,0.85)',
       colorTextRightActionsItem: '#dfdfdf'
     },
