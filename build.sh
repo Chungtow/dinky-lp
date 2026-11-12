@@ -32,7 +32,8 @@ set -e
 #   4. web 构建前置: 清理 .umi-production 缓存
 #      （否则 frontend-maven-plugin 的 pnpm build 受 max/umi safe-delete 保护，非交互卡住）
 #
-# 产物: build/dinky-lp-release-1.17-1.2.5.tar.gz
+# 产物: build/dinky-lp-release-1.17-<BASE_VERSION>-<brand>.tar.gz
+#       （品牌后缀由 -Dbrand.suffix 注入，见 dinky-assembly/pom.xml 的 finalName）
 # ================================================
 
 cd "$(dirname "$0")"
@@ -64,27 +65,54 @@ while [ $# -gt 0 ]; do
 done
 export BRAND
 
-# 0.1 品牌素材解析（私有品牌素材不进仓库）
-#     本仓库公开，只内置官方 dinky 品牌。其他品牌（如 liangpu）的元数据与素材
-#     属于商业资产，存放在私有素材库，构建前按需同步到仓库内的约定位置；
-#     该位置已被 .gitignore 忽略，不会污染 git status。解析优先级：
-#       1) 仓库内已存在  → 直接使用（官方 dinky，或开发者手工放入）
-#       2) $DINKY_BRAND_ASSETS/<id>/（默认 <仓库>/../brand-assets/<id>）
+# 0.0 品牌 id 合法性（与 new_brand.py / deploy_dinky_lp.sh / release_dinky_lp.sh / deploy_dinky.sh 同一口径）
+#     规则 ^[a-z][a-z0-9-]*$：小写字母开头，其后小写字母/数字/连字符（支持 acme-data 这类 kebab-case）
+#     早失败优于晚失败：非法 id 若放过去，后面只会报"品牌在仓库内不完整"，反而把排查带偏。
+if ! echo "$BRAND" | grep -qE '^[a-z][a-z0-9-]*$'; then
+    echo "✗ 品牌 id 非法: '${BRAND}'（小写字母开头，仅含小写字母/数字/连字符）"
+    echo "  取值见 dinky-web/brand/*.json（默认 dinky）"
+    exit 1
+fi
+
+# 0.1 品牌解析（默认只认仓库内路径，不做任何路径猜测）
+#     默认：使用仓库内的 dinky-web/brand/<id>.json 与 dinky-web/public/brand/<id>/；
+#           缺任何一个就报错退出（本仓库只内置官方 dinky 品牌）。
+#     可选：显式设置 DINKY_BRAND_ASSETS 指向任意外部素材库目录，构建前同步到上述约定
+#           位置（该位置已被 .gitignore 忽略）。适用于"品牌素材不进公开仓库"的场景，
+#           开源用户也可自行使用，不依赖任何外部工程的存在。
 BRAND_META="dinky-web/brand/${BRAND}.json"
 BRAND_ASSET_DIR="dinky-web/public/brand/${BRAND}"
 if [ ! -f "$BRAND_META" ] || [ ! -d "$BRAND_ASSET_DIR" ]; then
-    ASSETS_ROOT="${DINKY_BRAND_ASSETS:-$(cd .. && pwd)/brand-assets}"
-    ASSET_SRC="${ASSETS_ROOT}/${BRAND}"
-    if [ ! -f "${ASSET_SRC}/brand.json" ]; then
+    # 分侧诊断：只列真正缺的那一侧（旧写法把两侧一起列进"缺少"，即使其中一侧存在，会把人误导到"重建品牌"）
+    echo ""
+    echo "✗ 品牌 ${BRAND} 在仓库内不完整"
+    echo "  缺少："
+    [ -f "$BRAND_META" ] || echo "    ${BRAND_META}（元数据）"
+    [ -d "$BRAND_ASSET_DIR" ] || echo "    ${BRAND_ASSET_DIR}/（素材目录，至少含 brand-logo.* 与 favicon.ico）"
+    if [ -z "${DINKY_BRAND_ASSETS:-}" ]; then
         echo ""
-        echo "✗ 品牌 ${BRAND} 的元数据不存在：${BRAND_META}"
-        echo "  本仓库只内置官方 dinky 品牌，其他品牌需从私有素材库同步。"
-        echo "  期望路径：${ASSET_SRC}/brand.json"
-        echo "  可用环境变量指定素材库根目录："
-        echo "    DINKY_BRAND_ASSETS=/path/to/brand-assets bash build.sh --brand ${BRAND}"
+        echo "  本仓库默认只内置官方 dinky 品牌。补齐有两种方式："
+        echo "    1) 直接把上面缺的放进对应路径（自建分支 / 私有 fork 场景）"
+        echo "    2) 从外部素材库整体同步（推荐：素材不落公开仓库）："
+        echo "         DINKY_BRAND_ASSETS=/绝对路径/brand-assets bash build.sh --brand ${BRAND}"
+        echo "       外部目录结构：${BRAND}/brand.json、${BRAND}/brand-logo.*、${BRAND}/favicon.ico、…"
         exit 1
     fi
-    echo "品牌素材来源：私有素材库 ${ASSET_SRC}"
+    # 相对路径会相对本脚本所在目录（dinky-lp/）解析 —— 先补成绝对路径，报错信息才自证得了。
+    # 不用 realpath：它会展开符号链接（本机 /root/lpdeploy → /nfs/data/lpdeploy），
+    # 打出来的路径跟用户输入对不上，反而更费解；这里只做"前缀补全"。
+    case "${DINKY_BRAND_ASSETS}" in
+        /*) ASSETS_ROOT="${DINKY_BRAND_ASSETS}" ;;
+        *)  ASSETS_ROOT="$(pwd)/${DINKY_BRAND_ASSETS}" ;;
+    esac
+    ASSET_SRC="${ASSETS_ROOT%/}/${BRAND}"
+    if [ ! -f "${ASSET_SRC}/brand.json" ]; then
+        echo ""
+        echo "✗ 外部素材库里没有品牌 ${BRAND} 的元数据：${ASSET_SRC}/brand.json"
+        echo "  请确认 DINKY_BRAND_ASSETS=${DINKY_BRAND_ASSETS} 下存在 ${BRAND}/brand.json"
+        exit 1
+    fi
+    echo "品牌素材来源：外部素材库 ${ASSET_SRC}"
     mkdir -p "$BRAND_ASSET_DIR"
     cp -f "${ASSET_SRC}/brand.json" "$BRAND_META"
     for item in "${ASSET_SRC}"/*; do
@@ -96,6 +124,8 @@ if [ ! -f "$BRAND_META" ] || [ ! -d "$BRAND_ASSET_DIR" ]; then
         cp -Rf "$item" "$BRAND_ASSET_DIR/"
     done
     echo "  ✓ 已同步至 ${BRAND_ASSET_DIR}（该路径被 .gitignore 忽略）"
+    echo "  注：同步只覆盖/追加，不删除 —— 素材库里已删掉的素材仍会留在工作区并参与构建；"
+    echo "      要完全镜像素材库，先删掉上面的工作区副本再构建。"
 fi
 
 echo "=== Dinky-LP 构建（固化 Profile） ==="
@@ -145,10 +175,44 @@ rm -rf dinky-web/.umi-production dinky-web/src/.umi-production dinky-web/dist 2>
 echo "清理上一轮前端静态资源（避免跨品牌残留）..."
 rm -rf dinky-admin/src/main/resources/static 2>/dev/null || true
 
+# 2.6 构建期品牌自证文件（制品身份自描述）
+#     umi 会把 public/ 原样拷进 dist 根 → copy-static 收进 jar 的 static/ →
+#     制品内路径为 html/brand-build-info.json。release/deploy 据此校验品牌，
+#     无需解析 HTML（见 docs/plan/20261112-Dinky-LP 制品品牌化命名与发布链改造实施计划.md §3.5）
+#     注意：该文件**不在构建末尾删除**——构建过程本身已产生大量删除操作，
+#     再追加一次 rm 会触发构建期批量删除护栏（SAFE_DELETE_BULK_CONFIRM_REQUIRED）。
+#     改为在 .gitignore 中忽略，每次构建前覆盖写入，既不留痕也不阻断构建。
+BRAND_INFO_FILE="dinky-web/public/brand-build-info.json"
+
+BASE_VERSION=$(grep -m1 -o '<revision>[^<]*</revision>' pom.xml | sed 's#</\?revision>##g')
+GIT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo unknown)
+if [ -n "$(git status --porcelain 2>/dev/null)" ]; then GIT_DIRTY="yes"; else GIT_DIRTY="no"; fi
+BRAND_TITLE=$(python3 -c "import json;d=json.load(open('dinky-web/brand/${BRAND}.json',encoding='utf-8'));print(d.get('documentTitle') or d.get('name') or '')" 2>/dev/null || echo "")
+export BRAND BRAND_TITLE BASE_VERSION GIT_COMMIT GIT_DIRTY
+python3 - "$BRAND_INFO_FILE" <<'PY'
+import datetime, json, os, socket, sys
+
+data = {
+    "id": os.environ["BRAND"],
+    "documentTitle": os.environ.get("BRAND_TITLE", ""),
+    "version": os.environ.get("BASE_VERSION", ""),
+    "gitCommit": os.environ.get("GIT_COMMIT", "unknown"),
+    "gitDirty": os.environ.get("GIT_DIRTY", "unknown"),
+    "buildTime": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    "builder": "%s@%s" % (os.environ.get("USER", "?"), socket.gethostname()),
+}
+with open(sys.argv[1], "w", encoding="utf-8") as fh:
+    fh.write(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+PY
+echo "✓ 品牌自证文件：${BRAND_INFO_FILE}（id=${BRAND}, version=${BASE_VERSION}, commit=${GIT_COMMIT:0:8}, dirty=${GIT_DIRTY}）"
+
 # 3. 构建（./mvnw 而非系统 mvn）
-echo "执行: ./mvnw clean package -Dmaven.test.skip=true -Dbrand=${BRAND} -P prod,web,aliyun,flink-single-version,flink-1.17,fast"
+#    -Dbrand         → config.ts 读取，决定品牌元数据/素材
+#    -Dbrand.suffix  → assembly finalName，决定包名与包内顶层目录
+echo "执行: ./mvnw clean package -Dmaven.test.skip=true -Dbrand=${BRAND} -Dbrand.suffix=-${BRAND} -P prod,web,aliyun,flink-single-version,flink-1.17,fast"
 ./mvnw clean package -Dmaven.test.skip=true \
     -Dbrand="${BRAND}" \
+    -Dbrand.suffix="-${BRAND}" \
     -P prod,web,aliyun,flink-single-version,flink-1.17,fast
 MVN_EXIT=$?
 if [ ${MVN_EXIT} -ne 0 ]; then
@@ -180,6 +244,29 @@ else
     echo "✓ 已清理 dist/brand 中间产物"
 fi
 
+# 4.1 产物命名断言：必须存在**唯一**一个带本品牌后缀的包
+shopt -s nullglob
+BRAND_TARBALLS=(build/dinky-lp-release-1.17-*-"${BRAND}".tar.gz)
+shopt -u nullglob
+if [ ${#BRAND_TARBALLS[@]} -ne 1 ]; then
+    echo "✗ 未找到唯一的品牌构建产物：build/dinky-lp-release-1.17-*-${BRAND}.tar.gz（命中 ${#BRAND_TARBALLS[@]} 个）"
+    echo "  当前 build/ 下的 tar 包："
+    ls -1 build/*.tar.gz 2>/dev/null | sed 's/^/    /' || echo "    (无)"
+    echo "  排查：pom 的 brand.suffix 是否生效（构建需带 -Dbrand.suffix=-${BRAND}）"
+    exit 1
+fi
+BRAND_TARBALL="${BRAND_TARBALLS[0]}"
+echo "✓ 构建产物（品牌 ${BRAND}）：${BRAND_TARBALL}"
+
+# 4.2 制品自证断言：包内 brand-build-info.json 的 id 必须等于本次品牌
+PKG_ID=$(tar -xzOf "$BRAND_TARBALL" --wildcards '*/html/brand-build-info.json' 2>/dev/null \
+    | python3 -c "import json,sys;print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
+if [ "$PKG_ID" != "$BRAND" ]; then
+    echo "✗ 制品内品牌自证不一致：包内 id='${PKG_ID}'，期望 '${BRAND}'"
+    exit 1
+fi
+echo "✓ 制品自证通过：html/brand-build-info.json id=${PKG_ID}"
+
 echo ""
 echo "=== 构建完成 ==="
-echo "产物: build/dinky-lp-release-1.17-1.2.5.tar.gz"
+echo "产物: ${BRAND_TARBALL}（品牌: ${BRAND}）"

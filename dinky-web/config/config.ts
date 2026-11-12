@@ -123,6 +123,42 @@ console.log(
   }`
 );
 
+/**
+ * @name 品牌素材投递清单（逐文件展开，替代"整包拷贝"）
+ * @description 只投递**真正要给浏览器访问**的素材；品牌包内的 `README.md`（内部说明）
+ *              与 `login_animation.json`（构建期已 import 内联进登录页 chunk，线上不请求）
+ *              一律不投递，避免内部文档被公开下载、制品体积虚增。
+ *              逐文件展开（`from` 只给文件、`to` 一律给目录）可避免"目录拷贝是否带一层"的歧义。
+ * @@doc docs/user-guide/ops/Dinky-LP 品牌定制与部署操作手册.md（§3 素材规格）
+ */
+const BRAND_COPY: { from: string; to: string }[] = [];
+const BRAND_COPY_EXCLUDE = ['README.md', 'login_animation.json'];
+
+function collectBrandCopy(): { from: string; to: string }[] {
+  if (!fs.existsSync(BRAND_ASSET_DIR)) return [];
+  const out: { from: string; to: string }[] = [];
+  const walk = (rel: string) => {
+    const abs = join(BRAND_ASSET_DIR, rel);
+    for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {
+      const relPath = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        walk(relPath);
+        continue;
+      }
+      if (rel === '' && BRAND_COPY_EXCLUDE.includes(entry.name)) continue;
+      out.push({ from: `public/brand/${BRAND_ID}/${relPath}`, to: `dist${rel ? `/${rel}` : ''}` });
+    }
+  };
+  walk('');
+  return out;
+}
+BRAND_COPY.push(...collectBrandCopy());
+console.log(
+  `[brand:${BRAND_ID}] 投递素材 ${BRAND_COPY.length} 项（不含 ${BRAND_COPY_EXCLUDE.join('、')}）：${BRAND_COPY.map(
+    (c) => c.from.replace(`public/brand/${BRAND_ID}/`, '')
+  ).join(', ')}`
+);
+
 // @ts-ignore
 export default defineConfig({
   /**
@@ -213,11 +249,13 @@ export default defineConfig({
   title: brandMeta.documentTitle || 'Dinky',
   /**
    * @name 品牌素材覆盖注入
-   * @description 把 `public/brand/<id>/` 的内容注入到 dist **根**（与 public/ 同名文件"后者覆盖"），
+   * @description 把 `public/brand/<id>/` 下的素材注入到 dist **根**（与 public/ 同名文件"后者覆盖"），
    *              因此代码里的 `./brand-logo.svg`、`./icons/footer-bg.svg` 等引用路径无需改动。
+   *              清单由 `collectBrandCopy()` 逐文件生成：只投递浏览器真正访问的素材，
+   *              品牌包内的 README.md / login_animation.json 不投递（见 BRAND_COPY_EXCLUDE）。
    *              `to` 必须是含 dist 的相对路径（umi 内部按 cwd 解析）。
    */
-  copy: [{ from: `public/brand/${BRAND_ID}`, to: 'dist' }],
+  copy: BRAND_COPY,
   /**
    * @name 登录页动画的品牌解析
    * @description 指向"品牌包内 login_animation.json（存在时）"或"公共层同名文件"，

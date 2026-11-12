@@ -79,3 +79,7 @@ dinky-web/package-lock.json
 !/dinky-web/brand/dinky.json
 /dinky-web/public/brand/*
 !/dinky-web/public/brand/dinky/
+
+# 构建期品牌自证文件（build.sh 每次构建前覆盖写入，随 dist → jar static → 制品 html/ 分发）
+# 不纳入版本库：内容含 commit/构建时间，每轮构建都不同
+/dinky-web/public/brand-build-info.json
