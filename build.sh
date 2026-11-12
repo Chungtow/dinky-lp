@@ -65,27 +65,54 @@ while [ $# -gt 0 ]; do
 done
 export BRAND
 
-# 0.1 品牌素材解析（私有品牌素材不进仓库）
-#     本仓库公开，只内置官方 dinky 品牌。其他品牌（如 liangpu）的元数据与素材
-#     属于商业资产，存放在私有素材库，构建前按需同步到仓库内的约定位置；
-#     该位置已被 .gitignore 忽略，不会污染 git status。解析优先级：
-#       1) 仓库内已存在  → 直接使用（官方 dinky，或开发者手工放入）
-#       2) $DINKY_BRAND_ASSETS/<id>/（默认 <仓库>/../brand-assets/<id>）
+# 0.0 品牌 id 合法性（与 new_brand.py / deploy_dinky_lp.sh / release_dinky_lp.sh / deploy_dinky.sh 同一口径）
+#     规则 ^[a-z][a-z0-9-]*$：小写字母开头，其后小写字母/数字/连字符（支持 acme-data 这类 kebab-case）
+#     早失败优于晚失败：非法 id 若放过去，后面只会报"品牌在仓库内不完整"，反而把排查带偏。
+if ! echo "$BRAND" | grep -qE '^[a-z][a-z0-9-]*$'; then
+    echo "✗ 品牌 id 非法: '${BRAND}'（小写字母开头，仅含小写字母/数字/连字符）"
+    echo "  取值见 dinky-web/brand/*.json（默认 dinky）"
+    exit 1
+fi
+
+# 0.1 品牌解析（默认只认仓库内路径，不做任何路径猜测）
+#     默认：使用仓库内的 dinky-web/brand/<id>.json 与 dinky-web/public/brand/<id>/；
+#           缺任何一个就报错退出（本仓库只内置官方 dinky 品牌）。
+#     可选：显式设置 DINKY_BRAND_ASSETS 指向任意外部素材库目录，构建前同步到上述约定
+#           位置（该位置已被 .gitignore 忽略）。适用于"品牌素材不进公开仓库"的场景，
+#           开源用户也可自行使用，不依赖任何外部工程的存在。
 BRAND_META="dinky-web/brand/${BRAND}.json"
 BRAND_ASSET_DIR="dinky-web/public/brand/${BRAND}"
 if [ ! -f "$BRAND_META" ] || [ ! -d "$BRAND_ASSET_DIR" ]; then
-    ASSETS_ROOT="${DINKY_BRAND_ASSETS:-$(cd .. && pwd)/brand-assets}"
-    ASSET_SRC="${ASSETS_ROOT}/${BRAND}"
-    if [ ! -f "${ASSET_SRC}/brand.json" ]; then
+    # 分侧诊断：只列真正缺的那一侧（旧写法把两侧一起列进"缺少"，即使其中一侧存在，会把人误导到"重建品牌"）
+    echo ""
+    echo "✗ 品牌 ${BRAND} 在仓库内不完整"
+    echo "  缺少："
+    [ -f "$BRAND_META" ] || echo "    ${BRAND_META}（元数据）"
+    [ -d "$BRAND_ASSET_DIR" ] || echo "    ${BRAND_ASSET_DIR}/（素材目录，至少含 brand-logo.* 与 favicon.ico）"
+    if [ -z "${DINKY_BRAND_ASSETS:-}" ]; then
         echo ""
-        echo "✗ 品牌 ${BRAND} 的元数据不存在：${BRAND_META}"
-        echo "  本仓库只内置官方 dinky 品牌，其他品牌需从私有素材库同步。"
-        echo "  期望路径：${ASSET_SRC}/brand.json"
-        echo "  可用环境变量指定素材库根目录："
-        echo "    DINKY_BRAND_ASSETS=/path/to/brand-assets bash build.sh --brand ${BRAND}"
+        echo "  本仓库默认只内置官方 dinky 品牌。补齐有两种方式："
+        echo "    1) 直接把上面缺的放进对应路径（自建分支 / 私有 fork 场景）"
+        echo "    2) 从外部素材库整体同步（推荐：素材不落公开仓库）："
+        echo "         DINKY_BRAND_ASSETS=/绝对路径/brand-assets bash build.sh --brand ${BRAND}"
+        echo "       外部目录结构：${BRAND}/brand.json、${BRAND}/brand-logo.*、${BRAND}/favicon.ico、…"
         exit 1
     fi
-    echo "品牌素材来源：私有素材库 ${ASSET_SRC}"
+    # 相对路径会相对本脚本所在目录（dinky-lp/）解析 —— 先补成绝对路径，报错信息才自证得了。
+    # 不用 realpath：它会展开符号链接（本机 /root/lpdeploy → /nfs/data/lpdeploy），
+    # 打出来的路径跟用户输入对不上，反而更费解；这里只做"前缀补全"。
+    case "${DINKY_BRAND_ASSETS}" in
+        /*) ASSETS_ROOT="${DINKY_BRAND_ASSETS}" ;;
+        *)  ASSETS_ROOT="$(pwd)/${DINKY_BRAND_ASSETS}" ;;
+    esac
+    ASSET_SRC="${ASSETS_ROOT%/}/${BRAND}"
+    if [ ! -f "${ASSET_SRC}/brand.json" ]; then
+        echo ""
+        echo "✗ 外部素材库里没有品牌 ${BRAND} 的元数据：${ASSET_SRC}/brand.json"
+        echo "  请确认 DINKY_BRAND_ASSETS=${DINKY_BRAND_ASSETS} 下存在 ${BRAND}/brand.json"
+        exit 1
+    fi
+    echo "品牌素材来源：外部素材库 ${ASSET_SRC}"
     mkdir -p "$BRAND_ASSET_DIR"
     cp -f "${ASSET_SRC}/brand.json" "$BRAND_META"
     for item in "${ASSET_SRC}"/*; do
@@ -97,6 +124,8 @@ if [ ! -f "$BRAND_META" ] || [ ! -d "$BRAND_ASSET_DIR" ]; then
         cp -Rf "$item" "$BRAND_ASSET_DIR/"
     done
     echo "  ✓ 已同步至 ${BRAND_ASSET_DIR}（该路径被 .gitignore 忽略）"
+    echo "  注：同步只覆盖/追加，不删除 —— 素材库里已删掉的素材仍会留在工作区并参与构建；"
+    echo "      要完全镜像素材库，先删掉上面的工作区副本再构建。"
 fi
 
 echo "=== Dinky-LP 构建（固化 Profile） ==="
