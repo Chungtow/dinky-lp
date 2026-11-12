@@ -42,7 +42,9 @@
                         </goals>
                         <phase>package</phase>
                         <configuration>
-                            <finalName>${project.parent.artifactId}-lp-release-${dinky.flink.version}-${project.version}</finalName>
+                            <!-- 品牌后缀（白标）：构建产物自带品牌，避免多品牌同名互相覆盖；
+                                 ${brand.suffix} 由 build.sh 以 -Dbrand.suffix=-<brand> 注入，根 pom 默认空 -->
+                            <finalName>${project.parent.artifactId}-lp-release-${dinky.flink.version}-${project.version}${brand.suffix}</finalName>
                             <appendAssemblyId>false</appendAssemblyId>
                             <descriptors>
                                 <descriptor>src/main/assembly/package.xml</descriptor>

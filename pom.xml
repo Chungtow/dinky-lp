@@ -51,6 +51,14 @@
     <properties>
         <assertj.version>3.21.0</assertj.version>
         <aws-java-sdk-s3.version>1.12.645</aws-java-sdk-s3.version>
+        <!--
+          制品品牌后缀（白标多品牌）：由 build.sh 以 -Dbrand.suffix=-<brand> 注入，
+          例如 dinky-lp-release-1.17-1.2.5-liangpu.tar.gz。
+          默认留空：绕过 build.sh 直接执行 mvn 时包名保持 <BASE>（等价 dinky），
+          避免把 ${brand.suffix} 字面量写进包名。
+          说明见 docs/plan/20261112-Dinky-LP 制品品牌化命名与发布链改造实施计划.md
+        -->
+        <brand.suffix />
         <build-helper-maven-plugin.version>1.7</build-helper-maven-plugin.version>
         <clickhouse.version>0.6.2</clickhouse.version>
         <commons-email>1.5</commons-email>

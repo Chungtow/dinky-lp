@@ -32,7 +32,8 @@ set -e
 #   4. web 构建前置: 清理 .umi-production 缓存
 #      （否则 frontend-maven-plugin 的 pnpm build 受 max/umi safe-delete 保护，非交互卡住）
 #
-# 产物: build/dinky-lp-release-1.17-1.2.5.tar.gz
+# 产物: build/dinky-lp-release-1.17-<BASE_VERSION>-<brand>.tar.gz
+#       （品牌后缀由 -Dbrand.suffix 注入，见 dinky-assembly/pom.xml 的 finalName）
 # ================================================
 
 cd "$(dirname "$0")"
@@ -145,10 +146,44 @@ rm -rf dinky-web/.umi-production dinky-web/src/.umi-production dinky-web/dist 2>
 echo "清理上一轮前端静态资源（避免跨品牌残留）..."
 rm -rf dinky-admin/src/main/resources/static 2>/dev/null || true
 
+# 2.6 构建期品牌自证文件（制品身份自描述）
+#     umi 会把 public/ 原样拷进 dist 根 → copy-static 收进 jar 的 static/ →
+#     制品内路径为 html/brand-build-info.json。release/deploy 据此校验品牌，
+#     无需解析 HTML（见 docs/plan/20261112-Dinky-LP 制品品牌化命名与发布链改造实施计划.md §3.5）
+#     注意：该文件**不在构建末尾删除**——构建过程本身已产生大量删除操作，
+#     再追加一次 rm 会触发构建期批量删除护栏（SAFE_DELETE_BULK_CONFIRM_REQUIRED）。
+#     改为在 .gitignore 中忽略，每次构建前覆盖写入，既不留痕也不阻断构建。
+BRAND_INFO_FILE="dinky-web/public/brand-build-info.json"
+
+BASE_VERSION=$(grep -m1 -o '<revision>[^<]*</revision>' pom.xml | sed 's#</\?revision>##g')
+GIT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo unknown)
+if [ -n "$(git status --porcelain 2>/dev/null)" ]; then GIT_DIRTY="yes"; else GIT_DIRTY="no"; fi
+BRAND_TITLE=$(python3 -c "import json;d=json.load(open('dinky-web/brand/${BRAND}.json',encoding='utf-8'));print(d.get('documentTitle') or d.get('name') or '')" 2>/dev/null || echo "")
+export BRAND BRAND_TITLE BASE_VERSION GIT_COMMIT GIT_DIRTY
+python3 - "$BRAND_INFO_FILE" <<'PY'
+import datetime, json, os, socket, sys
+
+data = {
+    "id": os.environ["BRAND"],
+    "documentTitle": os.environ.get("BRAND_TITLE", ""),
+    "version": os.environ.get("BASE_VERSION", ""),
+    "gitCommit": os.environ.get("GIT_COMMIT", "unknown"),
+    "gitDirty": os.environ.get("GIT_DIRTY", "unknown"),
+    "buildTime": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    "builder": "%s@%s" % (os.environ.get("USER", "?"), socket.gethostname()),
+}
+with open(sys.argv[1], "w", encoding="utf-8") as fh:
+    fh.write(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+PY
+echo "✓ 品牌自证文件：${BRAND_INFO_FILE}（id=${BRAND}, version=${BASE_VERSION}, commit=${GIT_COMMIT:0:8}, dirty=${GIT_DIRTY}）"
+
 # 3. 构建（./mvnw 而非系统 mvn）
-echo "执行: ./mvnw clean package -Dmaven.test.skip=true -Dbrand=${BRAND} -P prod,web,aliyun,flink-single-version,flink-1.17,fast"
+#    -Dbrand         → config.ts 读取，决定品牌元数据/素材
+#    -Dbrand.suffix  → assembly finalName，决定包名与包内顶层目录
+echo "执行: ./mvnw clean package -Dmaven.test.skip=true -Dbrand=${BRAND} -Dbrand.suffix=-${BRAND} -P prod,web,aliyun,flink-single-version,flink-1.17,fast"
 ./mvnw clean package -Dmaven.test.skip=true \
     -Dbrand="${BRAND}" \
+    -Dbrand.suffix="-${BRAND}" \
     -P prod,web,aliyun,flink-single-version,flink-1.17,fast
 MVN_EXIT=$?
 if [ ${MVN_EXIT} -ne 0 ]; then
@@ -180,6 +215,29 @@ else
     echo "✓ 已清理 dist/brand 中间产物"
 fi
 
+# 4.1 产物命名断言：必须存在**唯一**一个带本品牌后缀的包
+shopt -s nullglob
+BRAND_TARBALLS=(build/dinky-lp-release-1.17-*-"${BRAND}".tar.gz)
+shopt -u nullglob
+if [ ${#BRAND_TARBALLS[@]} -ne 1 ]; then
+    echo "✗ 未找到唯一的品牌构建产物：build/dinky-lp-release-1.17-*-${BRAND}.tar.gz（命中 ${#BRAND_TARBALLS[@]} 个）"
+    echo "  当前 build/ 下的 tar 包："
+    ls -1 build/*.tar.gz 2>/dev/null | sed 's/^/    /' || echo "    (无)"
+    echo "  排查：pom 的 brand.suffix 是否生效（构建需带 -Dbrand.suffix=-${BRAND}）"
+    exit 1
+fi
+BRAND_TARBALL="${BRAND_TARBALLS[0]}"
+echo "✓ 构建产物（品牌 ${BRAND}）：${BRAND_TARBALL}"
+
+# 4.2 制品自证断言：包内 brand-build-info.json 的 id 必须等于本次品牌
+PKG_ID=$(tar -xzOf "$BRAND_TARBALL" --wildcards '*/html/brand-build-info.json' 2>/dev/null \
+    | python3 -c "import json,sys;print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
+if [ "$PKG_ID" != "$BRAND" ]; then
+    echo "✗ 制品内品牌自证不一致：包内 id='${PKG_ID}'，期望 '${BRAND}'"
+    exit 1
+fi
+echo "✓ 制品自证通过：html/brand-build-info.json id=${PKG_ID}"
+
 echo ""
 echo "=== 构建完成 ==="
-echo "产物: build/dinky-lp-release-1.17-1.2.5.tar.gz"
+echo "产物: ${BRAND_TARBALL}（品牌: ${BRAND}）"
