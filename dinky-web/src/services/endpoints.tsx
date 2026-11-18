@@ -324,6 +324,14 @@ export enum API_CONSTANTS {
   GET_DASHBOARD_BY_ID = '/api/dashboard/getDashboardById',
   DELETE_DASHBOARD = '/api/dashboard/delete',
 
+  // ------------------------------------ custom report ------------------------------------
+  REPORT_LIST = '/api/report/list',
+  REPORT_DETAIL = '/api/report/detail',
+  REPORT_SAVE_OR_UPDATE = '/api/report/saveOrUpdate',
+  REPORT_DELETE = '/api/report/delete',
+  REPORT_PREVIEW_URL = '/api/report/previewUrl',
+  REPORT_HTML_RESOURCES = '/api/report/htmlResources',
+
   // ------------------------------------ flink ------------------------------------
   FLINK_PROXY = '/api/flink',
   FLINK_TABLE_DATA = '/api/subscribe/print',

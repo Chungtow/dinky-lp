@@ -254,6 +254,23 @@ public class PermissionConstants {
     public static final String DASHBOARD_CHART_ADD = "dashboard:chart:add";
 
     /**
+     * dashboard report（自定义报表：HTML 静态页托管）
+     *
+     * <p>2026-11-18：看板新增「自定义报表」，与既有 dashboard:list / dashboard:chart 权限点并列，
+     * 不复用其权限语义。manage 才可维护清单与授权；view 为查看单张报表。
+     *
+     * <p><b>必须 3 段</b>：超管的权限集合是通配 {@code *:*:*}（BaseConstant.ALL_PERMISSION），
+     * Sa-Token 的 vagueMatch 把它当正则 {@code .*:.*:.*}——2 段权限（如 dashboard:report）
+     * 少一个冒号，超管反而匹配不上、接口直接 403。故入口权限点取 {@code dashboard:report:list}，
+     * 与 registration:cluster:instance:* 等既有权限点保持同形。
+     */
+    public static final String DASHBOARD_REPORT = "dashboard:report:list";
+
+    public static final String DASHBOARD_REPORT_VIEW = "dashboard:report:view";
+    public static final String DASHBOARD_REPORT_MANAGE = "dashboard:report:manage";
+    public static final String DASHBOARD_REPORT_OPEN = "dashboard:report:open";
+
+    /**
      * registration skills
      *
      * <p>2026-10-14 菜单与权限登记缺口修复：Skills 能力此前无独立权限点，写接口复用

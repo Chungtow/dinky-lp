@@ -304,5 +304,13 @@ export enum PermissionConstants {
   DASHBOARD_VIEW = '/dashboard/list/view',
   DASHBOARD_CHART_EDIT = '/dashboard/chart/edit',
   DASHBOARD_CHART_ADD = '/dashboard/chart/add',
-  DASHBOARD_CHART_DELETE = '/dashboard/chart/delete'
+  DASHBOARD_CHART_DELETE = '/dashboard/chart/delete',
+
+  /**
+   * custom report（自定义报表，与上面的指标看板互不影响）
+   */
+  DASHBOARD_REPORT = '/dashboard/report',
+  DASHBOARD_REPORT_VIEW = '/dashboard/report/view',
+  DASHBOARD_REPORT_MANAGE = '/dashboard/report/manage',
+  DASHBOARD_REPORT_OPEN = '/dashboard/report/open'
 }
