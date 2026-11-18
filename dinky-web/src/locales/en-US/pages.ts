@@ -1775,6 +1775,41 @@ export default {
   'dashboard.theme.westeros': 'Westeros',
   'dashboard.theme.wonderland': 'Wonderland',
 
+  // ---------------------------- Custom report (HTML static page hosting) ----------------------------
+  'dashboard.report.title': 'Custom Report',
+  'dashboard.report.create': 'New Report',
+  'dashboard.report.edit': 'Edit Report',
+  'dashboard.report.name': 'Report Name',
+  'dashboard.report.namePlaceholder': 'Enter a report name (unique per tenant)',
+  'dashboard.report.remark': 'Remark',
+  'dashboard.report.remarkPlaceholder': 'Enter a description',
+  'dashboard.report.resource': 'HTML Resource',
+  'dashboard.report.resourceRequired': 'Please select an HTML resource',
+  'dashboard.report.resourceNotSelected': 'No resource selected',
+  'dashboard.report.selectResource': 'Select HTML Resource',
+  'dashboard.report.searchResource': 'Search by file name',
+  'dashboard.report.noHtmlResource':
+    'No .html file in resource center, upload one under Registration Center -> Resources first',
+  'dashboard.report.resourceTooLarge': 'Report file must not exceed 20MB',
+  'dashboard.report.visibleRoles': 'Visible Roles',
+  'dashboard.report.visibleRolesTip':
+    'Leave empty to make it visible to everyone with the Custom Report menu permission',
+  'dashboard.report.open': 'Open',
+  'dashboard.report.empty': 'No report available',
+  'dashboard.report.updateTime': 'Updated At',
+  'dashboard.report.delete': 'Delete Report',
+  'dashboard.report.deleteConfirm':
+    'Delete this report? Only the registration is removed; the HTML file in resource center is kept.',
+  'dashboard.report.back': 'Back',
+  'dashboard.report.refresh': 'Refresh',
+  'dashboard.report.fullscreen': 'Fullscreen',
+  'dashboard.report.exitFullscreen': 'Exit Fullscreen',
+  'dashboard.report.invalidId': 'Missing report id, open it from report center',
+  'dashboard.report.noPermission': 'Report not found or no permission',
+  'dashboard.report.previewFailed':
+    'Preview failed: the bound resource may be deleted or renamed, please rebind it',
+  'dashboard.report.retry': 'Retry',
+
   'datastudio.toolbar.rightClick.hideToolbarDesc': 'hides the toolbar window name',
   'datastudio.toolbar.rightClick.showToolbarDesc': 'displays the toolbar window name',
   'datastudio.toolbar.rightClick.closeCompact': 'turn off compact mode',

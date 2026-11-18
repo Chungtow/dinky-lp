@@ -344,10 +344,23 @@ export default [
         redirect: '/dashboard/list'
       },
       {
+        // 必须可见：/dashboard 的 redirect 落到这里，且「创建仪表盘」只在此页。
+        // 曾经的 hideInMenu: true 会让「看板」下只剩「自定义报表」一个可见子项，
+        // 侧边栏因此显示"自定义报表"并把该页当成看板首页（2026-11-18 用户反馈）。
         path: '/dashboard/list',
         name: 'list',
-        hideInMenu: true,
         component: './Dashboard'
+      },
+      {
+        path: '/dashboard/report',
+        name: 'report',
+        component: './Dashboard/Report'
+      },
+      {
+        path: '/dashboard/report/view',
+        name: 'reportView',
+        hideInMenu: true,
+        component: './Dashboard/Report/View'
       },
       {
         path: '/dashboard/dashboard-layout',

@@ -91,6 +91,8 @@ export default {
   'menu.dashboard': 'Dashboard',
   'menu.dashboard.list': 'Dashboard',
   'menu.dashboard.chart': 'Dashboard-Chart',
+  'menu.dashboard.report': 'Custom Report',
+  'menu.dashboard.reportView': 'Report View',
   'menu.about': 'About',
   'menu.version': 'Version: {version}',
 
